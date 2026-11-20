@@ -1,3 +1,14 @@
 [workspace]
 resolver = "3"
-members = ["spikes", "winui-immediate"]
+members = ["spikes", "vault-core", "winui-immediate"]
+
+# PBKDF2 with 600,000 rounds takes seconds unoptimized; the vault-core tests
+# derive the fixture account's key many times.
+[profile.dev.package.pbkdf2]
+opt-level = 3
+
+[profile.dev.package.hmac]
+opt-level = 3
+
+[profile.dev.package.sha2]
+opt-level = 3
