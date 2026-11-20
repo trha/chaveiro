@@ -4,6 +4,7 @@
 //! then org keys, then the cipher's own key if it has one, then the fields.
 
 use crate::{
+    core::ssh_agent::SshAsk,
     crypto::{
         DecryptError, EncString, MasterKey, P256SigningKey, PrivateKey, SecretString, SymmetricKey,
     },
@@ -94,6 +95,9 @@ pub struct SshKeySummary {
     /// From `sshKey.keyFingerprint`, or the SHA-256 fingerprint of
     /// [`public_key`](Self::public_key) when the cipher has none.
     pub fingerprint: String,
+    /// From the cipher's `ssh-ask` custom field; [`None`] when it has none,
+    /// so the global mode applies.
+    pub ask: Option<SshAsk>,
 }
 
 impl SshKeySummary {
@@ -108,10 +112,26 @@ impl SshKeySummary {
             Ok(Some(fingerprint)) => fingerprint.as_str().to_owned(),
             Ok(None) | Err(_) => public_key.fingerprint(ssh_key::HashAlg::Sha256).to_string(),
         };
+        // A field whose name does not decrypt cannot be `ssh-ask`, so it is
+        // skipped. A value that does not decrypt asks every time.
+        let ask = cipher
+            .fields
+            .iter()
+            .find(|field| {
+                decrypt_option(field.name.as_ref(), &key)
+                    .ok()
+                    .flatten()
+                    .is_some_and(|name| name.as_str() == SshAsk::FIELD)
+            })
+            .map(|field| match decrypt_option(field.value.as_ref(), &key) {
+                Ok(Some(value)) => SshAsk::parse(value.as_str()),
+                Ok(None) | Err(_) => SshAsk::Always,
+            });
         Some(Self {
             cipher_id: cipher.id,
             public_key: public_key.to_bytes().ok()?,
             fingerprint,
+            ask,
         })
     }
 }

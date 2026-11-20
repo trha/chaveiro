@@ -56,6 +56,39 @@ pub struct SshApproval<'a> {
     pub name: &'a str,
     /// Empty when the key left the vault since the request.
     pub fingerprint: &'a str,
+    /// Approval lets this key sign without asking until lock.
+    pub remember: bool,
+}
+
+/// When a sign request asks the user. The global mode is
+/// [`Settings::ssh_ask`](crate::core::Settings::ssh_ask); a key's `ssh-ask`
+/// custom field overrides it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SshAsk {
+    /// Every request asks.
+    #[default]
+    Always,
+    /// No request asks. A request made while locked still waits for unlock.
+    Never,
+    /// The first request for a key asks, whatever program sent it. Once
+    /// approved, the key signs without asking until lock.
+    UntilLock,
+}
+
+impl SshAsk {
+    /// Name of the custom field that sets a key's mode.
+    pub const FIELD: &str = "ssh-ask";
+
+    /// Reads a field value: `always`, `never` or `until-lock`. Any other
+    /// value gives [`Always`](Self::Always), so a typo never drops the
+    /// prompt.
+    pub fn parse(value: &str) -> Self {
+        match value.trim() {
+            "never" => Self::Never,
+            "until-lock" => Self::UntilLock,
+            _ => Self::Always,
+        }
+    }
 }
 
 /// Flag of a sign request: sign an RSA key with `rsa-sha2-256`.

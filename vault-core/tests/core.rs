@@ -20,8 +20,8 @@ use vault_core::{
     core::{
         AgentRequestId, Body, Challenge, Config, Core, DeviceKeyError, Effect, HttpRequest,
         HttpResponse, Input, LoginError, Method, PasskeyCatalogEntry, PasskeyError, PasskeyReply,
-        PasskeyRequest, RequestId, Screen, StoreSlot, StoredAccount, UnlockError, UserAction,
-        VaultScreen,
+        PasskeyRequest, RequestId, Screen, Settings, SshAsk, StoreSlot, StoredAccount, UnlockError,
+        UserAction, VaultScreen,
         ssh_agent::{AgentRequest, parse_request},
     },
     crypto::{EncString, Kdf, MasterKey, SecretString, SymmetricKey, derive_master_key},
@@ -2084,6 +2084,170 @@ fn locked_sign_waits_for_unlock_then_approval() {
     let public_key = PublicKey::from_openssh(key.public).unwrap();
     Verifier::verify(&public_key, b"after unlock", &decode_signature(reply))
         .expect("the signature verifies");
+}
+
+// Test 23: SSH ask modes.
+
+#[test]
+fn never_signs_without_asking() {
+    let mut harness = ask_harness(SshAsk::Never, &[]);
+    let key = &SSH_KEYS[0];
+    let replies = ssh_replies(&harness.send(agent(1, sign_frame(&wire_blob(key.public), b"n", 0))));
+    let [(AgentRequestId(1), reply)] = replies.as_slice() else {
+        panic!("one reply");
+    };
+    verify(key, b"n", reply);
+    assert!(vault(&harness.core).ssh_approval.is_none());
+}
+
+#[test]
+fn always_asks_every_time() {
+    let mut harness = ask_harness(SshAsk::Always, &[]);
+    let blob = wire_blob(SSH_KEYS[0].public);
+    for number in 1..=3 {
+        assert!(ssh_replies(&harness.send(agent(number, sign_frame(&blob, b"a", 0)))).is_empty());
+        let approval = vault(&harness.core).ssh_approval.expect("the request asks");
+        assert!(!approval.remember);
+        assert_eq!(ssh_replies(&harness.user(UserAction::ApproveSsh)).len(), 1);
+    }
+}
+
+#[test]
+fn until_lock_asks_once_per_key_until_lock() {
+    let mut harness = ask_harness(SshAsk::UntilLock, &[]);
+    let first = wire_blob(SSH_KEYS[0].public);
+    let other = wire_blob(SSH_KEYS[2].public);
+    harness.send(agent(1, sign_frame(&first, b"1", 0)));
+    harness.send(agent(2, sign_frame(&first, b"2", 0)));
+    harness.send(agent(3, sign_frame(&other, b"3", 0)));
+    assert!(vault(&harness.core).ssh_approval.expect("asks").remember);
+
+    // check: approval also signs the other waiting request for that key.
+    let mut ids: Vec<_> = ssh_replies(&harness.user(UserAction::ApproveSsh))
+        .into_iter()
+        .map(|(id, _)| id)
+        .collect();
+    ids.sort_by_key(|id| id.0);
+    assert_eq!(ids, [AgentRequestId(1), AgentRequestId(2)]);
+
+    // check: a different key still asks.
+    assert_eq!(
+        vault(&harness.core)
+            .ssh_approval
+            .map(|approval| approval.id),
+        Some(AgentRequestId(3))
+    );
+
+    // check: the approved key now signs at once.
+    let replies = ssh_replies(&harness.send(agent(4, sign_frame(&first, b"4", 0))));
+    let [(AgentRequestId(4), reply)] = replies.as_slice() else {
+        panic!("one reply");
+    };
+    verify(&SSH_KEYS[0], b"4", reply);
+
+    // check: lock forgets the approval.
+    harness.user(UserAction::Lock);
+    harness.unlock();
+    assert!(ssh_replies(&harness.send(agent(5, sign_frame(&first, b"5", 0)))).is_empty());
+    assert!(vault(&harness.core).ssh_approval.is_some());
+}
+
+#[test]
+fn key_field_overrides_global_mode() {
+    let mut harness = ask_harness(SshAsk::Never, &[(0, "always")]);
+    let asks = wire_blob(SSH_KEYS[0].public);
+    let plain = wire_blob(SSH_KEYS[2].public);
+    assert!(ssh_replies(&harness.send(agent(1, sign_frame(&asks, b"x", 0)))).is_empty());
+    assert_eq!(
+        ssh_replies(&harness.send(agent(2, sign_frame(&plain, b"x", 0)))).len(),
+        1
+    );
+
+    let mut harness = ask_harness(SshAsk::Always, &[(2, "never")]);
+    assert_eq!(
+        ssh_replies(&harness.send(agent(1, sign_frame(&plain, b"x", 0)))).len(),
+        1
+    );
+    assert!(ssh_replies(&harness.send(agent(2, sign_frame(&asks, b"x", 0)))).is_empty());
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig { cases: 4, ..ProptestConfig::default() })]
+
+    #[test]
+    fn unknown_field_value_asks(value in "[a-z -]{0,12}") {
+        prop_assume!(!["never", "until-lock"].contains(&value.trim()));
+        let mut harness = ask_harness(SshAsk::Never, &[(0, value.as_str())]);
+        let blob = wire_blob(SSH_KEYS[0].public);
+        prop_assert!(ssh_replies(&harness.send(agent(1, sign_frame(&blob, b"x", 0)))).is_empty());
+        prop_assert!(vault(&harness.core).ssh_approval.is_some());
+    }
+}
+
+#[test]
+fn settings_change_frees_waiting_requests() {
+    let mut harness = ask_harness(SshAsk::Always, &[]);
+    let blob = wire_blob(SSH_KEYS[0].public);
+    harness.send(agent(1, sign_frame(&blob, b"x", 0)));
+    let replies = ssh_replies(&harness.send(Input::Settings(Settings {
+        ssh_ask: SshAsk::Never,
+    })));
+    let [(AgentRequestId(1), reply)] = replies.as_slice() else {
+        panic!("one reply");
+    };
+    verify(&SSH_KEYS[0], b"x", reply);
+}
+
+#[test]
+fn never_while_locked_signs_at_unlock() {
+    let mut harness = Harness::stored(REVISION);
+    harness.send(Input::Settings(Settings {
+        ssh_ask: SshAsk::Never,
+    }));
+    let key = &SSH_KEYS[2];
+    let frame = sign_frame(&wire_blob(key.public), b"locked", 0);
+    assert!(ssh_replies(&harness.send(agent(1, frame))).is_empty());
+    let replies = ssh_replies(&harness.unlock());
+    let [(AgentRequestId(1), reply)] = replies.as_slice() else {
+        panic!("one reply at unlock");
+    };
+    verify(key, b"locked", reply);
+}
+
+/// Unlocked with `global` as the mode, after a sync where each
+/// `(key, value)` gives `SSH_KEYS[key]` an `ssh-ask` field of `value`.
+fn ask_harness(global: SshAsk, fields: &[(usize, &str)]) -> Harness {
+    let mut harness = Harness::stored(REVISION);
+    harness.send(Input::Settings(Settings { ssh_ask: global }));
+    let mut sync = fixture("sync.json").1;
+    let mut rng = ChaCha20Rng::seed_from_u64(3);
+    for cipher in sync["ciphers"].as_array_mut().unwrap() {
+        for (key, value) in fields {
+            if cipher["id"] != SSH_KEYS[*key].cipher_id.to_string().as_str() {
+                continue;
+            }
+            let parsed = CipherResponse::from_object(cipher.as_object().unwrap().clone()).unwrap();
+            let cipher_key = KEYS.cipher_key(&parsed).unwrap();
+            let mut encrypt = |text: &str| {
+                Value::from(EncString::encrypt(text.as_bytes(), &cipher_key, &mut rng).to_string())
+            };
+            let field = serde_json::json!({
+                "type": 0,
+                "name": encrypt("ssh-ask"),
+                "value": encrypt(value),
+                "linkedId": null,
+            });
+            cipher["fields"] = Value::Array(vec![field]);
+        }
+    }
+    let effects = harness.unlock();
+    harness.settle_sync_with(&effects, REVISION, &sync);
+    harness
+}
+
+fn verify(key: &SshFixture, data: &[u8], reply: &[u8]) {
+    let public_key = PublicKey::from_openssh(key.public).unwrap();
+    Verifier::verify(&public_key, data, &decode_signature(reply)).expect("the signature verifies");
 }
 
 // Harness, fixtures and helpers.

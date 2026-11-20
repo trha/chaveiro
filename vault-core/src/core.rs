@@ -8,7 +8,7 @@ pub use passkey::{
     PasskeyCatalogEntry, PasskeyChoice, PasskeyError, PasskeyPrompt, PasskeyReply, PasskeyRequest,
 };
 pub use request::RequestId;
-pub use ssh_agent::{AgentRequestId, SshApproval};
+pub use ssh_agent::{AgentRequestId, SshApproval, SshAsk};
 
 use crate::{
     crypto::{EncString, Kdf, KdfError, MasterKey, SecretString, SymmetricKey, device_key},
@@ -48,6 +48,8 @@ pub struct Core {
     /// The remembered second factor from [`StoreSlot::TwoFactorToken`]. It
     /// lives outside [`State`] because it outlives logout.
     remembered: Option<RememberedLogin>,
+    /// The last [`Input::Settings`]. It outlives every state.
+    settings: Settings,
 }
 
 impl Core {
@@ -59,6 +61,7 @@ impl Core {
             requests: Table::default(),
             index_revision: 0,
             remembered: None,
+            settings: Settings::default(),
         }
     }
 
@@ -84,6 +87,15 @@ impl Core {
             self.remembered = bytes.as_deref().and_then(RememberedLogin::parse);
             return effects;
         }
+        // Every state keeps the settings the same way. A new mode can free
+        // requests that wait for approval.
+        if let Input::Settings(settings) = input {
+            self.settings = settings;
+            if let State::Unlocked(unlocked) = &mut self.state {
+                release_ssh(unlocked, &self.settings, &mut effects);
+            }
+            return effects;
+        }
         let purpose = match &input {
             Input::Http { id, .. }
             | Input::Derived { id, .. }
@@ -97,12 +109,14 @@ impl Core {
             | Input::Tick
             | Input::Passkey { .. }
             | Input::SshAgent { .. }
-            | Input::StorageChanged { .. } => None,
+            | Input::StorageChanged { .. }
+            | Input::Settings(_) => None,
         };
         let config = &self.config;
         let requests = &mut self.requests;
         let index_revision = &mut self.index_revision;
         let remembered = &mut self.remembered;
+        let settings = &self.settings;
         let mut state = mem::replace(&mut self.state, State::Starting);
         if let (State::Unlocked(unlocked), Input::User(_)) = (&mut state, &input) {
             unlocked.last_activity = now_ms;
@@ -277,7 +291,11 @@ impl Core {
                             flags,
                             deadline: now_ms.saturating_add(ssh_agent::WAIT),
                         });
-                        effects.push(Effect::Rerender);
+                        // A key that need not ask signs at once, so the
+                        // shell sees a rerender only for a new prompt.
+                        if !release_ssh(&mut unlocked, settings, &mut effects) {
+                            effects.push(Effect::Rerender);
+                        }
                     }
                     Ok(
                         ssh_agent::AgentRequest::Sign { .. } | ssh_agent::AgentRequest::Other(_),
@@ -545,6 +563,7 @@ impl Core {
                 match user_key {
                     Ok(user_key) => open_vault(
                         config,
+                        settings,
                         requests,
                         index_revision,
                         account,
@@ -615,6 +634,7 @@ impl Core {
                         match user_key {
                             Some(user_key) => open_vault(
                                 config,
+                                settings,
                                 requests,
                                 index_revision,
                                 account,
@@ -855,6 +875,7 @@ impl Core {
                                                     last_check: now_ms,
                                                     retries: Vec::new(),
                                                     device_error: None,
+                                                    ssh_grants: Vec::new(),
                                                 }))
                                             }
                                         }
@@ -1183,6 +1204,14 @@ impl Core {
                         id: pending.id,
                         frame,
                     });
+                    if ssh_ask(&unlocked.index, settings, &pending.public_key)
+                        == SshAsk::UntilLock
+                        && !unlocked.ssh_grants.contains(&pending.public_key)
+                    {
+                        unlocked.ssh_grants.push(pending.public_key);
+                        // Later requests for the same key need not ask now.
+                        release_ssh(&mut unlocked, settings, &mut effects);
+                    }
                     effects.push(Effect::Rerender);
                 }
                 State::Unlocked(unlocked)
@@ -2265,6 +2294,7 @@ impl Core {
                 | Input::StorageChanged { .. },
                 Some(_),
             ) => state,
+            (_, Input::Settings(_), _) => unreachable!("settings return before the match"),
         };
         effects
     }
@@ -2363,6 +2393,8 @@ impl Core {
                         id: pending.id,
                         name: key.map_or("", |key| ssh_key_name(&unlocked.index, key.cipher_id)),
                         fingerprint: key.map_or("", |key| key.fingerprint.as_str()),
+                        remember: ssh_ask(&unlocked.index, &self.settings, &pending.public_key)
+                            == SshAsk::UntilLock,
                     }
                 }),
             }),
@@ -2510,6 +2542,17 @@ pub enum Input {
         slot: StoreSlot,
         bytes: Option<Vec<u8>>,
     },
+    /// The user's settings, sent at start and on every change. Until the
+    /// first one, the core uses [`Settings::default`].
+    Settings(Settings),
+}
+
+/// The settings the core reads. The shell owns the settings file and sends
+/// this part in [`Input::Settings`].
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Settings {
+    /// For SSH keys with no `ssh-ask` field.
+    pub ssh_ask: SshAsk,
 }
 
 /// The bytes of each storage slot at boot, [`None`] for an empty slot.
@@ -3007,6 +3050,9 @@ struct Unlocked {
     /// next sync when they are still higher.
     retries: Vec<CounterBump>,
     device_error: Option<DeviceKeyError>,
+    /// Public keys in [`SshAsk::UntilLock`] mode that the user approved this
+    /// session. Lock drops them with the rest of `Unlocked`.
+    ssh_grants: Vec<Vec<u8>>,
 }
 
 /// The record in [`StoreSlot::DeviceWrap`], stored as JSON. It holds no
@@ -3497,6 +3543,7 @@ fn rebuild(unlocked: &mut Unlocked, index_revision: &mut u64, effects: &mut Vec<
 #[expect(clippy::too_many_arguments, reason = "the parts of one handle call")]
 fn open_vault(
     config: &Config,
+    settings: &Settings,
     requests: &mut Table,
     index_revision: &mut u64,
     mut account: Account,
@@ -3545,7 +3592,9 @@ fn open_vault(
         last_check: now_ms,
         retries: Vec::new(),
         device_error: None,
+        ssh_grants: Vec::new(),
     });
+    release_ssh(&mut unlocked, settings, effects);
     emit_catalog(&mut unlocked.account, &unlocked.keys, effects);
     if let Some(pending) = waiting {
         serve_passkey(
@@ -3677,6 +3726,53 @@ fn fail_ssh(id: AgentRequestId, effects: &mut Vec<Effect>) {
         id,
         frame: ssh_agent::failure_reply(),
     });
+}
+
+/// Signs every waiting request whose key need not ask: its mode is
+/// [`SshAsk::Never`], or [`SshAsk::UntilLock`] with a grant. Returns whether
+/// any was signed, after pushing [`Effect::Rerender`] for them.
+fn release_ssh(unlocked: &mut Unlocked, settings: &Settings, effects: &mut Vec<Effect>) -> bool {
+    let free: Vec<_> = unlocked
+        .account
+        .ssh
+        .extract_if(.., |pending| {
+            match ssh_ask(&unlocked.index, settings, &pending.public_key) {
+                SshAsk::Always => false,
+                SshAsk::Never => true,
+                SshAsk::UntilLock => unlocked.ssh_grants.contains(&pending.public_key),
+            }
+        })
+        .collect();
+    for pending in &free {
+        let frame = match &unlocked.account.cache {
+            None => ssh_agent::failure_reply(),
+            Some(cache) => ssh_agent::approved_reply(
+                pending,
+                &unlocked.index.ssh_keys,
+                &cache.ciphers,
+                &unlocked.keys,
+            ),
+        };
+        effects.push(Effect::SshAgentReply {
+            id: pending.id,
+            frame,
+        });
+    }
+    if !free.is_empty() {
+        effects.push(Effect::Rerender);
+    }
+    !free.is_empty()
+}
+
+/// The mode of the vault key `public_key`: its own `ssh-ask` field, else the
+/// global mode. A key the vault lacks gets the global mode.
+fn ssh_ask(index: &VaultIndex, settings: &Settings, public_key: &[u8]) -> SshAsk {
+    index
+        .ssh_keys
+        .iter()
+        .find(|key| key.public_key == public_key)
+        .and_then(|key| key.ask)
+        .unwrap_or(settings.ssh_ask)
 }
 
 /// The name of the cipher that holds an SSH key; empty when it is gone.
