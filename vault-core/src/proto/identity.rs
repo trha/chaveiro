@@ -60,6 +60,9 @@ pub struct TokenResponse {
     /// The PKCS#8 private key under the user key.
     #[serde(rename = "privatekey", default, deserialize_with = "enc_option")]
     pub private_key: Option<EncString>,
+    /// Present only after a second factor sent with `twoFactorRemember=1`.
+    #[serde(rename = "twofactortoken", default)]
+    pub two_factor_token: Option<String>,
 }
 
 /// The body of a failed token or API request. Bitwarden and Vaultwarden

@@ -45,6 +45,9 @@ pub struct Core {
     /// See [`VaultScreen::index_revision`]. It counts across sessions, so a
     /// new unlock never repeats a number the shell saw before.
     index_revision: u64,
+    /// The remembered second factor from [`StoreSlot::TwoFactorToken`]. It
+    /// lives outside [`State`] because it outlives logout.
+    remembered: Option<RememberedLogin>,
 }
 
 impl Core {
@@ -55,6 +58,7 @@ impl Core {
             state: State::Starting,
             requests: Table::default(),
             index_revision: 0,
+            remembered: None,
         }
     }
 
@@ -71,6 +75,15 @@ impl Core {
         input: Input,
     ) -> Vec<Effect> {
         let mut effects = Vec::new();
+        // Every state reads the remembered token the same way.
+        if let Input::StorageChanged {
+            slot: StoreSlot::TwoFactorToken,
+            bytes,
+        } = &input
+        {
+            self.remembered = bytes.as_deref().and_then(RememberedLogin::parse);
+            return effects;
+        }
         let purpose = match &input {
             Input::Http { id, .. }
             | Input::Derived { id, .. }
@@ -89,6 +102,7 @@ impl Core {
         let config = &self.config;
         let requests = &mut self.requests;
         let index_revision = &mut self.index_revision;
+        let remembered = &mut self.remembered;
         let mut state = mem::replace(&mut self.state, State::Starting);
         if let (State::Unlocked(unlocked), Input::User(_)) = (&mut state, &input) {
             unlocked.last_activity = now_ms;
@@ -300,6 +314,10 @@ impl Core {
             }
             (State::Starting, Input::Started { stored }, None) => {
                 effects.push(Effect::Rerender);
+                *remembered = stored
+                    .two_factor_token
+                    .as_deref()
+                    .and_then(RememberedLogin::parse);
                 let record = stored
                     .account
                     .as_deref()
@@ -466,10 +484,21 @@ impl Core {
                     Ok(master) => {
                         let master = Box::new(master);
                         let password_hash = Zeroizing::new(master.password_hash(&password));
+                        let answer = remembered
+                            .as_ref()
+                            .filter(|login| login.email.eq_ignore_ascii_case(&email))
+                            .map(|login| Answer::Remembered {
+                                token: login.token.clone(),
+                            });
                         let id = requests.start(Purpose::Token);
                         effects.push(Effect::Http {
                             id,
-                            request: password_token(config, &email, &password_hash, None),
+                            request: password_token(
+                                config,
+                                &email,
+                                &password_hash,
+                                answer.as_ref(),
+                            ),
                         });
                         State::TokenRequest {
                             email,
@@ -477,7 +506,7 @@ impl Core {
                             credentials: Credentials::Password {
                                 master,
                                 password_hash,
-                                answer: None,
+                                answer,
                             },
                             request: id,
                         }
@@ -728,6 +757,20 @@ impl Core {
                                         bytes: refresh.as_bytes().to_vec(),
                                     });
                                 }
+                                // Sent only when the user asked to be
+                                // remembered.
+                                if let Some(token) = &token.two_factor_token {
+                                    let login = RememberedLogin {
+                                        email: email.clone(),
+                                        token: secret(token),
+                                    };
+                                    effects.push(Effect::Store {
+                                        id: requests.start(Purpose::Store),
+                                        slot: StoreSlot::TwoFactorToken,
+                                        bytes: login.to_bytes(),
+                                    });
+                                    *remembered = Some(login);
+                                }
                                 let mut account = Account {
                                     email,
                                     user_id,
@@ -835,6 +878,28 @@ impl Core {
                                 message: String::new(),
                             },
                         };
+                        // A refused remembered token is stale, so forget it.
+                        // The user typed nothing, so no error shows, and the
+                        // next try sends a code, so this never loops.
+                        let answer_error = |answer: Option<Answer>| match answer {
+                            None | Some(Answer::Remembered { .. }) => None,
+                            Some(Answer::TwoFactor { .. } | Answer::NewDevice { .. }) => {
+                                Some(LoginError::InvalidCode)
+                            }
+                        };
+                        if let (
+                            TokenFailure::SecondFactor { .. } | TokenFailure::NewDeviceOtp,
+                            Credentials::Password {
+                                answer: Some(Answer::Remembered { .. }),
+                                ..
+                            },
+                        ) = (&failure, &credentials)
+                        {
+                            *remembered = None;
+                            effects.push(Effect::Clear {
+                                slot: StoreSlot::TwoFactorToken,
+                            });
+                        }
                         match (failure, credentials) {
                             (
                                 TokenFailure::SecondFactor { providers },
@@ -849,7 +914,7 @@ impl Core {
                                 password_hash,
                                 kdf,
                                 challenge: Challenge::TwoFactor { providers },
-                                error: answer.map(|_| LoginError::InvalidCode),
+                                error: answer_error(answer),
                             },
                             (
                                 TokenFailure::NewDeviceOtp,
@@ -864,7 +929,7 @@ impl Core {
                                 password_hash,
                                 kdf,
                                 challenge: Challenge::NewDevice,
-                                error: answer.map(|_| LoginError::InvalidCode),
+                                error: answer_error(answer),
                             },
                             (
                                 TokenFailure::Rejected { .. },
@@ -899,9 +964,18 @@ impl Core {
                 None,
             ) => {
                 let answer = match (action, &challenge) {
-                    (UserAction::SubmitCode { provider, code }, Challenge::TwoFactor { .. }) => {
-                        Some(Answer::TwoFactor { provider, code })
-                    }
+                    (
+                        UserAction::SubmitCode {
+                            provider,
+                            code,
+                            remember,
+                        },
+                        Challenge::TwoFactor { .. },
+                    ) => Some(Answer::TwoFactor {
+                        provider,
+                        code,
+                        remember,
+                    }),
                     (UserAction::SubmitNewDeviceOtp { code }, Challenge::NewDevice) => {
                         Some(Answer::NewDevice { code })
                     }
@@ -2110,6 +2184,11 @@ impl Core {
                 | Input::StorageChanged {
                     slot: StoreSlot::RefreshToken,
                     bytes: Some(_),
+                }
+                // Read before this match.
+                | Input::StorageChanged {
+                    slot: StoreSlot::TwoFactorToken,
+                    ..
                 },
                 None,
             ) => state,
@@ -2136,6 +2215,11 @@ impl Core {
                 | Input::StorageChanged {
                     slot: StoreSlot::RefreshToken,
                     bytes: Some(_),
+                }
+                // Read before this match.
+                | Input::StorageChanged {
+                    slot: StoreSlot::TwoFactorToken,
+                    ..
                 },
                 None,
             ) => state,
@@ -2435,6 +2519,7 @@ pub struct StoredAccount {
     pub refresh_token: Option<Vec<u8>>,
     pub vault_cache: Option<Vec<u8>>,
     pub device_wrap: Option<Vec<u8>>,
+    pub two_factor_token: Option<Vec<u8>>,
 }
 
 pub enum UserAction {
@@ -2453,6 +2538,9 @@ pub enum UserAction {
     SubmitCode {
         provider: u8,
         code: SecretString,
+        /// Ask the server for a token that skips the second factor at the
+        /// next login with this email. Logout keeps it.
+        remember: bool,
     },
     /// The code from the new-device email.
     SubmitNewDeviceOtp {
@@ -2618,6 +2706,8 @@ pub enum StoreSlot {
     VaultCache,
     /// The challenge and the user key sealed under the device-key secret.
     DeviceWrap,
+    /// The email and the server's remembered second-factor token, as JSON.
+    TwoFactorToken,
 }
 
 impl StoreSlot {
@@ -2821,8 +2911,50 @@ enum Credentials {
 }
 
 enum Answer {
-    TwoFactor { provider: u8, code: SecretString },
-    NewDevice { code: SecretString },
+    TwoFactor {
+        provider: u8,
+        code: SecretString,
+        remember: bool,
+    },
+    NewDevice {
+        code: SecretString,
+    },
+    /// The stored token, sent before the server asks.
+    Remembered {
+        token: SecretString,
+    },
+}
+
+/// The record in [`StoreSlot::TwoFactorToken`]. The server accepts `token`
+/// only for `email`.
+struct RememberedLogin {
+    email: String,
+    token: SecretString,
+}
+
+#[derive(Serialize, Deserialize)]
+struct RememberedRecord<'a> {
+    email: &'a str,
+    token: &'a str,
+}
+
+impl RememberedLogin {
+    /// [`None`] for a malformed record.
+    fn parse(bytes: &[u8]) -> Option<Self> {
+        let record = serde_json::from_slice::<RememberedRecord<'_>>(bytes).ok()?;
+        Some(Self {
+            email: record.email.to_owned(),
+            token: secret(record.token),
+        })
+    }
+
+    fn to_bytes(&self) -> Vec<u8> {
+        serde_json::to_vec(&RememberedRecord {
+            email: &self.email,
+            token: &self.token,
+        })
+        .expect("a remembered login always serializes")
+    }
 }
 
 /// The signed-in account. `cache` is still encrypted, so it stays while
@@ -3864,15 +3996,30 @@ fn password_token(
     ]);
     match answer {
         None => {}
-        Some(Answer::TwoFactor { provider, code }) => form.extend([
+        Some(Answer::TwoFactor {
+            provider,
+            code,
+            remember,
+        }) => form.extend([
             ("twoFactorToken", code.clone()),
             ("twoFactorProvider", secret(&provider.to_string())),
+            (
+                "twoFactorRemember",
+                secret(if *remember { "1" } else { "0" }),
+            ),
+        ]),
+        Some(Answer::Remembered { token }) => form.extend([
+            ("twoFactorToken", token.clone()),
+            ("twoFactorProvider", secret(&REMEMBER_PROVIDER.to_string())),
             ("twoFactorRemember", secret("0")),
         ]),
         Some(Answer::NewDevice { code }) => form.push(("newDeviceOtp", code.clone())),
     }
     token_request(config, form)
 }
+
+/// The `twoFactorProvider` number for a remembered token.
+const REMEMBER_PROVIDER: u8 = 5;
 
 fn token_request(config: &Config, form: Vec<(&'static str, SecretString)>) -> HttpRequest {
     HttpRequest {

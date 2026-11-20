@@ -95,6 +95,7 @@ fn two_factor_by_authenticator() {
     let effects = harness.user(UserAction::SubmitCode {
         provider: 0,
         code: secret("123456"),
+        remember: false,
     });
     let (token, request) = one_http(&effects);
     expect![[r#"
@@ -119,6 +120,138 @@ fn two_factor_by_authenticator() {
     assert_eq!(form(request)["password"], MASTER.password_hash(PASSWORD));
     let effects = harness.answer_fixture(token, "token_success.json");
     assert_logged_in(&mut harness, &effects);
+}
+
+const REMEMBER_TOKEN: &str = "remember-token-from-server";
+
+/// Logs in with an authenticator code and "remember", and returns the
+/// bytes the core stores in [`StoreSlot::TwoFactorToken`].
+fn remembered_slot() -> Vec<u8> {
+    let mut harness = Harness::logged_out();
+    let token = harness.login_until_token();
+    harness.answer_fixture(token, "token_two_factor_required.json");
+    let effects = harness.user(UserAction::SubmitCode {
+        provider: 0,
+        code: secret("123456"),
+        remember: true,
+    });
+    let (token, request) = one_http(&effects);
+    assert_eq!(form(request)["twoFactorRemember"], "1");
+    let mut body = fixture("token_success.json").1;
+    body["TwoFactorToken"] = Value::from(REMEMBER_TOKEN);
+    let effects = harness.answer(token, 200, &body);
+    assert_logged_in(&mut harness, &effects);
+    stored_bytes(&effects, StoreSlot::TwoFactorToken)
+}
+
+/// Logged out, booted with `slot` in [`StoreSlot::TwoFactorToken`].
+fn logged_out_remembering(slot: Vec<u8>) -> Harness {
+    let mut harness = Harness::new();
+    harness.send(Input::Started {
+        stored: StoredAccount {
+            two_factor_token: Some(slot),
+            ..StoredAccount::default()
+        },
+    });
+    harness
+}
+
+#[test]
+fn remembered_token_skips_the_second_factor() {
+    let mut harness = logged_out_remembering(remembered_slot());
+    let (_, form) = harness.login_until_token_form();
+    assert_eq!(form["twoFactorProvider"], "5");
+    assert_eq!(form["twoFactorToken"], REMEMBER_TOKEN);
+    assert_eq!(form["twoFactorRemember"], "0");
+}
+
+#[test]
+fn a_code_without_remember_stores_no_token() {
+    let mut harness = Harness::logged_out();
+    let token = harness.login_until_token();
+    harness.answer_fixture(token, "token_two_factor_required.json");
+    let effects = harness.user(UserAction::SubmitCode {
+        provider: 0,
+        code: secret("123456"),
+        remember: false,
+    });
+    let (token, _) = one_http(&effects);
+    let effects = harness.answer_fixture(token, "token_success.json");
+    assert!(!slots(&effects).contains(&StoreSlot::TwoFactorToken));
+}
+
+#[test]
+fn stale_remembered_token_falls_back_to_the_code() {
+    let mut harness = logged_out_remembering(remembered_slot());
+    let token = harness.login_until_token();
+    let effects = harness.answer_fixture(token, "token_two_factor_required.json");
+    assert!(cleared(&effects).contains(&StoreSlot::TwoFactorToken));
+    assert!(matches!(
+        harness.core.screen(),
+        Screen::SecondFactor {
+            challenge: Challenge::TwoFactor { .. },
+            error: None,
+            ..
+        }
+    ));
+    let effects = harness.user(UserAction::SubmitCode {
+        provider: 0,
+        code: secret("123456"),
+        remember: false,
+    });
+    let (token, request) = one_http(&effects);
+    assert_eq!(form(request)["twoFactorProvider"], "0");
+    // A second refusal is a wrong code, and asks again.
+    harness.answer_fixture(token, "token_two_factor_required.json");
+    assert!(matches!(
+        harness.core.screen(),
+        Screen::SecondFactor {
+            error: Some(LoginError::InvalidCode),
+            ..
+        }
+    ));
+    // The forgotten token stays forgotten at the next login.
+    harness.user(UserAction::Cancel);
+    let (_, form) = harness.login_until_token_form();
+    assert!(!form.contains_key("twoFactorToken"));
+}
+
+#[test]
+fn remembered_token_is_only_sent_for_its_email() {
+    let mut harness = logged_out_remembering(remembered_slot());
+    let effects = harness.user(UserAction::Login {
+        email: "someone-else@example.com".into(),
+        password: secret(PASSWORD),
+    });
+    let (prelogin, _) = one_http(&effects);
+    let effects = harness.answer_fixture(prelogin, "prelogin.json");
+    let (derive, ..) = one_derive(&effects);
+    let effects = harness.derived(derive, PASSWORD);
+    let (_, request) = one_http(&effects);
+    assert!(!form(request).contains_key("twoFactorToken"));
+}
+
+#[test]
+fn remembered_token_from_another_process_is_used() {
+    let mut harness = Harness::logged_out();
+    harness.send(Input::StorageChanged {
+        slot: StoreSlot::TwoFactorToken,
+        bytes: Some(remembered_slot()),
+    });
+    let (_, form) = harness.login_until_token_form();
+    assert_eq!(form["twoFactorProvider"], "5");
+}
+
+#[test]
+fn logout_keeps_the_remembered_token() {
+    let mut harness = logged_out_remembering(remembered_slot());
+    let token = harness.login_until_token();
+    let effects = harness.answer_fixture(token, "token_success.json");
+    assert_logged_in(&mut harness, &effects);
+    let effects = harness.user(UserAction::Logout);
+    assert!(!cleared(&effects).contains(&StoreSlot::TwoFactorToken));
+    let (_, form) = harness.login_until_token_form();
+    assert_eq!(form["twoFactorProvider"], "5");
 }
 
 #[test]
@@ -154,6 +287,7 @@ fn two_factor_by_email() {
     let effects = harness.user(UserAction::SubmitCode {
         provider: 1,
         code: secret("654321"),
+        remember: false,
     });
     let (token, request) = one_http(&effects);
     expect![[r#"
@@ -2065,6 +2199,7 @@ impl Harness {
                 refresh_token: Some(STORED_REFRESH.as_bytes().to_vec()),
                 vault_cache: Some(cache.to_vec()),
                 device_wrap,
+                two_factor_token: None,
             },
         });
         assert!(matches!(harness.core.screen(), Screen::Locked { .. }));
@@ -2156,6 +2291,25 @@ impl Harness {
         let (derive, ..) = one_derive(&effects);
         let effects = self.derived(derive, PASSWORD);
         one_http(&effects).0
+    }
+
+    /// [`login_until_token`](Self::login_until_token), and the token
+    /// request's form.
+    fn login_until_token_form(&mut self) -> (RequestId, HashMap<&'static str, String>) {
+        let effects = self.user(UserAction::Login {
+            email: EMAIL.into(),
+            password: secret(PASSWORD),
+        });
+        let (prelogin, _) = one_http(&effects);
+        let effects = self.answer_fixture(prelogin, "prelogin.json");
+        let (derive, ..) = one_derive(&effects);
+        let effects = self.derived(derive, PASSWORD);
+        let (token, request) = one_http(&effects);
+        let form = form(request)
+            .into_iter()
+            .map(|(name, value)| (name, value.to_owned()))
+            .collect();
+        (token, form)
     }
 
     /// Answers the refresh, revision check and sync that `effects` start,
@@ -2341,10 +2495,12 @@ fn digest(core: &Core) -> String {
 }
 
 fn assert_logged_in(harness: &mut Harness, effects: &[Effect]) {
-    assert_eq!(
-        slots(effects),
-        [StoreSlot::Account, StoreSlot::RefreshToken]
-    );
+    // A remembered second factor may add its own slot.
+    let slots: Vec<StoreSlot> = slots(effects)
+        .into_iter()
+        .filter(|slot| *slot != StoreSlot::TwoFactorToken)
+        .collect();
+    assert_eq!(slots, [StoreSlot::Account, StoreSlot::RefreshToken]);
     assert_eq!(
         stored_bytes(effects, StoreSlot::RefreshToken),
         TOKEN.refresh_token.as_ref().unwrap().as_bytes()
