@@ -1,0 +1,8 @@
+- [Memory location](memory-location.md) — all memories for this project go in this folder
+- [Formatting](formatting.md) — cargo +nightly fmt; one import block, no blank lines
+- [Doc links](doc-links.md) — refer to items with intra-doc links; check with cargo doc
+- [Declaration order](declaration-order.md) — top down: main type or entry first, details after; contracts on types
+- [windows-reactor internals](windows-reactor-internals.md) — dispatch pipeline, event loop crossing, tree arena, mount, component identity, copy and commit model
+- [Threat model](threat-model.md) — what must be clean after lock, and option C (no Reactor fork)
+- [windows-reactor pitfalls](windows-reactor-pitfalls.md) — measured allocation costs and the traps to avoid
+- [Immediate-mode spike](immediate-mode-spike.md) — RAD-style spike over WinUI, superseded by the winui-immediate crate: bindgen recipe, measured costs, one-build lag, row pool vs ItemsRepeater
