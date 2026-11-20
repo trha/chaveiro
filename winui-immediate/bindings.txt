@@ -1,0 +1,69 @@
+Microsoft.UI.Xaml.Application::{Start, get_Resources, Exit}
+Microsoft.UI.Xaml.IApplicationFactory::CreateInstance
+Microsoft.UI.Xaml.IApplicationStatics::Start
+Microsoft.UI.Xaml.ApplicationInitializationCallback
+Microsoft.UI.Xaml.ApplicationInitializationCallbackParams::{}
+Microsoft.UI.Xaml.LaunchActivatedEventArgs::{}
+Microsoft.UI.Xaml.IApplicationOverrides
+Microsoft.UI.Xaml.Markup.IXamlMetadataProvider
+Microsoft.UI.Xaml.Markup.IXamlType::{}
+Microsoft.UI.Xaml.Markup.XmlnsDefinition
+Microsoft.UI.Xaml.XamlTypeInfo.XamlControlsXamlMetaDataProvider::CreateInstance
+Microsoft.UI.Xaml.Controls.XamlControlsResources::CreateInstance
+Microsoft.UI.Xaml.ResourceDictionary::{get_MergedDictionaries}
+Microsoft.UI.Xaml.Window::{Activate, get_Content, put_Content, get_Title, put_Title}
+Microsoft.UI.Xaml.IWindowFactory::CreateInstance
+Microsoft.UI.Xaml.UIElement::{get_Visibility, put_Visibility}
+Microsoft.UI.Xaml.FrameworkElement::{get_Width, put_Width, get_Height, put_Height, get_Margin, put_Margin}
+Microsoft.UI.Xaml.Thickness
+Microsoft.UI.Xaml.RoutedEventArgs::{}
+Microsoft.UI.Xaml.RoutedEventHandler
+Microsoft.UI.Xaml.Controls.Panel::{get_Children}
+Microsoft.UI.Xaml.Controls.UIElementCollection
+Microsoft.UI.Xaml.Controls.ContentControl::{get_Content, put_Content}
+Microsoft.UI.Xaml.Controls.IContentControlFactory::CreateInstance
+Microsoft.UI.Xaml.Controls.Primitives.ButtonBase::{add_Click, remove_Click}
+Microsoft.UI.Xaml.Controls.Button::{}
+Microsoft.UI.Xaml.Controls.IButtonFactory::CreateInstance
+Microsoft.UI.Xaml.Controls.TextBlock::{CreateInstance, get_Text, put_Text}
+Microsoft.UI.Xaml.Controls.TextBox::{get_Text, put_Text, get_PlaceholderText, put_PlaceholderText, get_SelectionStart, put_SelectionStart, get_SelectionLength, put_SelectionLength, add_TextChanged, remove_TextChanged}
+Microsoft.UI.Xaml.Controls.ITextBoxFactory::CreateInstance
+Microsoft.UI.Xaml.Controls.TextChangedEventHandler
+Microsoft.UI.Xaml.Controls.TextChangedEventArgs::{}
+Microsoft.UI.Xaml.Controls.PasswordBox::{CreateInstance, get_Password, put_Password, get_PlaceholderText, put_PlaceholderText, add_PasswordChanged, remove_PasswordChanged}
+Microsoft.UI.Xaml.Controls.StackPanel::{get_Orientation, put_Orientation, get_Spacing, put_Spacing}
+Microsoft.UI.Xaml.Controls.IStackPanelFactory::CreateInstance
+Microsoft.UI.Xaml.Controls.Orientation
+Microsoft.UI.Xaml.Controls.Canvas::{SetTop}
+Microsoft.UI.Xaml.Controls.ICanvasFactory::CreateInstance
+Microsoft.UI.Xaml.Controls.ICanvasStatics::SetTop
+Microsoft.UI.Xaml.Controls.ScrollViewer::{CreateInstance, get_VerticalOffset, get_ViewportHeight, add_ViewChanged, remove_ViewChanged}
+Microsoft.UI.Xaml.Controls.ScrollViewerViewChangedEventArgs::{}
+Microsoft.UI.Dispatching.DispatcherQueue::{GetForCurrentThread, TryEnqueue}
+Microsoft.UI.Dispatching.IDispatcherQueueStatics::GetForCurrentThread
+Microsoft.UI.Dispatching.DispatcherQueueHandler
+Microsoft.UI.Xaml.Visibility
+Microsoft.UI.Xaml.Controls.ItemsRepeater::{CreateInstance, get_ItemsSource, put_ItemsSource, get_ItemTemplate, put_ItemTemplate}
+Microsoft.UI.Xaml.IElementFactory
+Microsoft.UI.Xaml.ElementFactoryGetArgs::{get_Data}
+Microsoft.UI.Xaml.ElementFactoryRecycleArgs::{get_Element}
+Microsoft.UI.Xaml.UIElement::{add_KeyDown, remove_KeyDown}
+Microsoft.UI.Xaml.Input.KeyEventHandler
+Microsoft.UI.Xaml.Input.KeyRoutedEventArgs::{get_Key, get_Handled, put_Handled}
+Microsoft.UI.Xaml.RoutedEventArgs::{get_OriginalSource}
+Windows.System.VirtualKey
+Microsoft.UI.Xaml.Controls.TextBox::{add_TextCompositionStarted, remove_TextCompositionStarted, add_TextCompositionEnded, remove_TextCompositionEnded}
+Microsoft.UI.Xaml.Controls.TextCompositionStartedEventArgs::{}
+Microsoft.UI.Xaml.Controls.TextCompositionEndedEventArgs::{}
+Microsoft.UI.Xaml.Window::{Close, get_AppWindow}
+Microsoft.UI.Windowing.AppWindow::{add_Closing, remove_Closing}
+Microsoft.UI.Windowing.AppWindowClosingEventArgs::{get_Cancel, put_Cancel}
+Microsoft.UI.Xaml.Media.VisualTreeHelper::{GetParent}
+Microsoft.UI.Xaml.Media.IVisualTreeHelperStatics::GetParent
+Microsoft.UI.Xaml.Controls.Grid::{CreateInstance, get_RowDefinitions, SetRow}
+Microsoft.UI.Xaml.Controls.IGridFactory::CreateInstance
+Microsoft.UI.Xaml.Controls.IGridStatics::SetRow
+Microsoft.UI.Xaml.Controls.RowDefinition::{CreateInstance, get_Height, put_Height}
+Microsoft.UI.Xaml.Controls.RowDefinitionCollection
+Microsoft.UI.Xaml.GridLength
+Microsoft.UI.Xaml.GridUnitType

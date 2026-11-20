@@ -1,0 +1,20 @@
+[package]
+name = "winui-immediate"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "An immediate-mode UI over the WinUI 3 retained tree"
+
+[dependencies]
+ahash = "0.8"
+tracing = "0.1"
+windows-collections = { version = "0.100.0", features = ["std"] }
+windows-core = "0.100.0"
+windows-reference = { version = "0.100.0", features = ["std"] }
+
+[dev-dependencies]
+proptest = "1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+[build-dependencies]
+windows-bindgen = "0.100.0"
