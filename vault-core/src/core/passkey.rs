@@ -87,6 +87,10 @@ pub struct PasskeyCatalogEntry {
 /// A passkey request that waits for the user: for unlock, or for a pick
 /// from [`choices`](Self::choices).
 pub struct PasskeyPrompt<'a> {
+    /// The id the shell gave the request in
+    /// [`Input::Passkey`](super::Input::Passkey), so the shell can find its
+    /// own data for it.
+    pub id: RequestId,
     pub request: &'a PasskeyRequest,
     /// Empty while locked. Answer with
     /// [`UserAction::ChoosePasskey`](super::UserAction::ChoosePasskey).

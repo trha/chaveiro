@@ -2,11 +2,13 @@
 
 pub mod passkey;
 mod request;
+pub mod ssh_agent;
 
 pub use passkey::{
     PasskeyCatalogEntry, PasskeyChoice, PasskeyError, PasskeyPrompt, PasskeyReply, PasskeyRequest,
 };
 pub use request::RequestId;
+pub use ssh_agent::{AgentRequestId, SshApproval};
 
 use crate::{
     crypto::{EncString, Kdf, KdfError, MasterKey, SecretString, SymmetricKey, device_key},
@@ -81,6 +83,7 @@ impl Core {
             | Input::User(_)
             | Input::Tick
             | Input::Passkey { .. }
+            | Input::SshAgent { .. }
             | Input::StorageChanged { .. } => None,
         };
         let config = &self.config;
@@ -200,6 +203,101 @@ impl Core {
                 });
                 state
             }
+            (State::Locked { mut account, error }, Input::SshAgent { id, frame }, None) => {
+                hold_ssh(&mut account.ssh, now_ms, id, &frame, &mut effects);
+                State::Locked { account, error }
+            }
+            (
+                State::Deriving {
+                    email,
+                    password,
+                    kdf,
+                    purpose: DerivePurpose::Unlock(mut account),
+                    request,
+                },
+                Input::SshAgent { id, frame },
+                None,
+            ) => {
+                hold_ssh(&mut account.ssh, now_ms, id, &frame, &mut effects);
+                State::Deriving {
+                    email,
+                    password,
+                    kdf,
+                    purpose: DerivePurpose::Unlock(account),
+                    request,
+                }
+            }
+            (State::Unlocked(mut unlocked), Input::SshAgent { id, frame }, None) => {
+                match ssh_agent::parse_request(&frame) {
+                    Ok(ssh_agent::AgentRequest::List) => {
+                        let keys: Vec<(&[u8], &str)> = unlocked
+                            .index
+                            .ssh_keys
+                            .iter()
+                            .map(|key| {
+                                (
+                                    key.public_key.as_slice(),
+                                    ssh_key_name(&unlocked.index, key.cipher_id),
+                                )
+                            })
+                            .collect();
+                        effects.push(Effect::SshAgentReply {
+                            id,
+                            frame: ssh_agent::identities_reply(&keys),
+                        });
+                    }
+                    Ok(ssh_agent::AgentRequest::Sign {
+                        public_key,
+                        data,
+                        flags,
+                    }) if unlocked
+                        .index
+                        .ssh_keys
+                        .iter()
+                        .any(|key| key.public_key == public_key) =>
+                    {
+                        unlocked.account.ssh.push(ssh_agent::Pending {
+                            id,
+                            public_key,
+                            data,
+                            flags,
+                            deadline: now_ms.saturating_add(ssh_agent::WAIT),
+                        });
+                        effects.push(Effect::Rerender);
+                    }
+                    Ok(
+                        ssh_agent::AgentRequest::Sign { .. } | ssh_agent::AgentRequest::Other(_),
+                    )
+                    | Err(ssh_agent::AgentParseError) => fail_ssh(id, &mut effects),
+                }
+                State::Unlocked(unlocked)
+            }
+            (
+                state @ (State::Starting
+                | State::LoggedOut { .. }
+                | State::Prelogin { .. }
+                | State::Deriving {
+                    purpose: DerivePurpose::Login,
+                    ..
+                }
+                | State::TokenRequest { .. }
+                | State::SecondFactor { .. }),
+                Input::SshAgent { id, frame, .. },
+                None,
+            ) => {
+                // Logged out or logging in: no keys, and no vault to wait for.
+                match ssh_agent::parse_request(&frame) {
+                    Ok(ssh_agent::AgentRequest::List) => effects.push(Effect::SshAgentReply {
+                        id,
+                        frame: ssh_agent::identities_reply(&[]),
+                    }),
+                    Ok(
+                        ssh_agent::AgentRequest::Sign { .. } | ssh_agent::AgentRequest::Other(_),
+                    )
+                    | Err(ssh_agent::AgentParseError) => fail_ssh(id, &mut effects),
+                }
+                state
+            }
             (State::Starting, Input::Started { stored }, None) => {
                 effects.push(Effect::Rerender);
                 let record = stored
@@ -243,6 +341,7 @@ impl Core {
                                     passkey: None,
                                     catalog: Vec::new(),
                                     signed: Vec::new(),
+                                    ssh: Vec::new(),
                                 },
                                 error: None,
                             },
@@ -646,6 +745,7 @@ impl Core {
                                     passkey: None,
                                     catalog: Vec::new(),
                                     signed: Vec::new(),
+                                    ssh: Vec::new(),
                                 };
                                 match credentials {
                                     Credentials::ApiKey => {
@@ -703,6 +803,7 @@ impl Core {
                                                     index: VaultIndex {
                                                         folders: Vec::new(),
                                                         ciphers: Vec::new(),
+                                                        ssh_keys: Vec::new(),
                                                     },
                                                     open: None,
                                                     sync: SyncState::Running,
@@ -989,7 +1090,36 @@ impl Core {
                     refuse_passkey(pending.id, &mut effects);
                     effects.push(Effect::Rerender);
                 }
+                expire_ssh(&mut account.ssh, now_ms, &mut effects);
                 State::Locked { account, error }
+            }
+            (State::Unlocked(mut unlocked), Input::User(UserAction::ApproveSsh), None) => {
+                if !unlocked.account.ssh.is_empty() {
+                    let pending = unlocked.account.ssh.remove(0);
+                    let frame = match &unlocked.account.cache {
+                        None => ssh_agent::failure_reply(),
+                        Some(cache) => ssh_agent::approved_reply(
+                            &pending,
+                            &unlocked.index.ssh_keys,
+                            &cache.ciphers,
+                            &unlocked.keys,
+                        ),
+                    };
+                    effects.push(Effect::SshAgentReply {
+                        id: pending.id,
+                        frame,
+                    });
+                    effects.push(Effect::Rerender);
+                }
+                State::Unlocked(unlocked)
+            }
+            (State::Unlocked(mut unlocked), Input::User(UserAction::DenySsh), None) => {
+                if !unlocked.account.ssh.is_empty() {
+                    let pending = unlocked.account.ssh.remove(0);
+                    fail_ssh(pending.id, &mut effects);
+                    effects.push(Effect::Rerender);
+                }
+                State::Unlocked(unlocked)
             }
             (State::Unlocked(mut unlocked), Input::User(UserAction::Cancel), None) => {
                 if let Some(pending) = unlocked.account.passkey.take() {
@@ -1626,6 +1756,7 @@ impl Core {
                     refuse_passkey(pending.id, &mut effects);
                     effects.push(Effect::Rerender);
                 }
+                expire_ssh(&mut unlocked.account.ssh, now_ms, &mut effects);
                 if now_ms.saturating_sub(unlocked.last_activity) >= config.lock_after {
                     lock(requests, unlocked, &mut effects)
                 } else {
@@ -1763,7 +1894,9 @@ impl Core {
                     | UserAction::RenameFolder { .. }
                     | UserAction::DeleteFolder(_)
                     | UserAction::ResolveConflict { .. }
-                    | UserAction::ChoosePasskey(_),
+                    | UserAction::ChoosePasskey(_)
+                    | UserAction::ApproveSsh
+                    | UserAction::DenySsh,
                 )
                 | Input::Tick
                 | Input::StorageChanged { .. },
@@ -1793,7 +1926,9 @@ impl Core {
                     | UserAction::RenameFolder { .. }
                     | UserAction::DeleteFolder(_)
                     | UserAction::ResolveConflict { .. }
-                    | UserAction::ChoosePasskey(_),
+                    | UserAction::ChoosePasskey(_)
+                    | UserAction::ApproveSsh
+                    | UserAction::DenySsh,
                 )
                 | Input::Started { .. }
                 | Input::Tick
@@ -1825,7 +1960,9 @@ impl Core {
                     | UserAction::RenameFolder { .. }
                     | UserAction::DeleteFolder(_)
                     | UserAction::ResolveConflict { .. }
-                    | UserAction::ChoosePasskey(_),
+                    | UserAction::ChoosePasskey(_)
+                    | UserAction::ApproveSsh
+                    | UserAction::DenySsh,
                 )
                 | Input::Started { .. }
                 | Input::Tick
@@ -1861,7 +1998,9 @@ impl Core {
                     | UserAction::RenameFolder { .. }
                     | UserAction::DeleteFolder(_)
                     | UserAction::ResolveConflict { .. }
-                    | UserAction::ChoosePasskey(_),
+                    | UserAction::ChoosePasskey(_)
+                    | UserAction::ApproveSsh
+                    | UserAction::DenySsh,
                 )
                 | Input::Started { .. }
                 | Input::Tick
@@ -1893,7 +2032,9 @@ impl Core {
                     | UserAction::RenameFolder { .. }
                     | UserAction::DeleteFolder(_)
                     | UserAction::ResolveConflict { .. }
-                    | UserAction::ChoosePasskey(_),
+                    | UserAction::ChoosePasskey(_)
+                    | UserAction::ApproveSsh
+                    | UserAction::DenySsh,
                 )
                 | Input::Started { .. }
                 | Input::Tick
@@ -1922,7 +2063,9 @@ impl Core {
                     | UserAction::RenameFolder { .. }
                     | UserAction::DeleteFolder(_)
                     | UserAction::ResolveConflict { .. }
-                    | UserAction::ChoosePasskey(_),
+                    | UserAction::ChoosePasskey(_)
+                    | UserAction::ApproveSsh
+                    | UserAction::DenySsh,
                 )
                 | Input::Started { .. }
                 | Input::Tick
@@ -1951,7 +2094,9 @@ impl Core {
                     | UserAction::RenameFolder { .. }
                     | UserAction::DeleteFolder(_)
                     | UserAction::ResolveConflict { .. }
-                    | UserAction::ChoosePasskey(_),
+                    | UserAction::ChoosePasskey(_)
+                    | UserAction::ApproveSsh
+                    | UserAction::DenySsh,
                 )
                 | Input::Started { .. }
                 | Input::StorageChanged {
@@ -2032,6 +2177,7 @@ impl Core {
                 | Input::User(_)
                 | Input::Tick
                 | Input::Passkey { .. }
+                | Input::SshAgent { .. }
                 | Input::StorageChanged { .. },
                 Some(_),
             ) => state,
@@ -2052,6 +2198,7 @@ impl Core {
             _ => return None,
         };
         account.passkey.as_ref().map(|pending| PasskeyPrompt {
+            id: pending.id,
             request: &pending.request,
             choices: &pending.choices,
         })
@@ -2122,6 +2269,18 @@ impl Core {
                     .requests
                     .any(|purpose| matches!(purpose, Purpose::DeviceEnroll { .. })),
                 device_error: unlocked.device_error.as_ref(),
+                ssh_approval: unlocked.account.ssh.first().map(|pending| {
+                    let key = unlocked
+                        .index
+                        .ssh_keys
+                        .iter()
+                        .find(|key| key.public_key == pending.public_key);
+                    SshApproval {
+                        id: pending.id,
+                        name: key.map_or("", |key| ssh_key_name(&unlocked.index, key.cipher_id)),
+                        fingerprint: key.map_or("", |key| key.fingerprint.as_str()),
+                    }
+                }),
             }),
         }
     }
@@ -2256,6 +2415,12 @@ pub enum Input {
         id: RequestId,
         request: PasskeyRequest,
     },
+    /// One SSH agent frame without its length prefix. Each one gets exactly
+    /// one [`Effect::SshAgentReply`] with the same `id`.
+    SshAgent {
+        id: AgentRequestId,
+        frame: Vec<u8>,
+    },
     /// Another process wrote a shared slot ([`None`]: it was cleared).
     StorageChanged {
         slot: StoreSlot,
@@ -2338,6 +2503,10 @@ pub enum UserAction {
     /// Answer the [`PasskeyPrompt`] with the choice at this index.
     /// [`Cancel`](Self::Cancel) refuses it.
     ChoosePasskey(usize),
+    /// Sign the request in [`VaultScreen::ssh_approval`].
+    ApproveSsh,
+    /// Refuse the request in [`VaultScreen::ssh_approval`].
+    DenySsh,
 }
 
 pub struct HttpResponse {
@@ -2407,6 +2576,11 @@ pub enum Effect {
     /// Tell the platform which passkeys we hold.
     PasskeyCatalog {
         entries: Vec<PasskeyCatalogEntry>,
+    },
+    /// The reply frame for [`Input::SshAgent`], without its length prefix.
+    SshAgentReply {
+        id: AgentRequestId,
+        frame: Vec<u8>,
     },
 }
 
@@ -2502,6 +2676,9 @@ pub struct VaultScreen<'a> {
     pub device_enrolling: bool,
     /// Why the last enroll failed.
     pub device_error: Option<&'a DeviceKeyError>,
+    /// The oldest SSH sign request, which waits for
+    /// [`UserAction::ApproveSsh`] or [`UserAction::DenySsh`].
+    pub ssh_approval: Option<SshApproval<'a>>,
 }
 
 /// The item being viewed or edited.
@@ -2671,6 +2848,9 @@ struct Account {
     /// The highest counter signed per credential id this session, so two
     /// assertions sign rising counters before the first write lands.
     signed: Vec<(Vec<u8>, u32)>,
+    /// SSH sign requests that wait for unlock or approval, oldest first.
+    /// Lock and logout fail them all.
+    ssh: Vec<ssh_agent::Pending>,
 }
 
 struct Tokens {
@@ -3211,6 +3391,17 @@ fn open_vault(
         effects,
     );
     let waiting = account.passkey.take();
+    // SSH requests that waited keep waiting for approval, unless they ran
+    // out of time or name a key the vault lacks.
+    for pending in account.ssh.extract_if(.., |pending| {
+        now_ms >= pending.deadline
+            || !index
+                .ssh_keys
+                .iter()
+                .any(|key| key.public_key == pending.public_key)
+    }) {
+        fail_ssh(pending.id, effects);
+    }
     let mut unlocked = Box::new(Unlocked {
         account,
         keys,
@@ -3248,6 +3439,9 @@ fn lock(requests: &mut Table, unlocked: Box<Unlocked>, effects: &mut Vec<Effect>
     if let Some(pending) = account.passkey.as_mut() {
         pending.choices.clear();
     }
+    for pending in account.ssh.drain(..) {
+        fail_ssh(pending.id, effects);
+    }
     effects.push(Effect::Rerender);
     State::Locked {
         account,
@@ -3266,6 +3460,9 @@ fn logout(
     abandon_writes(requests, &mut account, effects);
     if let Some(pending) = account.passkey.take() {
         refuse_passkey(pending.id, effects);
+    }
+    for pending in account.ssh.drain(..) {
+        fail_ssh(pending.id, effects);
     }
     let email = account.email;
     effects.extend([
@@ -3294,6 +3491,69 @@ fn hold_passkey(slot: &mut Option<Box<Pending>>, pending: Pending, effects: &mut
     if let Some(older) = slot.replace(Box::new(pending)) {
         refuse_passkey(older.id, effects);
     }
+}
+
+/// Answers an agent frame that arrives while locked: an empty list, or a
+/// sign request held in `ssh` until unlock or its deadline.
+fn hold_ssh(
+    ssh: &mut Vec<ssh_agent::Pending>,
+    now_ms: u64,
+    id: AgentRequestId,
+    frame: &[u8],
+    effects: &mut Vec<Effect>,
+) {
+    match ssh_agent::parse_request(frame) {
+        Ok(ssh_agent::AgentRequest::List) => effects.push(Effect::SshAgentReply {
+            id,
+            frame: ssh_agent::identities_reply(&[]),
+        }),
+        Ok(ssh_agent::AgentRequest::Sign {
+            public_key,
+            data,
+            flags,
+        }) => {
+            ssh.push(ssh_agent::Pending {
+                id,
+                public_key,
+                data,
+                flags,
+                deadline: now_ms.saturating_add(ssh_agent::WAIT),
+            });
+            effects.push(Effect::Rerender);
+        }
+        Ok(ssh_agent::AgentRequest::Other(_)) | Err(ssh_agent::AgentParseError) => {
+            fail_ssh(id, effects)
+        }
+    }
+}
+
+/// Fails every request in `ssh` whose deadline passed.
+fn expire_ssh(ssh: &mut Vec<ssh_agent::Pending>, now_ms: u64, effects: &mut Vec<Effect>) {
+    let expired: Vec<_> = ssh
+        .extract_if(.., |pending| now_ms >= pending.deadline)
+        .collect();
+    if !expired.is_empty() {
+        for pending in expired {
+            fail_ssh(pending.id, effects);
+        }
+        effects.push(Effect::Rerender);
+    }
+}
+
+fn fail_ssh(id: AgentRequestId, effects: &mut Vec<Effect>) {
+    effects.push(Effect::SshAgentReply {
+        id,
+        frame: ssh_agent::failure_reply(),
+    });
+}
+
+/// The name of the cipher that holds an SSH key; empty when it is gone.
+fn ssh_key_name(index: &VaultIndex, cipher_id: Uuid) -> &str {
+    index
+        .ciphers
+        .iter()
+        .find(|cipher| cipher.id == cipher_id)
+        .map_or("", |cipher| cipher.name.as_str())
 }
 
 fn refuse_passkey(id: RequestId, effects: &mut Vec<Effect>) {

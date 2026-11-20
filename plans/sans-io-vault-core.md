@@ -24,12 +24,15 @@ so that nothing is held in memory while locked. And it covers acting as a
 Windows 11 passkey provider: browsers and apps create and use passkeys stored
 in our vault as `login.fido2Credentials`.
 
-The core must also serve a later macOS app (SwiftUI and AppKit) without
-changes to its logic. So it names no platform: device unlock, protected
-storage, HTTP and passkey transport are all effects that each shell carries
-out its own way. A Swift shell reaches the core through a thin FFI crate that
-copies the borrowed screen into owned values. The macOS app and that crate
-are not part of this plan.
+It also covers an SSH agent: `ssh` and `git` list and sign with the keys in
+our vault's SshKey ciphers, after the user approves each use.
+
+The core must also serve a later macOS app, written in Rust on
+appkit-immediate over `objc2` bindings, without changes to its logic. So it
+names no platform: device unlock, protected storage, HTTP and passkey
+transport are all effects that each shell carries out its own way. Both
+shells are Rust and read the borrowed screen directly. The macOS app is not
+part of this plan.
 
 ## Out of scope
 
@@ -50,49 +53,92 @@ Bitwarden servers and forbids offering the app to third parties (sections
 network code but had four major versions in about two years and pins several
 pre-release crypto crates. Source: research agent report of 2026-11-20.
 
-**Protocol.** Only the symmetric EncString types were checked against source
+**Protocol.** The symmetric EncString types were checked against source
 (`crates/bitwarden-crypto/src/enc_string/symmetric.rs` in sdk-internal):
 type 0 `0.iv|data` (no MAC, decrypt only), type 2 `2.iv|data|mac` (current),
-type 7 `7.<COSE Encrypt0>`, and type 1 is removed. The rest of this list comes
-from a research report written from memory, and step 1 checks it against
-`bitwarden/clients` `libs/common/src/vault/models/response/*.ts` and
-`vaultwarden src/api/core/ciphers.rs` before the proto types freeze:
+type 7 `7.<COSE Encrypt0>`, and type 1 is removed. Step 1 (WP-01) checked the
+list below. "VW" means a response recorded from Vaultwarden 1.37.4 in
+`vault-core/tests/fixtures/` (see its `SOURCES.md`). Line refs are to
+dani-garcia/vaultwarden tag 1.37.4 and bitwarden/server@8c88e007.
 
 - Prelogin `POST {identity}/accounts/prelogin {email}` returns `kdf`
-  (0 PBKDF2-SHA256, 1 Argon2id), `kdfIterations`, `kdfMemory` (MiB),
-  `kdfParallelism`.
+  (0 PBKDF2-SHA256, 1 Argon2id), `kdfIterations`, `kdfMemory`,
+  `kdfParallelism`. VW also returns `kdfSettings` and `salt` (null).
+  Source: VW `prelogin.json`, `src/api/identity.rs` L1020. The MiB unit of
+  `kdfMemory` and the Argon2id case are unverified.
 - Master key: PBKDF2(password, salt = trimmed lowercase email) or
   Argon2id(password, salt = SHA-256(email)), 32 bytes. Master password hash:
-  base64(PBKDF2-SHA256(master key, salt = password, 1 round)).
+  base64(PBKDF2-SHA256(master key, salt = password, 1 round)). Source: the
+  PBKDF2 path and the hash: VW accepted a register and login built this way.
+  The Argon2id salt is unverified.
 - Stretched key: HKDF-Expand-SHA256(master key, "enc", 32) and
   (master key, "mac", 32). It decrypts the user key (64 bytes) from the token
-  response `Key` or `profile.key`.
+  response `Key` or `profile.key`. Unverified, because the server never checks
+  it, but the fixtures were built with it, so a decrypt test checks it.
 - Token: `POST {identity}/connect/token`, form-encoded, `grant_type=password`
   with `username`, `password` (the hash), `scope=api offline_access`,
-  `client_id`, `deviceType`, `deviceIdentifier`, `deviceName`. 2FA comes back
-  as HTTP 400 `invalid_grant` with `TwoFactorProviders2`. The client resends
-  with `twoFactorToken` and `twoFactorProvider`. New-device verification is a
-  400 whose description names the OTP, answered with `newDeviceOtp`.
-  `grant_type=refresh_token` refreshes. `grant_type=client_credentials` logs in
-  by API key and returns no usable key.
+  `client_id`, `deviceType`, `deviceIdentifier`, `deviceName`. Source: VW
+  `token_success.json`, `src/api/identity.rs` L57, L1108. The success body mixes
+  case: `Key`, `PrivateKey`, `Kdf*`, `AccountKeys`, `UserDecryptionOptions`
+  next to `access_token`, `refresh_token`, `expires_in`.
+- 2FA comes back as HTTP 400 `error: "invalid_grant"`,
+  `error_description: "Two factor required."` with `TwoFactorProviders2`
+  (VW `token_two_factor_required.json`; server
+  `ResourceOwnerPasswordValidator.cs` L152). The client resends with
+  `twoFactorToken` and `twoFactorProvider` (unverified).
+- Wrong password differs by server. Bitwarden: 400 `error: "invalid_grant"`
+  with no `error_description` and `ErrorModel.Message` "Username or password
+  is incorrect. Try again." (`BaseRequestValidator.cs` L255, L495;
+  `ResourceOwnerPasswordValidator.cs` L160). VW: 400 with `error: ""`, and the
+  text in `message` and `errorModel.message` (VW
+  `token_wrong_password_vaultwarden.json`). Match on the status and message,
+  because `error` is not reliable.
+- New-device verification is a 400 with `error: "device_error"`,
+  `error_description: "New device verification required"` and
+  `ErrorModel.Message: "new device verification required"`
+  (`DeviceValidator.cs` L273-300). The server reads the answer from the
+  `NewDeviceOtp` form field (`DeviceValidator.cs` L167). VW 1.37.4 never sends
+  this error. The fixture is hand-written.
+- `grant_type=refresh_token` refreshes and `grant_type=client_credentials`
+  logs in by API key (VW `src/api/identity.rs` L1112). That the API key login
+  returns no usable key is unverified.
 - Headers: `Device-Type`, `Bitwarden-Client-Name`, `Bitwarden-Client-Version`.
+  Unverified. VW accepted them.
 - Sync: `GET /api/sync?excludeDomains=true` returns `profile` (with `key`,
-  `privateKey`, `organizations[].key`), `folders`, `collections`, `ciphers`,
-  `policies`, `sends`. Cipher `type` is 1 Login, 2 SecureNote, 3 Card,
-  4 Identity, 5 SshKey. Every user string is an EncString. Ids, numbers,
-  dates, `match`, field `type` and `linkedId` are plain.
+  `privateKey`, `accountKeys`, `organizations[].key`), `folders`,
+  `collections`, `ciphers`, `policies`, `sends`, and in VW also `domains`,
+  `policiesNew`, `userDecryption`. Cipher `type` is 1 Login, 2 SecureNote,
+  3 Card, 4 Identity, 5 SshKey; VW also knows 6 BankAccount, 7 DriversLicense,
+  8 Passport and returns `bankAccount`, `driversLicense`, `passport` as null
+  (`src/api/core/ciphers.rs` L274-291). Every user string is an EncString.
+  Ids, numbers, dates, `match`, field `type` and `linkedId` are plain;
+  `fido2Credentials[].creationDate` is plain, the other fido2 fields are
+  EncStrings. Source: VW `sync.json`.
 - Org keys are type 4 (RSA-2048 OAEP-SHA1) under the user's private key.
-  The private key is PKCS#8 DER, type 2 under the user key.
+  The private key is PKCS#8 DER, type 2 under the user key. Unverified: VW
+  stores what the client sends. The fixtures use this layout.
 - Cipher key order: org key or user key, then the cipher's own `key` if set.
-- Writes: `POST /api/ciphers`, `POST /api/ciphers/create` (org, with
-  `collectionIds`), `PUT /api/ciphers/{id}`, `PUT /api/ciphers/{id}/delete`
-  (trash), `PUT /api/ciphers/{id}/restore`, `DELETE /api/ciphers/{id}`,
-  `POST/PUT/DELETE /api/folders[/{id}]`. A stale `lastKnownRevisionDate`
-  (beyond 1 s) gets HTTP 400 "out of date".
-- `GET /api/accounts/revision-date` returns epoch milliseconds.
-- Vaultwarden: JSON key case varies (camelCase and PascalCase), arrays may be
-  missing, `archivedDate`, `permissions` and SshKey may be absent, type 7 is
-  not issued.
+  Unverified, but `sync.json` has a cipher with its own `key` under the user
+  key.
+- Writes: `POST /api/ciphers` (L384), `POST /api/ciphers/create` (org,
+  `{cipher, collectionIds}`, L346), `PUT /api/ciphers/{id}` (L715),
+  `PUT /api/ciphers/{id}/delete` (trash, L1511),
+  `PUT /api/ciphers/{id}/restore` (L1601), `DELETE /api/ciphers/{id}`
+  (L1523), `POST /api/folders` (VW accepted it; the PUT and DELETE folder
+  routes are unverified). Every cipher body must carry `encryptedFor`, the
+  user id (the JWT `sub`), or VW answers 422 (`ciphers.rs` L272, L355, L388).
+  A `lastKnownRevisionDate` more than 1 s older than the stored one gets 400
+  "The client copy of this cipher is out of date. Resync the client and try
+  again." (`ciphers.rs` L462-463, VW `cipher_put_out_of_date.json`).
+- `GET /api/accounts/revision-date` returns epoch milliseconds as a bare
+  number (VW `revision_date.json`).
+- Vaultwarden: JSON key case varies (camelCase in `/api`, PascalCase keys in
+  the token body and `TwoFactorProviders2`). VW 1.37.4 returns
+  `archivedDate`, `permissions` and `sshKey` (null when unused). Older VW may
+  leave them out, so treat them as optional. That VW never issues type 7 is
+  unverified. Registration is
+  `POST /identity/accounts/register/send-verification-email` then
+  `/register/finish` (`identity.rs` L1051, L1100).
 
 **The shell.** From `plans/winui-immediate.md` (WP-00 to WP-07 done): the
 app implements `winui_immediate::App`, whose `update(message)` and
@@ -165,9 +211,8 @@ as EncStrings, and `creationDate` as a plain date.
 - `ASPasskeyRegistrationCredential` takes a ready attestation object (CBOR),
   and `ASPasskeyAssertionCredential` takes the authenticator data, signature,
   credential id and user handle.
-- The Keychain stores protected values, and `URLSession` does HTTP.
-- UniFFI generates Swift bindings for a Rust crate whose API uses owned
-  values, records, enums and callback-free functions.
+- The Keychain stores protected values, and `URLSession` does HTTP. The
+  Rust shell reaches all of these through `objc2` framework crates.
 
 **The threat model** (`.claude/memory/threat-model.md`, option C): after lock
 or logout our process holds no master password, keys or decrypted vault
@@ -197,7 +242,8 @@ call-time arguments, so tests are deterministic.
 
 The core's API serves every shell: WinUI now and macOS later. It keeps
 Rust borrows (`Screen<'_>`, `&mut impl CryptoRngCore`), so the Rust shell
-reads the screen without copies. It follows two rules:
+reads the screen without copies. Both shells are Rust: winui-immediate on
+Windows, appkit-immediate on macOS. It follows two rules:
 
 - **Platform words stay in the shell.** The core speaks of a "device key"
   (a hardware-backed secret behind a biometric prompt), "protected storage"
@@ -215,15 +261,11 @@ reads the screen without copies. It follows two rules:
 | `DeviceSecret` | Hello `RequestDeriveSharedSecretAsync` | Secure Enclave ECDH |
 | `PasskeyReply` | `webauthn.dll` plugin COM | `ASCredentialProviderExtension` |
 
-A Swift shell (SwiftUI needs Swift, because it has no Objective-C API) goes
-through a later crate, `crates/vault-core-ffi`. It owns a `Core` and a
-`rand_core::OsRng`, calls `handle` and `screen`, and copies the borrowed
-screen into owned UniFFI records. Only the Swift path pays for those copies,
-and secrets cross as zeroizing bytes. Each shell decides how long its own
-copy lives: Swift can't wipe a `String`, so the macOS shell keeps secrets in
-`Data` and zeroes it. Inputs and effects are already plain enums of owned
-data, so they need no change for the FFI. This plan builds no Swift and no
-FFI crate.
+The macOS shell uses the core exactly as the WinUI shell does: it owns a
+`Core` and a `rand_core::OsRng`, calls `handle`, and reads `screen()` while it
+builds the appkit-immediate view. No Swift and no FFI crate are involved, so
+secrets stay in zeroizing Rust types under the same wiping allocator. Text
+handed to AppKit (`NSString`) is outside our reach, as WinUI's HSTRINGs are.
 
 Key derivation is CPU-heavy: about 0.3 s for PBKDF2 at 600,000 rounds, and
 64 MiB for Argon2id. The core emits it as an effect (`Effect::Derive`), and
@@ -238,19 +280,19 @@ The repo is already a virtual workspace (`spikes`, `winui-immediate`). This
 plan adds two members:
 
 ```text
-Cargo.toml                    [workspace] members += ["app", "crates/vault-core"]
-crates/vault-core/src/lib.rs
-crates/vault-core/src/crypto.rs        pub use of the children
-crates/vault-core/src/crypto/kdf.rs
-crates/vault-core/src/crypto/key.rs
-crates/vault-core/src/crypto/enc_string.rs
-crates/vault-core/src/proto.rs          case-insensitive JSON entry points
-crates/vault-core/src/proto/identity.rs prelogin, token, errors
-crates/vault-core/src/proto/sync.rs     sync response
-crates/vault-core/src/proto/cipher.rs   cipher and folder request/response
-crates/vault-core/src/vault.rs         decrypted domain types
-crates/vault-core/src/core.rs          Core, Input, Effect, State
-crates/vault-core/src/core/request.rs  RequestId, pending-request table
+Cargo.toml                    [workspace] members += ["app", "vault-core"]
+vault-core/src/lib.rs
+vault-core/src/crypto.rs        pub use of the children
+vault-core/src/crypto/kdf.rs
+vault-core/src/crypto/key.rs
+vault-core/src/crypto/enc_string.rs
+vault-core/src/proto.rs          case-insensitive JSON entry points
+vault-core/src/proto/identity.rs prelogin, token, errors
+vault-core/src/proto/sync.rs     sync response
+vault-core/src/proto/cipher.rs   cipher and folder request/response
+vault-core/src/vault.rs         decrypted domain types
+vault-core/src/core.rs          Core, Input, Effect, State
+vault-core/src/core/request.rs  RequestId, pending-request table
 app/src/main.rs                        the App: owns Core, view, update
 app/src/shell.rs                       effect runner
 ```
@@ -459,7 +501,7 @@ document for another `user_id`, or with an unknown `format`, is ignored.
 **Shell duties** (stated in this plan so both shells keep them): write each
 slot to a temporary file in the same directory, flush it, then rename it over
 the old file, so a crash leaves the old or the new file but never half of
-one. `VaultCache` is protected storage (see "Decisions to confirm").
+one. `VaultCache` is protected storage (see "Settled").
 
 ## State machine
 
@@ -492,7 +534,7 @@ pub enum Effect {
     Derive { id: RequestId, password: SecretString, email: String, kdf: Kdf },
     Store { id: RequestId, slot: StoreSlot, bytes: Vec<u8> },
     Clear { slot: StoreSlot },
-    ScreenChanged,                            // the shell re-renders
+    Rerender,                            // the shell re-renders
     /// Ask the device key for its secret over `challenge`, behind a
     /// biometric prompt. `create` makes the key first if it is missing.
     DeviceSecret { id: RequestId, challenge: [u8; 32], create: bool },
@@ -791,6 +833,88 @@ changed
 `DeviceWrap` or a cleared `RefreshToken` locks or logs out. Windows needs this
 too, because a second app instance can't be ruled out.
 
+## SSH agent
+
+The shell owns the socket and the core owns the protocol, the key lookup and
+the signing, as with the passkey provider. On Windows the shell serves the
+named pipe `\\.\pipe\openssh-ssh-agent`, which works only while the Windows
+OpenSSH Authentication Agent service is stopped. On macOS it will serve a
+Unix socket named in `SSH_AUTH_SOCK`. The shell reads one length-prefixed
+frame, sends it as an input, and writes the reply frame back. The shell
+also finds the calling process (`GetNamedPipeClientProcessId`,
+`LOCAL_PEERPID` on macOS) and keeps it in its own map under the request id,
+because the core decides nothing by it. `SshApproval.id` lets the prompt
+look it up, and the request's one `SshAgentReply` tells the shell to drop
+it.
+
+The agent protocol (draft-miller-ssh-agent) is a 4-byte length, a type byte
+and SSH strings. The core parses it with its own code in
+`core/ssh_agent.rs`, because the parser is small and pure, and
+`ssh-agent-lib` is built on tokio. The core answers
+`SSH_AGENTC_REQUEST_IDENTITIES` (11) and `SSH_AGENTC_SIGN_REQUEST` (13), and
+every other message gets `SSH_AGENT_FAILURE` (5). Adding or removing keys
+through the agent is unsupported, because the vault is the only source of
+keys.
+
+```rust
+// core.rs
+pub enum Input {
+    // ...existing variants
+    /// One agent frame without its length prefix.
+    SshAgent { id: AgentRequestId, frame: Vec<u8> },
+}
+pub enum Effect {
+    // ...existing variants
+    /// The reply frame without its length prefix.
+    SshAgentReply { id: AgentRequestId, frame: Vec<u8> },
+}
+
+/// Chosen by the shell, one per frame.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct AgentRequestId(pub u64);
+
+// core/ssh_agent.rs
+pub enum AgentRequest {
+    List,
+    Sign { public_key: Vec<u8>, data: Vec<u8>, flags: u32 },
+    Other(u8),
+}
+pub fn parse_request(frame: &[u8]) -> Result<AgentRequest, AgentParseError>;
+pub fn identities_reply(keys: &[(&[u8], &str)]) -> Vec<u8>;
+pub fn signature_reply(signature: &ssh_key::Signature) -> Vec<u8>;
+pub fn failure_reply() -> Vec<u8>;
+
+// vault.rs: built at unlock, beside CipherSummary
+pub struct SshKeySummary {
+    pub cipher_id: Uuid,
+    /// Public key in SSH wire form, decrypted from `sshKey.publicKey`.
+    pub public_key: Vec<u8>,
+    pub fingerprint: String,
+}
+```
+
+**Listing.** `VaultIndex` gains `ssh_keys: Vec<SshKeySummary>`, decrypted at
+unlock from `sshKey.publicKey` and `keyFingerprint`, so listing decrypts no
+private key. While locked, `List` answers an empty list, so `ssh` falls back
+to its other keys at once.
+
+**Signing.** The core finds the key by comparing the request's public-key
+blob with the index. Then it sets a pending approval and emits
+`Rerender` with an approval screen that shows the item name and the
+calling process. On `User::ApproveSsh`, it decrypts `sshKey.privateKey`
+(OpenSSH PEM) for that one request, parses it with `ssh-key`, signs, and
+drops the key. On `User::DenySsh` or a timeout of 60 s (by `Tick`) it answers
+failure. For RSA, `flags` picks `rsa-sha2-256` (2) or `rsa-sha2-512` (4), and
+plain `ssh-rsa` (SHA-1) is refused. Supported key types are Ed25519, RSA and
+ECDSA P-256/P-384. A sign request while locked waits for unlock under the
+same 60 s timeout, as the passkey request does. Lock answers every pending
+request with failure.
+
+"Approve for this session" is left out of this plan: each sign asks.
+
+New dependencies of `vault-core`: `ssh-key` (features `ed25519`, `rsa`,
+`p256`, `p384`, `alloc`; no `std` RNG).
+
 ## Fit with winui-immediate and the threat model
 
 The shell is the `Vault` type, which implements `winui_immediate::App`. It
@@ -869,6 +993,16 @@ SecretString }` into `State::Prelogin`. `LoginForm` holds only the email.
     re-parsing the stored document gives the same `CipherResponse` set as
     the core holds in memory, and the write response's `revisionDate`
     becomes `revision`.
+21. SSH agent protocol (proptest): any frame `parse_request` accepts was
+    built by the test's own encoder from the draft's layout, and any
+    truncated or extended frame is rejected. `List` while unlocked returns
+    every SshKey cipher's public key and name, and while locked an empty list.
+22. SSH agent sign: for an Ed25519, an RSA and an ECDSA P-256 fixture key,
+    approve then sign gives a signature that `ssh-key` verifies with the
+    public key over `data`. RSA with flag 2 or 4 gives `rsa-sha2-256` or
+    `-512`, and with neither it fails. Deny, a 60 s timeout, an unknown key
+    and lock each give `SSH_AGENT_FAILURE`. After the reply, the state holds
+    no private key.
 16. Platform-neutral API: a compile check (`cargo check -p vault-core`)
     plus `cargo tree -p vault-core` showing no `windows*`, `objc2*` or HTTP
     crate.
@@ -879,36 +1013,100 @@ SecretString }` into `State::Prelogin`. `LoginForm` holds only the email.
 
 1. Check the protocol facts against `bitwarden/clients` and
    `vaultwarden` source, and save the sample JSON for sync, token and errors
-   as fixtures in `crates/vault-core/tests/fixtures/`. Record the source
+   as fixtures in `vault-core/tests/fixtures/`. Record the source
    commit of each fixture. Fix "Facts" where they differ.
 2. Workspace and `crypto`: tests 1–4 and 16. Test 16 then runs in every
-   later step.
-3. `proto`: tests 5–6, on the step 1 fixtures.
+   later step. Done (2026-11-20): 18 tests pass (KDF and type 0, 2, 3, 4
+   vectors from sdk-internal 2079db5, proptests, `tests/dependencies.rs`).
+   Added `PrivateKey::from_pkcs8_der`. `rsa` is built without `std`, so
+   `getrandom` stays out of the tree.
+3. `proto`: tests 5–6, on the step 1 fixtures. Done (2026-11-20): tests 5
+   and 6 pass in `tests/proto.rs`, with named checks for every identity and
+   write fixture. Multi-word fields carry an explicit lowercase `rename`,
+   because `rename_all = "lowercase"` keeps underscores. Ciphers keep `raw`
+   through `CipherResponse::from_object`, and `EncString::decrypt` now
+   rejects type 0 (`decrypt_legacy` is the narrow path).
 4. `vault` and the decrypt path from proto to `VaultIndex` and `CipherView`,
-   with fixture tests for each cipher type.
-5. `core` login, unlock, lock and sync: tests 7–9.
+   with fixture tests for each cipher type. Done (2026-11-20): 15 tests in
+   `tests/vault.rs` decrypt the whole sync fixture from the test password:
+   each cipher type, the org cipher, the cipher with its own key, and
+   `fido2Credentials`.
+5. `core` login, unlock, lock and sync: tests 7–9. Done (2026-11-20):
+   `tests/core.rs` drives `handle` with the fixtures for plain login, 2FA by
+   authenticator and email, new-device OTP, both wrong-password bodies, API
+   key then unlock, refresh (missing, expired, `401` twice, refused), lock
+   timeout, offline sync and the stale-answer proptest. A malformed EncString
+   now parses to `Unsupported`, so only its item is unreadable.
 6. `core` writes, conflicts, the cache and `StorageChanged`: tests 10, 15,
-   18, 19 and 20.
+   18, 19 and 20. Done (2026-11-20): save, create, out-of-date then
+   conflict, stale edit, two cores sharing storage (proptest), the
+   five-minute poll, the revision rule (proptest) and the stored document
+   round trip pass. Passkey counter writes in test 15 move to WP-07.
 7. The `app` crate: `app/src/shell.rs` and the `App` wired to the core, a
    login screen and the list from `winui-immediate/examples/vault_list.rs`. Manual check against a test server, then test 17.
+   Done (2026-11-20): `app` builds and is clippy clean. Against Vaultwarden
+   (nixpkgs, temporary, account from `record.py` with TOTP on), driven
+   through UI Automation because the computer-use grant was refused: server
+   URL, login, TOTP code, sync, list of 8, filter, open, show password, edit
+   and save a login, sync, lock, wrong password, unlock, and after a restart
+   unlock from the DPAPI cache. Test 17 is not written yet. Editing a login
+   with passkeys is turned off, because `CipherView` has no `Clone`.
 8. `core` device-key enroll and unlock: test 11. `app/src/shell/device_key.rs` with
    KeyCredentialManager. Manual check: enroll, lock, unlock with Hello, the
    prompt opens in front with focus, and the derived secret is the same
    across two unlocks and an app restart on this machine.
+   Partial (2026-11-20): test 11 passes (9 named checks in `tests/core.rs`),
+   and `cargo test -p vault-core` is green (94 tests). The shell calls
+   `RequestCreateForWindowAsync` (ReplaceExisting) or `OpenAsync`, then
+   `RequestDeriveSharedSecretAsync`, through windows-bindgen 0.100 bindings
+   (`app/bindings.txt`), because the `windows` crate 0.62 lacks these
+   methods. Its third argument is named `encryptedRequest` in the metadata.
+   Against a temporary Vaultwarden, "Enable Windows Hello" opened the Hello
+   prompt (CredentialUIBroker, owned by our window) in the foreground within
+   1 s. Enroll and unlock were not finished, because the prompt needs a
+   person. The memory scan after lock first found 2 copies of the user key
+   in dead frames of the UI thread's stack. The app now zeroes 192 KiB of
+   stack after every input that leaves the vault hidden, and the scan then
+   found 0 copies (7 while unlocked).
 9. `core` passkeys: tests 12–14.
+   Done (2026-11-20): tests 12–14 and the passkey counter part of test 15
+   pass, and `cargo test -p vault-core` is green (77 tests). MakeCredential
+   always asks the user to pick a login whose URI host matches `rp_id`, or
+   "new login", and replies only after the cipher write returns 200.
+   GetAssertion answers at once when one passkey fits, or else asks. A
+   counter write that comes back out of date syncs, then writes again only
+   when its counter is still higher. The shell runs user verification
+   before it sends `Input::Passkey`, so there is no `Effect::PasskeyVerify`.
+   The fixture passkey's `keyValue` was replaced with a real P-256 key.
 10. Sparse package, COM server and `app/src/shell/passkey.rs` with
     `webauthn.dll`. Manual check: register a passkey on webauthn.io in Edge,
     sign in with it, and see the item in the vault after sync.
+11. Fixtures: re-record `sync.json` with real Ed25519, RSA and ECDSA P-256
+    SshKey ciphers using `record.py`. `core` SSH agent: tests 21–22.
+    Done (2026-11-21): the keys were encrypted under the fixture user key
+    instead of re-recorded (see `SOURCES.md`). Tests 21–22 pass in
+    `tests/core.rs` with 5 named tests; 100 vault-core tests pass. The RSA
+    path builds its `rsa` key by hand, because ssh-key 0.6.7's conversion
+    passes `p` twice and always fails. The approval shows on
+    `VaultScreen::ssh_approval`.
+12. `app/src/shell/ssh_agent.rs` on the named pipe. Manual check: stop the
+    Windows OpenSSH agent, `ssh-add -l` lists the vault keys, `ssh -T
+    git@github.com` with a vault key shows the prompt and succeeds after
+    approve, and fails after deny or lock.
 
 ## Work breakdown
 
 ### WP-01: protocol fixtures
 
-Status: open  
+Status: done (2026-11-20). 11 fixtures, 9 recorded from Vaultwarden 1.37.4
+in WSL NixOS, 2 hand-written from bitwarden/server@8c88e007. See
+`vault-core/tests/fixtures/SOURCES.md`. Follow-up for WP-04: Vaultwarden
+needs `encryptedFor` on cipher bodies, and wrong-password errors differ by
+server.  
 Owner: subagent  
 Depends on: none
 
-Scope: `crates/vault-core/tests/fixtures/*.json`, "Facts" in this plan.
+Scope: `vault-core/tests/fixtures/*.json`, "Facts" in this plan.
 
 Deliverable: fixtures for prelogin, token (success, 2FA, new device, wrong
 password), sync (every cipher type, an org cipher, a cipher with `key`),
@@ -921,11 +1119,11 @@ Handoff: fixture paths and a list of facts changed.
 
 ### WP-02: crypto
 
-Status: open  
+Status: done  
 Owner: subagent  
 Depends on: none
 
-Scope: workspace `Cargo.toml`, `crates/vault-core/src/crypto*`.
+Scope: workspace `Cargo.toml`, `vault-core/src/crypto*`.
 
 Deliverable: the crypto module of this plan.
 
@@ -936,11 +1134,11 @@ Handoff: changed paths, test output.
 
 ### WP-03: proto and vault
 
-Status: open  
+Status: done  
 Owner: subagent  
 Depends on: WP-01, WP-02
 
-Scope: `crates/vault-core/src/proto*`, `vault.rs`.
+Scope: `vault-core/src/proto*`, `vault.rs`.
 
 Deliverable: proto types and decrypt to `VaultIndex` and `CipherView`.
 
@@ -950,11 +1148,11 @@ Handoff: changed paths, test output.
 
 ### WP-04: core state machine
 
-Status: open  
+Status: done  
 Owner: main agent  
 Depends on: WP-03
 
-Scope: `crates/vault-core/src/core*`.
+Scope: `vault-core/src/core*`.
 
 Deliverable: `Core`, `Input`, `Effect`, `State` and `handle`.
 
@@ -964,7 +1162,7 @@ Handoff: changed paths, test output.
 
 ### WP-05: shell
 
-Status: open  
+Status: done  
 Owner: main agent  
 Depends on: WP-04
 
@@ -980,11 +1178,12 @@ Handoff: the run log and screenshots.
 
 ### WP-06: device unlock (Windows Hello)
 
-Status: open  
+Status: code done, test 11 and the memory scan pass; the manual Hello run
+(enroll, two unlocks, restart) waits for the user (2026-11-20)  
 Owner: main agent  
 Depends on: WP-05
 
-Scope: device-key arms in `crates/vault-core/src/core.rs`, `device_key` in
+Scope: device-key arms in `vault-core/src/core.rs`, `device_key` in
 `crypto/key.rs`, `app/src/shell/device_key.rs`.
 
 Deliverable: enroll and unlock with Hello, with nothing kept while locked.
@@ -997,11 +1196,11 @@ Handoff: changed paths, test output, the scan result.
 
 ### WP-07: passkey core
 
-Status: open  
+Status: done  
 Owner: subagent  
 Depends on: WP-04
 
-Scope: `crates/vault-core/src/core/passkey.rs`, `Fido2CredentialView` in
+Scope: `vault-core/src/core/passkey.rs`, `Fido2CredentialView` in
 `vault.rs`, P-256 helpers in `crypto`.
 
 Deliverable: MakeCredential, GetAssertion, the catalog and the locked wait.
@@ -1026,40 +1225,96 @@ Acceptance: the manual check from step 10.
 
 Handoff: the run log, screenshots, the Windows build number.
 
-Waves: WP-01 and WP-02 together, then WP-03, then WP-04, then WP-05 and
-WP-07 together, then WP-06, then WP-08.
+### WP-09: SSH agent core
+
+Status: done (2026-11-21)  
+Owner: subagent  
+Depends on: WP-04
+
+Scope: `vault-core/src/core/ssh_agent.rs`, the SSH arms in `core.rs`,
+`SshKeySummary` in `vault.rs`, `vault-core/tests/fixtures/sync.json` and
+`record.py`.
+
+Deliverable: listing, approval, signing and the locked wait.
+
+Acceptance: tests 21–22 pass, and test 16 stays green.
+
+Handoff: changed paths, test output.
+
+### WP-10: SSH agent shell
+
+Status: open  
+Owner: main agent  
+Depends on: WP-05, WP-09
+
+Scope: `app/src/shell/ssh_agent.rs`.
+
+Deliverable: the named-pipe server and the approval prompt.
+
+Acceptance: the manual check from step 12.
+
+Handoff: the run log and screenshots.
+
+### WP-11: core gaps found by WP-04 and WP-05
+
+Status: done (2026-11-20). Org create, folder writes, `CipherView: Clone`,
+password history, `Config::server_urls` and `VaultScreen::index_revision`
+landed with 8 named tests in `tests/core.rs`; 85 vault-core tests pass. The
+live save-and-sync check of a passkey login is still by hand.  
+Owner: subagent  
+Depends on: WP-07
+
+Scope: `vault-core/src/core.rs`, `vault.rs`, `proto/cipher.rs`, and the
+matching changes in `app/src/main.rs`.
+
+Deliverable: create org ciphers (`{cipher, collectionIds}`) and folder
+create, rename and delete. `CipherView: Clone`, so the app can edit a login
+that holds passkeys without dropping them. A password change appends to
+`passwordHistory` and sets `passwordRevisionDate`. A separate identity URL
+and API URL in `Config`, as Bitwarden cloud needs. An index revision
+number on `Screen`, so the shell filters again only when the list changed.
+
+Acceptance: a named core test for each item; the app saves a login that
+holds a passkey and the passkey survives a sync.
+
+Handoff: changed paths, test output.
+
+Waves: WP-01 and WP-02 together, then WP-03, then WP-04, then WP-05, WP-07
+and WP-09 together, then WP-06 and WP-10, then WP-08.
 
 ## Decisions to confirm
 
-- **Protect the cache file.** Recommended: yes, so `VaultCache` is protected
-  storage (DPAPI on Windows, Keychain-backed key on macOS). Its secrets are
-  already EncStrings, but ids, types, folder and org membership, dates,
-  `favorite`, counts, the email and the KDF are readable. Protection costs
-  one DPAPI call per read and write and hides them from other users and disk
-  images, though not from our own user. If not, `protected()` drops
-  `VaultCache`.
-
-- **Test server.** Run Vaultwarden on one of the NixOS hosts, configured in
-  `/share/infra/machines/<host>`, for WP-05 and test 11. Also test against a
-  free Bitwarden cloud account by hand before release. Otherwise the
-  integration test runs only against Vaultwarden.
-- **Type 7 (COSE).** Parse it as `Unsupported` for now. Bitwarden cloud may
-  start issuing it, and adding decrypt then is a crypto change only.
-- **New ciphers get their own `key`.** Recommended: no, encrypt with the user
-  or org key, but keep an existing cipher `key` on edit. Bitwarden's newer
-  clients create item keys when the server allows it, and this can come later.
-- **Eager versus lazy decryption.** Recommended: decrypt the index on unlock
-  and full items on open, as above. The other choice decrypts everything at
-  unlock, which is simpler but keeps every secret in memory while unlocked.
-
-- **Signing certificate.** The sparse package needs a signed manifest.
-  Recommended: a self-signed test certificate for development, and a
-  decision on a real code-signing certificate before release.
-- **Where new passkeys go.** Recommended: offer the logins whose URI host
-  matches `rp_id`, plus "new login". Bitwarden does the same. The other
-  choice always creates a new login, which is simpler but clutters the vault.
+- **SSH approval scope.** Recommended: ask on every sign for now. Bitwarden
+  also offers "approve for this session" per key and process, which makes
+  `git` with many fetches less noisy. It needs an approval table in
+  `Unlocked` that lock clears.
+- **`List` while locked.** Recommended: an empty list, so `ssh` moves on
+  to its other keys at once. The other choice waits for unlock, as
+  Bitwarden's desktop app does, which blocks every `ssh` call until the user
+  unlocks or the timeout ends.
 
 ## Settled
+
+- **The cache file is protected** (2026-11-20). `VaultCache` is protected
+  storage (DPAPI on Windows, Keychain-backed key on macOS), because ids,
+  types, membership, dates, the email and the KDF are readable otherwise.
+  Cost: one DPAPI call per read and write.
+- **Test server: Vaultwarden in the NixOS WSL instance on this machine**
+  (2026-11-20), for WP-05 and test 11. Test a free Bitwarden cloud account by
+  hand before release.
+- **Type 7 (COSE) is unsupported for now** (2026-11-20). It parses as
+  `Unsupported`. Adding decrypt later is a crypto change only.
+- **New ciphers are encrypted with the user or org key** (2026-11-20), and an
+  edit keeps an existing cipher `key`. Item keys for new ciphers can come
+  later.
+- **Lazy decryption** (2026-11-20). The index is decrypted on unlock and full
+  items on open, so fewer secrets sit in memory while unlocked.
+- **Self-signed certificate for now** (2026-11-20). It signs the sparse
+  package manifest in development. A real code-signing certificate is a
+  decision for release.
+- **New passkeys go into an existing login when possible** (2026-11-20). The
+  prompt offers the logins whose URI host matches `rp_id`, plus "new login",
+  as Bitwarden does.
 
 - **Write our own sans-io core and crypto on RustCrypto** (2026-11-20).
   `bitwarden-vault` and `bitwarden-core` do I/O and are async.
@@ -1090,11 +1345,10 @@ WP-07 together, then WP-06, then WP-08.
   update than 24H2, that update becomes the minimum.
 - **The core stays open to a macOS app** (2026-11-20). It names no platform,
   never assumes one process, and builds the passkey CBOR itself. It keeps
-  Rust borrows (`Screen<'_>`, `&mut impl CryptoRngCore`). A later
-  `vault-core-ffi` crate copies the screen into owned values for a SwiftUI
-  shell. Writing the Mac UI in Rust through `objc2` was rejected, because it
-  rules out SwiftUI and needs hand-built bundles and `define_class!`
-  boilerplate.
+  Rust borrows (`Screen<'_>`, `&mut impl CryptoRngCore`). The macOS app is
+  Rust on appkit-immediate over `objc2` bindings, so it reads the borrowed
+  screen directly. No Swift and no FFI crate (decided 2026-11-20, replacing
+  the earlier SwiftUI plus UniFFI idea).
 - **Passkeys: the Windows passkey provider is in scope** (2026-11-20). Login
   to Bitwarden by passkey is out: Bitwarden enables it only for web and the
   extension, and Vaultwarden likely lacks it. Decoding `fido2Credentials` comes

@@ -23,7 +23,13 @@ decrypt the whole vault. Tokens in them are for a server that no longer exists.
 | `cipher_put_success.json` | recorded from Vaultwarden 1.37.4 (`PUT /api/ciphers/{id}`) |
 | `cipher_put_out_of_date.json` | recorded from Vaultwarden 1.37.4 (stale `lastKnownRevisionDate`) |
 
-The SshKey cipher holds placeholder key text, so only its EncStrings are real.
+The SshKey ciphers hold real keys, added after recording (WP-09, 2026-11-21).
+Keys from `ssh-keygen` (Ed25519, RSA 2048, ECDSA P-256, no passphrase) were encrypted under the user
+key with `EncString::encrypt`. The recorded cipher "SSH key" (`4747ede0-…`)
+kept its name and got the Ed25519 key. "SSH RSA" (`4757a3c2-…`) and
+"SSH ECDSA P-256" (`4767b4d3-…`) are new ciphers copied from its layout. Each
+`publicKey` is the OpenSSH line without a comment, and each `keyFingerprint`
+is its SHA-256 fingerprint. `tests/core.rs` (`SSH_KEYS`) holds the public keys.
 The passkey's `keyValue` in `sync.json` was replaced after recording with a real
 P-256 PKCS#8 key (base64url), encrypted under that cipher's key, so tests can
 sign with it.

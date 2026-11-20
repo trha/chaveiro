@@ -34,7 +34,9 @@ fn index_lists_every_cipher_readable_and_sorted() {
         Org login            Login      alice                      true
         Passkey login        Login      alice                      true
         Secure note          SecureNote                            true
-        SSH key              SshKey     SHA256:fixturefingerprint  true
+        SSH ECDSA P-256      SshKey     SHA256:5ebcL6pGLO/bna7pdLuCEVZrv0dyZR2CUVwUaf894sY true
+        SSH key              SshKey     SHA256:ZmgqKvxbNRTD9mdMtSspaUDeAzl1fzt3iTaGLpNnA/8 true
+        SSH RSA              SshKey     SHA256:OsYKc+9lhaCtKcPHVjpGlGoqD1i57PiulTHKK4KQ/EA true
     "#]]
     .assert_eq(&table);
 }
@@ -143,17 +145,16 @@ fn ssh_key_decrypts() {
     let CipherContent::SshKey(ssh_key) = open("SSH key").content else {
         panic!("not an SSH key");
     };
-    assert_eq!(
-        text(&ssh_key.private_key),
-        Some("-----BEGIN OPENSSH PRIVATE KEY-----\nfixture\n-----END OPENSSH PRIVATE KEY-----")
-    );
+    let private_key = text(&ssh_key.private_key).unwrap();
+    assert!(private_key.starts_with("-----BEGIN OPENSSH PRIVATE KEY-----\n"));
+    assert!(private_key.ends_with("-----END OPENSSH PRIVATE KEY-----\n"));
     assert_eq!(
         text(&ssh_key.public_key),
-        Some("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFixture fixture")
+        Some("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHRGCdOK0sas0lD2GYJ02q/4b0ho62jqQi+5xCN0ZMJR")
     );
     assert_eq!(
         text(&ssh_key.key_fingerprint),
-        Some("SHA256:fixturefingerprint")
+        Some("SHA256:ZmgqKvxbNRTD9mdMtSspaUDeAzl1fzt3iTaGLpNnA/8")
     );
 }
 

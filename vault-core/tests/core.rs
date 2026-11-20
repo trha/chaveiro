@@ -12,14 +12,17 @@ use proptest::prelude::*;
 use rand_chacha::{ChaCha20Rng, rand_core::SeedableRng};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
+use ssh_key::PublicKey;
 use std::{collections::HashMap, sync::LazyLock};
 use url::Url;
 use uuid::Uuid;
 use vault_core::{
     core::{
-        Body, Challenge, Config, Core, DeviceKeyError, Effect, HttpRequest, HttpResponse, Input,
-        LoginError, Method, PasskeyCatalogEntry, PasskeyError, PasskeyReply, PasskeyRequest,
-        RequestId, Screen, StoreSlot, StoredAccount, UnlockError, UserAction, VaultScreen,
+        AgentRequestId, Body, Challenge, Config, Core, DeviceKeyError, Effect, HttpRequest,
+        HttpResponse, Input, LoginError, Method, PasskeyCatalogEntry, PasskeyError, PasskeyReply,
+        PasskeyRequest, RequestId, Screen, StoreSlot, StoredAccount, UnlockError, UserAction,
+        VaultScreen,
+        ssh_agent::{AgentRequest, parse_request},
     },
     crypto::{EncString, Kdf, MasterKey, SecretString, SymmetricKey, derive_master_key},
     proto::{cache::CacheDocument, cipher::CipherResponse, sync::SyncResponse},
@@ -1774,7 +1777,209 @@ fn write_patches_stored_document() {
     assert_eq!(actual, expected);
 }
 
+// Test 21: SSH agent protocol.
+
+proptest! {
+    #[test]
+    fn accepted_frames_are_built_by_the_draft_layout(frame in agent_frame()) {
+        match parse_request(&frame) {
+            Ok(AgentRequest::List) => prop_assert_eq!(frame, vec![11]),
+            Ok(AgentRequest::Sign { public_key, data, flags }) => {
+                prop_assert_eq!(frame, sign_frame(&public_key, &data, flags));
+            }
+            Ok(AgentRequest::Other(kind)) => {
+                prop_assert_eq!(Some(&kind), frame.first());
+                prop_assert!(kind != 11 && kind != 13);
+            }
+            Err(_) => {}
+        }
+    }
+
+    #[test]
+    fn sign_frame_round_trips_and_rejects_cut_or_extended(
+        public_key in prop::collection::vec(any::<u8>(), 0..40),
+        data in prop::collection::vec(any::<u8>(), 0..40),
+        flags in any::<u32>(),
+        extra in prop::collection::vec(any::<u8>(), 1..6),
+    ) {
+        let frame = sign_frame(&public_key, &data, flags);
+        prop_assert_eq!(
+            parse_request(&frame),
+            Ok(AgentRequest::Sign { public_key, data, flags })
+        );
+        for length in 0..frame.len() {
+            prop_assert!(parse_request(&frame[..length]).is_err(), "cut at {}", length);
+        }
+        let mut longer = frame.clone();
+        longer.extend_from_slice(&extra);
+        prop_assert!(parse_request(&longer).is_err());
+        let mut list = vec![11];
+        list.extend_from_slice(&extra);
+        prop_assert!(parse_request(&list).is_err());
+    }
+}
+
+#[test]
+fn list_answers_vault_keys_unlocked_and_nothing_locked() {
+    let mut harness = Harness::stored(REVISION);
+    let effects = harness.send(agent(1, vec![11]));
+    assert_eq!(
+        ssh_replies(&effects),
+        [(AgentRequestId(1), vec![12, 0, 0, 0, 0])]
+    );
+    let effects = harness.unlock();
+    harness.settle_sync(&effects, REVISION);
+    let replies = ssh_replies(&harness.send(agent(2, vec![11])));
+    let [(AgentRequestId(2), frame)] = replies.as_slice() else {
+        panic!("one reply");
+    };
+    let mut listed = decode_identities(frame);
+    listed.sort();
+    let names: HashMap<Uuid, String> = vault(&harness.core)
+        .index
+        .ciphers
+        .iter()
+        .map(|row| (row.id, row.name.as_str().to_owned()))
+        .collect();
+    let mut expected: Vec<(Vec<u8>, String)> = SSH_KEYS
+        .iter()
+        .map(|key| (wire_blob(key.public), names[&key.cipher_id].clone()))
+        .collect();
+    expected.sort();
+    assert_eq!(listed, expected);
+    assert_eq!(names[&SSH_KEYS[1].cipher_id], "SSH RSA");
+    assert_eq!(names[&SSH_KEYS[2].cipher_id], "SSH ECDSA P-256");
+}
+
+// Test 22: SSH agent sign.
+
+#[test]
+fn approved_sign_verifies_for_each_key_type() {
+    let mut harness = Harness::unlocked(REVISION);
+    let cases = [
+        (&SSH_KEYS[0], 0, Some("ssh-ed25519")),
+        (&SSH_KEYS[1], 2, Some("rsa-sha2-256")),
+        (&SSH_KEYS[1], 4, Some("rsa-sha2-512")),
+        (&SSH_KEYS[1], 0, None),
+        (&SSH_KEYS[2], 0, Some("ecdsa-sha2-nistp256")),
+    ];
+    for (number, (key, flags, algorithm)) in (10..).zip(cases) {
+        let data = format!("session {number}").into_bytes();
+        let frame = sign_frame(&wire_blob(key.public), &data, flags);
+        assert!(ssh_replies(&harness.send(agent(number, frame))).is_empty());
+        {
+            let screen = vault(&harness.core);
+            let approval = screen.ssh_approval.expect("the request waits");
+            assert_eq!(approval.fingerprint, key.fingerprint);
+            assert_eq!(approval.id, AgentRequestId(number));
+            assert!(!approval.name.is_empty());
+        }
+        let replies = ssh_replies(&harness.user(UserAction::ApproveSsh));
+        let [(id, reply)] = replies.as_slice() else {
+            panic!("one reply");
+        };
+        assert_eq!(*id, AgentRequestId(number));
+        match algorithm {
+            None => assert_eq!(reply, &[5], "plain ssh-rsa is refused"),
+            Some(algorithm) => {
+                assert_ne!(reply, &[5], "{algorithm} signs");
+                let signature = decode_signature(reply);
+                assert_eq!(signature.algorithm().as_str(), algorithm);
+                let public_key = PublicKey::from_openssh(key.public).unwrap();
+                Verifier::verify(&public_key, &data, &signature).expect("the signature verifies");
+            }
+        }
+        assert!(vault(&harness.core).ssh_approval.is_none());
+    }
+}
+
+#[test]
+fn deny_timeout_unknown_key_and_lock_fail() {
+    let mut harness = Harness::unlocked(REVISION);
+    let blob = wire_blob(SSH_KEYS[0].public);
+    harness.send(agent(1, sign_frame(&blob, b"deny", 0)));
+    assert_eq!(
+        ssh_replies(&harness.user(UserAction::DenySsh)),
+        [(AgentRequestId(1), vec![5])]
+    );
+    let start = harness.now_ms;
+    harness.send(agent(2, sign_frame(&blob, b"late", 0)));
+    harness.now_ms = start + SSH_WAIT - 1;
+    assert!(ssh_replies(&harness.send(Input::Tick)).is_empty());
+    harness.now_ms = start + SSH_WAIT;
+    assert_eq!(
+        ssh_replies(&harness.send(Input::Tick)),
+        [(AgentRequestId(2), vec![5])]
+    );
+    let mut unknown = blob.clone();
+    *unknown.last_mut().unwrap() ^= 1;
+    assert_eq!(
+        ssh_replies(&harness.send(agent(3, sign_frame(&unknown, b"x", 0)))),
+        [(AgentRequestId(3), vec![5])]
+    );
+    assert_eq!(
+        ssh_replies(&harness.send(agent(4, vec![17]))),
+        [(AgentRequestId(4), vec![5])]
+    );
+    harness.send(agent(5, sign_frame(&blob, b"lock", 0)));
+    harness.send(agent(6, sign_frame(&blob, b"lock", 0)));
+    assert_eq!(
+        ssh_replies(&harness.user(UserAction::Lock)),
+        [(AgentRequestId(5), vec![5]), (AgentRequestId(6), vec![5])]
+    );
+}
+
+#[test]
+fn locked_sign_waits_for_unlock_then_approval() {
+    let mut harness = Harness::stored(REVISION);
+    let key = &SSH_KEYS[2];
+    let frame = sign_frame(&wire_blob(key.public), b"after unlock", 0);
+    assert!(ssh_replies(&harness.send(agent(7, frame))).is_empty());
+    let effects = harness.unlock();
+    assert!(ssh_replies(&effects).is_empty());
+    assert_eq!(
+        vault(&harness.core)
+            .ssh_approval
+            .map(|approval| approval.fingerprint),
+        Some(key.fingerprint)
+    );
+    let replies = ssh_replies(&harness.user(UserAction::ApproveSsh));
+    let [(AgentRequestId(7), reply)] = replies.as_slice() else {
+        panic!("one reply");
+    };
+    let public_key = PublicKey::from_openssh(key.public).unwrap();
+    Verifier::verify(&public_key, b"after unlock", &decode_signature(reply))
+        .expect("the signature verifies");
+}
+
 // Harness, fixtures and helpers.
+
+/// The SshKey ciphers in `sync.json`; see `SOURCES.md`.
+const SSH_KEYS: [SshFixture; 3] = [
+    SshFixture {
+        cipher_id: Uuid::from_u128(0x4747ede0_e366_4302_849a_f8023d70e7bd),
+        public: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHRGCdOK0sas0lD2GYJ02q/4b0ho62jqQi+5xCN0ZMJR",
+        fingerprint: "SHA256:ZmgqKvxbNRTD9mdMtSspaUDeAzl1fzt3iTaGLpNnA/8",
+    },
+    SshFixture {
+        cipher_id: Uuid::from_u128(0x4757a3c2_5d1e_4c7a_9b0e_2f6a8d1c3e01),
+        public: "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQCpikroCgxtXOF6eONX3Jv+nHSavLC0j8qvcs+m689qmVC9yi8trDUGWDsmt7Pnt72/5BWaIhoskWW1q0IQBSTRx8fbkl8iN0bE+kNFVFrMpnr61c1inpHPS9nod57FINv7hADuNh6LqSi18imhy2+EKK4MXBez5gDABaxcPac7MT6ZwzA472QQ/O+3/j849xfI+pPJSH/cl+L6fRfQB6oAt9l73jl2/aGRtZgG6K8JzVspY9GGk4mk1cYxOTqaTCURi7zgjmvyk4aSpsZK/iMRQ/N9gKsj6Hk+T8T5bmqqhb0wOdeDNGoHuyQ9EcozGgp8+gjgRdS+bAmdrjOU2ibJ",
+        fingerprint: "SHA256:OsYKc+9lhaCtKcPHVjpGlGoqD1i57PiulTHKK4KQ/EA",
+    },
+    SshFixture {
+        cipher_id: Uuid::from_u128(0x4767b4d3_6e2f_4d8b_8c1f_3a7b9e2d4f02),
+        public: "ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBKvW7ZPnEVwa5zXu72R+0URYg88Aoc4yBPn5HM8Y3ZATqMOd90Np+LTAc82ijxeBwr64RtIcb4zauboLyEkBDls=",
+        fingerprint: "SHA256:5ebcL6pGLO/bna7pdLuCEVZrv0dyZR2CUVwUaf894sY",
+    },
+];
+const SSH_WAIT: u64 = 60 * 1000;
+
+struct SshFixture {
+    cipher_id: Uuid,
+    /// OpenSSH public key line, without a comment.
+    public: &'static str,
+    fingerprint: &'static str,
+}
 
 const EMAIL: &str = "fixture-user@example.com";
 const PASSWORD: &str = "fixture-test-password-1";
@@ -2727,6 +2932,95 @@ fn catalogs(effects: &[Effect]) -> Vec<Vec<PasskeyCatalogEntry>> {
             _ => None,
         })
         .collect()
+}
+
+fn agent(id: u64, frame: Vec<u8>) -> Input {
+    Input::SshAgent {
+        id: AgentRequestId(id),
+        frame,
+    }
+}
+
+fn ssh_replies(effects: &[Effect]) -> Vec<(AgentRequestId, Vec<u8>)> {
+    effects
+        .iter()
+        .filter_map(|effect| match effect {
+            Effect::SshAgentReply { id, frame } => Some((*id, frame.clone())),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The key blob of an OpenSSH public key line: its base64 field.
+fn wire_blob(public: &str) -> Vec<u8> {
+    let field = public.split(' ').nth(1).unwrap();
+    base64::engine::general_purpose::STANDARD
+        .decode(field)
+        .unwrap()
+}
+
+/// `SSH_AGENTC_SIGN_REQUEST` laid out by hand from the draft: type 13,
+/// string key blob, string data, uint32 flags.
+fn sign_frame(public_key: &[u8], data: &[u8], flags: u32) -> Vec<u8> {
+    let length = |bytes: &[u8]| (bytes.len() as u32).to_be_bytes();
+    [
+        &[13][..],
+        &length(public_key),
+        public_key,
+        &length(data),
+        data,
+        &flags.to_be_bytes(),
+    ]
+    .concat()
+}
+
+/// Splits a big-endian u32 length and that many bytes off `bytes`.
+fn split_string(bytes: &[u8]) -> (&[u8], &[u8]) {
+    let length = u32::from_be_bytes(bytes[..4].try_into().unwrap()) as usize;
+    bytes[4..].split_at(length)
+}
+
+/// The (key blob, comment) pairs of an `SSH_AGENT_IDENTITIES_ANSWER`.
+fn decode_identities(frame: &[u8]) -> Vec<(Vec<u8>, String)> {
+    assert_eq!(frame[0], 12);
+    let count = u32::from_be_bytes(frame[1..5].try_into().unwrap());
+    let mut rest = &frame[5..];
+    let pairs = (0..count)
+        .map(|_| {
+            let (blob, after) = split_string(rest);
+            let (comment, after) = split_string(after);
+            rest = after;
+            (blob.to_vec(), String::from_utf8(comment.to_vec()).unwrap())
+        })
+        .collect();
+    assert!(rest.is_empty(), "no bytes after the last key");
+    pairs
+}
+
+/// The signature in an `SSH_AGENT_SIGN_RESPONSE`.
+fn decode_signature(frame: &[u8]) -> ssh_key::Signature {
+    assert_eq!(frame[0], 14, "a sign response");
+    let (blob, rest) = split_string(&frame[1..]);
+    assert!(rest.is_empty());
+    ssh_key::Signature::try_from(blob).unwrap()
+}
+
+/// Random bytes, and sign frames with random fields, cuts and tails.
+fn agent_frame() -> impl Strategy<Value = Vec<u8>> {
+    let bytes = || prop::collection::vec(any::<u8>(), 0..24);
+    prop_oneof![
+        prop::collection::vec(any::<u8>(), 0..48),
+        bytes().prop_map(|tail| [&[11][..], &tail].concat()),
+        bytes().prop_map(|tail| [&[13][..], &tail].concat()),
+        (bytes(), bytes(), any::<u32>(), 0..80usize, bytes()).prop_map(
+            |(public_key, data, flags, cut, tail)| {
+                let mut frame = sign_frame(&public_key, &data, flags);
+                frame.truncate(cut.max(1));
+                frame.extend_from_slice(&tail);
+                frame
+            }
+        ),
+    ]
 }
 
 fn owned_http(effects: &[Effect]) -> Vec<(RequestId, HttpRequest)> {

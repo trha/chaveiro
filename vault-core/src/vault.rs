@@ -30,6 +30,9 @@ pub struct VaultIndex {
     pub folders: Vec<FolderSummary>,
     /// Sorted by name, then id.
     pub ciphers: Vec<CipherSummary>,
+    /// One entry per SshKey cipher outside the trash whose public key
+    /// decrypts and parses, in the order of [`ciphers`](Self::ciphers).
+    pub ssh_keys: Vec<SshKeySummary>,
 }
 
 impl VaultIndex {
@@ -38,7 +41,7 @@ impl VaultIndex {
     /// odd item never hides the rest.
     pub fn decrypt(
         folders: &[FolderResponse],
-        ciphers: &[CipherResponse],
+        cipher_responses: &[CipherResponse],
         keys: &VaultKeys,
     ) -> Self {
         let mut folders: Vec<FolderSummary> = folders
@@ -57,15 +60,75 @@ impl VaultIndex {
             })
             .collect();
         folders.sort_by(|left, right| compare_names(&left.name, &right.name));
-        let mut ciphers: Vec<CipherSummary> = ciphers
+        let mut ciphers: Vec<CipherSummary> = cipher_responses
             .iter()
             .map(|cipher| CipherSummary::decrypt(cipher, keys))
             .collect();
         ciphers.sort_by(|left, right| {
             compare_names(&left.name, &right.name).then(left.id.cmp(&right.id))
         });
-        Self { folders, ciphers }
+        let ssh_keys = ciphers
+            .iter()
+            .filter(|summary| summary.kind == CipherKind::SshKey && !summary.deleted)
+            .filter_map(|summary| {
+                let cipher = cipher_responses
+                    .iter()
+                    .find(|cipher| cipher.id == summary.id)?;
+                SshKeySummary::decrypt(cipher, keys)
+            })
+            .collect();
+        Self {
+            folders,
+            ciphers,
+            ssh_keys,
+        }
     }
+}
+
+/// The public half of one SshKey cipher, for the SSH agent's list.
+#[derive(PartialEq, Eq)]
+pub struct SshKeySummary {
+    pub cipher_id: Uuid,
+    /// Public key in SSH wire form, decrypted from `sshKey.publicKey`.
+    pub public_key: Vec<u8>,
+    /// From `sshKey.keyFingerprint`, or the SHA-256 fingerprint of
+    /// [`public_key`](Self::public_key) when the cipher has none.
+    pub fingerprint: String,
+}
+
+impl SshKeySummary {
+    /// [`None`] when the public key is missing, does not decrypt, or is not
+    /// an OpenSSH public key.
+    fn decrypt(cipher: &CipherResponse, keys: &VaultKeys) -> Option<Self> {
+        let key = keys.cipher_key(cipher).ok()?;
+        let data = cipher.ssh_key.as_ref()?;
+        let text = decrypt_text(data.public_key.as_ref()?, &key).ok()?;
+        let public_key = ssh_key::PublicKey::from_openssh(text.trim()).ok()?;
+        let fingerprint = match decrypt_option(data.key_fingerprint.as_ref(), &key) {
+            Ok(Some(fingerprint)) => fingerprint.as_str().to_owned(),
+            Ok(None) | Err(_) => public_key.fingerprint(ssh_key::HashAlg::Sha256).to_string(),
+        };
+        Some(Self {
+            cipher_id: cipher.id,
+            public_key: public_key.to_bytes().ok()?,
+            fingerprint,
+        })
+    }
+}
+
+/// Decrypts `sshKey.privateKey` of `cipher`, the OpenSSH PEM text.
+pub fn decrypt_ssh_private_key(
+    cipher: &CipherResponse,
+    keys: &VaultKeys,
+) -> Result<Option<SecretString>, VaultError> {
+    let key = keys.cipher_key(cipher)?;
+    decrypt_option(
+        cipher
+            .ssh_key
+            .as_ref()
+            .and_then(|data| data.private_key.as_ref()),
+        &key,
+    )
 }
 
 /// The keys that open the vault, held while unlocked.
