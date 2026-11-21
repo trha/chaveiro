@@ -65,3 +65,24 @@ rows off screen are wrong.
   layout, render the content view in the app with
   `cacheDisplayInRect:toBitmapImageRep:` from `App::update`, never from
   `view`, where the layout writes trip the idle check.
+
+## Learned while building the two-step screen (2026-11-21)
+
+- On macOS 27 a text field draws its text in a private
+  `NSTextFieldSimpleLabel` subview. Neither `cacheDisplayInRect:` nor
+  `dataWithPDFInsideRect:` draws it, so a rendered picture shows control
+  frames, bezels and alert lines but no field, header or pop-up text.
+  Check text by dumping each `NSControl`'s `stringValue` and frame.
+- A rounded-bezel text field draws its bezel at 22 points whatever its
+  height constraint, so a taller box (the 44-point code boxes) uses
+  `SquareBezel`.
+- `makeFirstResponder` on a view made this pass does nothing, because the
+  view joins its window only when the pass closes. `make_first_responder`
+  therefore runs when the pass ends.
+- `release` used to forget only the node's view, but fields register their
+  inner control, so their senders stayed in the map after the node was
+  dropped. `Control::senders` now lists what each control registered.
+- `examples/code_boxes.rs` plays edits through the field editor
+  (`insertText:replacementRange:`, `doCommandBySelector:`) from
+  `App::update`, which works from the Claude Code session where System
+  Events does not.
