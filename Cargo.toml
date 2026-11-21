@@ -6,6 +6,7 @@ members = [
   "vault-core",
   "winui-executor",
   "winui-immediate",
+  "appkit-immediate"
 ]
 
 # PBKDF2 with 600,000 rounds takes seconds unoptimized; the vault-core tests
