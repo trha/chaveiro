@@ -1,4 +1,4 @@
-//! Chaveiro for Windows: a winui-immediate [`App`] over the vault-core
+//! Chaveiro for Windows: a winui-immediate [`App`] over the chaveiro-core
 //! [`Core`], with [`Io`] running the core's effects.
 //!
 //! Only the login screen is built. The other screens show a placeholder
@@ -18,6 +18,7 @@ mod screen;
 mod second_factor;
 mod wipe;
 
+use chaveiro_core::core::{Config, Core, Input, LoginError, Screen, UserAction};
 use io::{Answer, Io, Settings, SettingsError, TaskId};
 use login::{LoginForm, LoginState, Submit};
 use rand_core::OsRng;
@@ -25,7 +26,6 @@ use route::Route;
 use screen::{form, title};
 use second_factor::{SecondFactorForm, SecondFactorState};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use vault_core::core::{Config, Core, Input, LoginError, Screen, UserAction};
 use windows_core::Result;
 use winui_immediate::{App, Handle, Orientation, Slide, Ui, run};
 
@@ -168,7 +168,9 @@ impl App for Chaveiro {
                 // The code screen goes back to the method list when there
                 // is one; otherwise back leaves the login.
                 let to_list = match self.core.as_ref().map(Core::screen) {
-                    Some(Screen::SecondFactor { challenge, .. }) => self.second_factor.back(challenge),
+                    Some(Screen::SecondFactor { challenge, .. }) => {
+                        self.second_factor.back(challenge)
+                    }
                     _ => false,
                 };
                 if !to_list {

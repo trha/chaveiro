@@ -14,14 +14,14 @@ mod settings;
 use crate::Message;
 use appkit_executor::{SpawnHandle, off_thread, spawn};
 use appkit_immediate::Handle;
+use chaveiro_core::{
+    core::{DeviceKeyError, Effect, Input},
+    crypto::derive_master_key,
+};
 use objc2::rc::Retained;
 use objc2_foundation::NSURLSession;
 pub use settings::{Settings, SettingsError};
 use std::path::PathBuf;
-use vault_core::{
-    core::{DeviceKeyError, Effect, Input},
-    crypto::derive_master_key,
-};
 
 /// Runs the effects of the core and answers each through the app's
 /// [`Handle`] with a [`Message::Io`]. Answers may come in any order.

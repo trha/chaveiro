@@ -6,7 +6,7 @@ use crate::bindings::{
     CryptographicBuffer, IKeyCredential2, KeyCredential, KeyCredentialCreationOption,
     KeyCredentialManager, KeyCredentialStatus, WindowId,
 };
-use vault_core::core::{DeviceKeyError, SecretBytes};
+use chaveiro_core::core::{DeviceKeyError, SecretBytes};
 use windows_core::{Array, Interface};
 use zeroize::{Zeroize, Zeroizing};
 

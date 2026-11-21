@@ -2,6 +2,20 @@
 //! and assert the effects. Plan tests 7-13, 15 and 18-20, and the WP-11 gaps.
 
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+use chaveiro_core::{
+    core::{
+        AgentRequestId, Body, CODE_PROVIDERS, Challenge, Config, Core, DeviceKeyError, Effect,
+        HttpRequest, HttpResponse, Input, LoginError, Method, PasskeyCatalogEntry, PasskeyError,
+        PasskeyReply, PasskeyRequest, RequestId, Screen, Settings, SshAsk, StoreSlot,
+        StoredAccount, UnlockError, UserAction, VaultScreen,
+        ssh_agent::{AgentRequest, parse_request},
+    },
+    crypto::{EncString, Kdf, MasterKey, SecretString, SymmetricKey, derive_master_key},
+    proto::{cache::CacheDocument, cipher::CipherResponse, sync::SyncResponse},
+    vault::{
+        CipherContent, CipherView, PasswordHistoryEntry, VaultIndex, VaultKeys, decrypt_user_key,
+    },
+};
 use expect_test::expect;
 use hkdf::Hkdf;
 use p256::{
@@ -16,20 +30,6 @@ use ssh_key::PublicKey;
 use std::{collections::HashMap, sync::LazyLock};
 use url::Url;
 use uuid::Uuid;
-use vault_core::{
-    core::{
-        AgentRequestId, Body, CODE_PROVIDERS, Challenge, Config, Core, DeviceKeyError, Effect,
-        HttpRequest, HttpResponse, Input, LoginError, Method, PasskeyCatalogEntry, PasskeyError,
-        PasskeyReply, PasskeyRequest, RequestId, Screen, Settings, SshAsk, StoreSlot,
-        StoredAccount, UnlockError, UserAction, VaultScreen,
-        ssh_agent::{AgentRequest, parse_request},
-    },
-    crypto::{EncString, Kdf, MasterKey, SecretString, SymmetricKey, derive_master_key},
-    proto::{cache::CacheDocument, cipher::CipherResponse, sync::SyncResponse},
-    vault::{
-        CipherContent, CipherView, PasswordHistoryEntry, VaultIndex, VaultKeys, decrypt_user_key,
-    },
-};
 use zeroize::Zeroizing;
 
 // Test 7: login paths.
@@ -791,9 +791,9 @@ fn enroll_seals_the_user_key() {
     let stored = harness.enroll(b"same secret", b"same secret");
     let wrap: Value = serde_json::from_slice(&stored).unwrap();
     let sealed: EncString = wrap["sealed_user_key"].as_str().unwrap().parse().unwrap();
-    // Spec: HKDF-SHA256, salt "vault-core device v1", 64 bytes.
+    // Spec: HKDF-SHA256, salt "chaveiro-core device v1", 64 bytes.
     let mut okm = [0u8; 64];
-    Hkdf::<Sha256>::new(Some(b"vault-core device v1"), b"same secret")
+    Hkdf::<Sha256>::new(Some(b"chaveiro-core device v1"), b"same secret")
         .expand(&[], &mut okm)
         .unwrap();
     let opened = sealed
@@ -1066,7 +1066,7 @@ fn offline_sync_keeps_cached_index() {
     let (refresh, _) = one_http(&effects);
     harness.send(Input::Http {
         id: refresh,
-        response: Err(vault_core::core::HttpError {
+        response: Err(chaveiro_core::core::HttpError {
             message: "offline".into(),
         }),
     });
@@ -1086,7 +1086,7 @@ fn wrong_unlock_password_stays_locked() {
     assert!(matches!(
         harness.core.screen(),
         Screen::Locked {
-            error: Some(vault_core::core::UnlockError::WrongPassword),
+            error: Some(chaveiro_core::core::UnlockError::WrongPassword),
             ..
         }
     ));
@@ -2652,8 +2652,8 @@ static KEYS: LazyLock<VaultKeys> = LazyLock::new(|| {
     VaultKeys::new(user_key, &SYNC.profile)
 });
 
-static TOKEN: LazyLock<vault_core::proto::identity::TokenResponse> =
-    LazyLock::new(|| vault_core::proto::from_value(fixture("token_success.json").1).unwrap());
+static TOKEN: LazyLock<chaveiro_core::proto::identity::TokenResponse> =
+    LazyLock::new(|| chaveiro_core::proto::from_value(fixture("token_success.json").1).unwrap());
 
 struct Harness {
     core: Core,

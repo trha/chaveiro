@@ -1,11 +1,11 @@
 ---
 name: expect-test
-description: expect_test pitfalls in vault-core tests: shared-helper snapshots and the empty literal
+description: expect_test pitfalls in chaveiro-core tests: shared-helper snapshots and the empty literal
 metadata:
   type: project
 ---
 
-`vault-core/tests/core.rs` renders requests with `render(request, keep)`,
+`chaveiro-core/tests/core.rs` renders requests with `render(request, keep)`,
 which redacts EncStrings, secrets, ids and dates. Snapshots live in
 `expect![[...]]`.
 

@@ -2,7 +2,7 @@
 
 Status: Done
 
-Parent plans: none. This plan changes `plans/sans-io-vault-core.md`; see
+Parent plans: none. This plan changes `plans/sans-io-chaveiro-core.md`; see
 "Changes to other plans". After approval, step 1 copies this file to
 `plans/winui-immediate.md`, which then becomes the plan of record.
 
@@ -32,7 +32,7 @@ The crate meets four requirements from the user:
 ## Out of scope
 
 The vault shell itself (screens, login, sync) stays in
-`plans/sans-io-vault-core.md` WP-05. An AppKit backend, a backend trait,
+`plans/sans-io-chaveiro-core.md` WP-05. An AppKit backend, a backend trait,
 variable-width text measurement, theming and animation are not part of this
 plan.
 
@@ -931,7 +931,7 @@ the `spikes/` probe path follow. The login password stays in the
 finds nothing. The memory note marks the spike as superseded and points to
 this plan.
 
-Scope: `plans/sans-io-vault-core.md`, `.claude/memory/immediate-mode-spike.md`.
+Scope: `plans/sans-io-chaveiro-core.md`, `.claude/memory/immediate-mode-spike.md`.
 
 Deliverable: the edits in "Changes to other plans"; the memory note points to
 the crate.
@@ -993,7 +993,7 @@ Waves: WP-00, then WP-01, then WP-02, then WP-03, then WP-04 and WP-05 in parall
 
 ## Changes to other plans
 
-- `plans/sans-io-vault-core.md` "Architecture": the diagram's "Reactor root
+- `plans/sans-io-chaveiro-core.md` "Architecture": the diagram's "Reactor root
   component" becomes the `winui-immediate` `App`; `spawn_background` becomes
   a thread-pool job that returns `Msg::Core(Input)` through `Handle::send`,
   and `A::update` calls `core.handle`.
@@ -1004,7 +1004,7 @@ Waves: WP-00, then WP-01, then WP-02, then WP-03, then WP-04 and WP-05 in parall
   instead of living in the core's `LoginForm` as a controlled value.
 - WP-05 "shell": the root is now a virtual workspace and the old
   `src/main.rs` lives in `spikes/`, so the shell goes in a new app crate that
-  depends on `winui-immediate` and `vault-core`; it names no Reactor API.
+  depends on `winui-immediate` and `chaveiro-core`; it names no Reactor API.
 
 ## Settled
 

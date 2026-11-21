@@ -48,11 +48,11 @@ impl SymmetricKey {
 }
 
 /// The key that seals the user key for device unlock: HKDF-SHA256 of
-/// `secret` with salt `vault-core device v1` and empty info, 64 bytes split
+/// `secret` with salt `chaveiro-core device v1` and empty info, 64 bytes split
 /// as in [`SymmetricKey::from_bytes`]. The same secret always gives the same
 /// key.
 pub fn device_key(secret: &[u8]) -> SymmetricKey {
-    let hkdf = Hkdf::<Sha256>::new(Some(b"vault-core device v1"), secret);
+    let hkdf = Hkdf::<Sha256>::new(Some(b"chaveiro-core device v1"), secret);
     let mut bytes = Zeroizing::new([0u8; 64]);
     hkdf.expand(&[], &mut *bytes)
         .expect("64 bytes is below the HKDF-SHA256 output limit");

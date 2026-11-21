@@ -3,7 +3,7 @@ resolver = "3"
 members = [
   "chaveiro-winui",
   "winui-spikes",
-  "vault-core",
+  "chaveiro-core",
   "winui-executor",
   "winui-immediate",
   "appkit-immediate",
@@ -11,7 +11,7 @@ members = [
   "appkit-executor"
 ]
 
-# PBKDF2 with 600,000 rounds takes seconds unoptimized; the vault-core tests
+# PBKDF2 with 600,000 rounds takes seconds unoptimized; the chaveiro-core tests
 # derive the fixture account's key many times.
 [profile.dev.package.pbkdf2]
 opt-level = 3
@@ -22,8 +22,8 @@ opt-level = 3
 [profile.dev.package.sha2]
 opt-level = 3
 
-# `pbkdf2_hmac::<Sha256>` is generic, so it compiles at vault-core's opt level,
+# `pbkdf2_hmac::<Sha256>` is generic, so it compiles at chaveiro-core's opt level,
 # and the three entries above do not reach it. Unoptimized, one derive takes
 # 3 s; at level 3 it takes 80 ms.
-[profile.dev.package.vault-core]
+[profile.dev.package.chaveiro-core]
 opt-level = 3

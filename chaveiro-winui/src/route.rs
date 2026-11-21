@@ -1,6 +1,6 @@
 //! Which screen the window shows, and how it moves from one to the next.
 
-use vault_core::core::{Challenge, Screen};
+use chaveiro_core::core::{Challenge, Screen};
 use winui_immediate::Slide;
 
 /// A screen of the window. Login, Methods and SecondFactor form the login
@@ -107,6 +107,9 @@ mod tests {
             sending: false,
         };
         assert_eq!(Route::of(Some(&screen(None)), |_| true), Route::Methods);
-        assert_eq!(Route::of(Some(&screen(None)), |_| false), Route::SecondFactor);
+        assert_eq!(
+            Route::of(Some(&screen(None)), |_| false),
+            Route::SecondFactor
+        );
     }
 }

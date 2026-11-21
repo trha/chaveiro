@@ -1,4 +1,4 @@
-//! Chaveiro for macOS: an appkit-immediate [`App`] over the vault-core
+//! Chaveiro for macOS: an appkit-immediate [`App`] over the chaveiro-core
 //! [`Core`], with [`Io`] running the core's effects.
 //!
 //! Only the login screen is built. The other screens show a placeholder
@@ -14,11 +14,11 @@ mod login;
 mod wipe;
 
 use appkit_immediate::{App, Handle, Orientation, Style, Ui, run};
+use chaveiro_core::core::{Config, Core, Input, LoginError, Screen, StoredAccount, UserAction};
 use io::{Io, Settings, TaskId};
 use login::{LoginAction, LoginForm, LoginState};
 use rand_core::OsRng;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use vault_core::core::{Config, Core, Input, LoginError, Screen, StoredAccount, UserAction};
 
 /// Logs go to stderr, filtered by `CHAVEIRO_LOG` (such as `debug`),
 /// warnings and up by default.

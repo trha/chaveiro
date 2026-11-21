@@ -2,16 +2,16 @@
 //! Plaintexts are the ones `tests/fixtures/record.py` encrypted.
 
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+use chaveiro_core::{
+    crypto::{DecryptError, EncString, Kdf, derive_master_key},
+    proto::{cipher::CipherResponse, sync::SyncResponse},
+    vault::{CipherContent, CipherView, VaultError, VaultIndex, VaultKeys, decrypt_user_key},
+};
 use expect_test::expect;
 use rand_chacha::{ChaCha20Rng, rand_core::SeedableRng};
 use serde_json::Value;
 use std::sync::LazyLock;
 use uuid::Uuid;
-use vault_core::{
-    crypto::{DecryptError, EncString, Kdf, derive_master_key},
-    proto::{cipher::CipherResponse, sync::SyncResponse},
-    vault::{CipherContent, CipherView, VaultError, VaultIndex, VaultKeys, decrypt_user_key},
-};
 
 #[test]
 fn index_lists_every_cipher_readable_and_sorted() {
@@ -297,8 +297,8 @@ fn fido2_credentials_round_trip() {
 #[test]
 fn token_key_matches_profile_key() {
     let (_, body) = fixture("token_success.json");
-    let token: vault_core::proto::identity::TokenResponse =
-        vault_core::proto::from_value(body).unwrap();
+    let token: chaveiro_core::proto::identity::TokenResponse =
+        chaveiro_core::proto::from_value(body).unwrap();
     let from_token = decrypt_user_key(token.key.as_ref().unwrap(), &MASTER).unwrap();
     // Both keys open the same folder name.
     let keys = VaultKeys::new(from_token, &SYNC.profile);
@@ -348,7 +348,7 @@ static SYNC: LazyLock<SyncResponse> = LazyLock::new(|| {
 });
 
 // 600,000 PBKDF2 rounds are slow in a debug build, so derive once.
-static MASTER: LazyLock<vault_core::crypto::MasterKey> =
+static MASTER: LazyLock<chaveiro_core::crypto::MasterKey> =
     LazyLock::new(|| derive_master_key(PASSWORD, EMAIL, KDF).unwrap());
 
 static KEYS: LazyLock<VaultKeys> = LazyLock::new(|| {
@@ -361,7 +361,7 @@ fn open(name: &str) -> CipherView {
     CipherView::decrypt(cipher_named(name), &KEYS).unwrap()
 }
 
-fn cipher_named(name: &str) -> &'static vault_core::proto::cipher::CipherResponse {
+fn cipher_named(name: &str) -> &'static chaveiro_core::proto::cipher::CipherResponse {
     SYNC.ciphers
         .iter()
         .find(|cipher| {
@@ -370,7 +370,7 @@ fn cipher_named(name: &str) -> &'static vault_core::proto::cipher::CipherRespons
         .unwrap_or_else(|| panic!("no cipher named {name}"))
 }
 
-fn text(value: &Option<vault_core::crypto::SecretString>) -> Option<&str> {
+fn text(value: &Option<chaveiro_core::crypto::SecretString>) -> Option<&str> {
     value.as_deref().map(String::as_str)
 }
 

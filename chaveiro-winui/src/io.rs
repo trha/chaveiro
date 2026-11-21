@@ -7,6 +7,10 @@ mod http;
 mod storage;
 
 use crate::{Message, bindings::HttpClient};
+use chaveiro_core::{
+    core::{Effect, Input, StorageError, StoredAccount},
+    crypto::derive_master_key,
+};
 use std::{
     cell::RefCell,
     collections::VecDeque,
@@ -21,10 +25,6 @@ use std::{
     task::{Poll, Waker},
 };
 pub use storage::{Settings, SettingsError};
-use vault_core::{
-    core::{Effect, Input, StorageError, StoredAccount},
-    crypto::derive_master_key,
-};
 use windows_future::IAsyncAction;
 use winui_executor::SpawnHandle;
 use winui_immediate::Handle;
@@ -123,16 +123,16 @@ impl Io {
         self.storage.push(move || {
             Answer::Core(Input::Started {
                 stored: StoredAccount {
-                    account: storage::load(&folder, vault_core::core::StoreSlot::Account),
+                    account: storage::load(&folder, chaveiro_core::core::StoreSlot::Account),
                     refresh_token: storage::load(
                         &folder,
-                        vault_core::core::StoreSlot::RefreshToken,
+                        chaveiro_core::core::StoreSlot::RefreshToken,
                     ),
-                    vault_cache: storage::load(&folder, vault_core::core::StoreSlot::VaultCache),
-                    device_wrap: storage::load(&folder, vault_core::core::StoreSlot::DeviceWrap),
+                    vault_cache: storage::load(&folder, chaveiro_core::core::StoreSlot::VaultCache),
+                    device_wrap: storage::load(&folder, chaveiro_core::core::StoreSlot::DeviceWrap),
                     two_factor_token: storage::load(
                         &folder,
-                        vault_core::core::StoreSlot::TwoFactorToken,
+                        chaveiro_core::core::StoreSlot::TwoFactorToken,
                     ),
                 },
             })

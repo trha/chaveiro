@@ -6,10 +6,10 @@
 //! the error clears as soon as the value is valid. Only errors that name no
 //! field, such as a refusal from the server, go in the InfoBar.
 
-use url::Url;
-use vault_core::login_form::{
+use chaveiro_core::login_form::{
     CLOUDS, EmailError, ServerError, email_error, server_text, server_url, with_scheme,
 };
+use url::Url;
 use windows_core::Result;
 use winui_immediate::{Align, Severity, Ui};
 use zeroize::Zeroizing;

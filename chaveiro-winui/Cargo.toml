@@ -3,7 +3,7 @@ name = "chaveiro-winui"
 version = "0.1.0"
 edition = "2024"
 publish = false
-description = "Chaveiro for Windows: winui-immediate over the vault-core state machine"
+description = "Chaveiro for Windows: winui-immediate over the chaveiro-core state machine"
 
 [[bin]]
 name = "chaveiro"
@@ -17,7 +17,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 url = { version = "2", features = ["serde"] }
 uuid = { version = "1", features = ["v4", "serde"] }
-vault-core = { path = "../vault-core" }
+chaveiro-core = { path = "../chaveiro-core" }
 windows-collections = { version = "0.100.0", features = ["std"] }
 windows-core = "0.100.0"
 windows-future = "0.100.0"

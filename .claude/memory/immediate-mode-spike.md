@@ -14,7 +14,7 @@ closure per control, `ItemsRepeater` only, explicit `cached`/`state`/
 `winui-immediate/examples/vault_list.rs` measures 0 UI-thread allocations
 per steady pass and realize p50 20 µs; `winui-immediate/tests/ui/*.ps1`
 replaces the spike's scripts. The vault app's shell builds on the crate
-(`plans/sans-io-vault-core.md`). Read this note for why the crate looks as
+(`plans/sans-io-chaveiro-core.md`). Read this note for why the crate looks as
 it does, and the crate's plan for how it works now.
 
 Spike in `winui-spikes/src/bin/immediate/` (`main.rs`, `ui.rs`, `winui.rs`,

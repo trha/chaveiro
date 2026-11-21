@@ -9,7 +9,6 @@
 // but does not link.
 #![cfg_attr(not(windows), no_main)]
 #![cfg(windows)]
-
 #![allow(dead_code, reason = "shares modules with the app")]
 
 #[path = "../src/screen.rs"]
@@ -17,9 +16,9 @@ mod screen;
 #[path = "../src/second_factor.rs"]
 mod second_factor;
 
+use chaveiro_core::core::{Challenge, LoginError, UserAction};
 use second_factor::{SecondFactorForm, SecondFactorState};
 use std::time::Duration;
-use vault_core::core::{Challenge, LoginError, UserAction};
 use windows_core::Result;
 use winui_immediate::{App, Handle, Orientation, Ui, run};
 

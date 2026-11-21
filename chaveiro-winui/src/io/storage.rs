@@ -2,6 +2,7 @@
 //! when the slot is protected. Every function here blocks, so the queue in
 //! [`Storage`](super::Storage) runs them on the thread pool.
 
+use chaveiro_core::core::StoreSlot;
 use serde::{Deserialize, Serialize};
 use std::{
     fs,
@@ -9,7 +10,6 @@ use std::{
     path::Path,
 };
 use uuid::Uuid;
-use vault_core::core::StoreSlot;
 
 /// The plain settings file, outside the account. The server is not here,
 /// because the core keeps it with the account.

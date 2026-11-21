@@ -5,7 +5,7 @@ use crate::bindings::{
     HttpCacheWriteBehavior, HttpClient, HttpCookieUsageBehavior, HttpMethod, HttpRequestMessage,
     IHttpBaseProtocolFilter3, IHttpContent, IHttpFilter, Uri,
 };
-use vault_core::core::{Body, HttpError, HttpRequest, HttpResponse, Method};
+use chaveiro_core::core::{Body, HttpError, HttpRequest, HttpResponse, Method};
 use windows_core::{Array, Interface};
 use zeroize::{Zeroize, Zeroizing};
 

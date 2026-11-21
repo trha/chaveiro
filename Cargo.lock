@@ -229,6 +229,7 @@ dependencies = [
  "appkit-executor",
  "appkit-immediate",
  "block2",
+ "chaveiro-core",
  "objc2",
  "objc2-foundation",
  "rand_core 0.6.4",
@@ -238,15 +239,43 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "uuid",
- "vault-core",
  "zeroize",
  "zeroizing-alloc",
+]
+
+[[package]]
+name = "chaveiro-core"
+version = "0.1.0"
+dependencies = [
+ "aes",
+ "argon2",
+ "base64",
+ "cbc",
+ "expect-test",
+ "hkdf",
+ "hmac",
+ "p256",
+ "pbkdf2",
+ "proptest",
+ "rand_chacha",
+ "rand_core 0.6.4",
+ "rsa",
+ "serde",
+ "serde_json",
+ "sha1",
+ "sha2",
+ "ssh-encoding",
+ "ssh-key",
+ "url",
+ "uuid",
+ "zeroize",
 ]
 
 [[package]]
 name = "chaveiro-winui"
 version = "0.1.0"
 dependencies = [
+ "chaveiro-core",
  "proptest",
  "rand_core 0.6.4",
  "serde",
@@ -255,7 +284,6 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "uuid",
- "vault-core",
  "windows-bindgen",
  "windows-collections",
  "windows-core",
@@ -1769,34 +1797,6 @@ name = "valuable"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ba73ea9cf16a25df0c8caa16c51acb937d5712a8429db78a3ee29d5dcacd3a65"
-
-[[package]]
-name = "vault-core"
-version = "0.1.0"
-dependencies = [
- "aes",
- "argon2",
- "base64",
- "cbc",
- "expect-test",
- "hkdf",
- "hmac",
- "p256",
- "pbkdf2",
- "proptest",
- "rand_chacha",
- "rand_core 0.6.4",
- "rsa",
- "serde",
- "serde_json",
- "sha1",
- "sha2",
- "ssh-encoding",
- "ssh-key",
- "url",
- "uuid",
- "zeroize",
-]
 
 [[package]]
 name = "version_check"

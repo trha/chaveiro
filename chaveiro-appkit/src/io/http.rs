@@ -2,12 +2,12 @@
 
 use appkit_executor::completion;
 use block2::RcBlock;
+use chaveiro_core::core::{Body, HttpError, HttpRequest, HttpResponse, Method};
 use objc2::rc::Retained;
 use objc2_foundation::{
     NSData, NSError, NSHTTPURLResponse, NSMutableURLRequest, NSString, NSURL,
     NSURLRequestCachePolicy, NSURLResponse, NSURLSession, NSURLSessionConfiguration,
 };
-use vault_core::core::{Body, HttpError, HttpRequest, HttpResponse, Method};
 use zeroize::Zeroizing;
 
 /// A session that keeps no state between requests: no cache, no cookies

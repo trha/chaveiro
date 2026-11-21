@@ -4,7 +4,7 @@ Status: Plan
 
 ## Goal
 
-A Rust library crate, `vault-core`, that holds the whole Bitwarden client
+A Rust library crate, `chaveiro-core`, that holds the whole Bitwarden client
 logic as a pure state machine. It takes inputs (user actions, HTTP responses,
 storage reads, finished key derivations, the time) and returns effects
 (HTTP requests, storage writes and reads, key derivation jobs). It does no
@@ -58,7 +58,7 @@ pre-release crypto crates. Source: research agent report of 2026-11-20.
 type 0 `0.iv|data` (no MAC, decrypt only), type 2 `2.iv|data|mac` (current),
 type 7 `7.<COSE Encrypt0>`, and type 1 is removed. Step 1 (WP-01) checked the
 list below. "VW" means a response recorded from Vaultwarden 1.37.4 in
-`vault-core/tests/fixtures/` (see its `SOURCES.md`). Line refs are to
+`chaveiro-core/tests/fixtures/` (see its `SOURCES.md`). Line refs are to
 dani-garcia/vaultwarden tag 1.37.4 and bitwarden/server@8c88e007.
 
 - Prelogin `POST {identity}/accounts/prelogin {email}` returns `kdf`
@@ -232,7 +232,7 @@ noise). Secrets travel in zeroizing types.
  └──────────────────────────────────┘     Msg::Core(Input))
 ```
 
-`vault-core` has three layers. `crypto` holds pure functions and secret key
+`chaveiro-core` has three layers. `crypto` holds pure functions and secret key
 types. `proto` holds the serde types for the JSON the server sends and
 accepts. `core` holds the state machine. The crate depends on no HTTP, file,
 thread, async or platform crate. Randomness and the clock come in as
@@ -269,7 +269,7 @@ handed to AppKit (`NSString`) is outside our reach, as WinUI's HSTRINGs are.
 
 Key derivation is CPU-heavy: about 0.3 s for PBKDF2 at 600,000 rounds, and
 64 MiB for Argon2id. The core emits it as an effect (`Effect::Derive`), and
-the shell runs `vault_core::crypto::derive_master_key` on the thread pool.
+the shell runs `chaveiro_core::crypto::derive_master_key` on the thread pool.
 The work stays pure. Only where it runs moves. Everything else, including
 decrypting a few thousand ciphers with AES-CBC-HMAC, runs inside
 `handle`.
@@ -280,27 +280,27 @@ The repo is already a virtual workspace (`spikes`, `winui-immediate`). This
 plan adds two members:
 
 ```text
-Cargo.toml                    [workspace] members += ["app", "vault-core"]
-vault-core/src/lib.rs
-vault-core/src/crypto.rs        pub use of the children
-vault-core/src/crypto/kdf.rs
-vault-core/src/crypto/key.rs
-vault-core/src/crypto/enc_string.rs
-vault-core/src/proto.rs          case-insensitive JSON entry points
-vault-core/src/proto/identity.rs prelogin, token, errors
-vault-core/src/proto/sync.rs     sync response
-vault-core/src/proto/cipher.rs   cipher and folder request/response
-vault-core/src/vault.rs         decrypted domain types
-vault-core/src/core.rs          Core, Input, Effect, State
-vault-core/src/core/request.rs  RequestId, pending-request table
+Cargo.toml                    [workspace] members += ["app", "chaveiro-core"]
+chaveiro-core/src/lib.rs
+chaveiro-core/src/crypto.rs        pub use of the children
+chaveiro-core/src/crypto/kdf.rs
+chaveiro-core/src/crypto/key.rs
+chaveiro-core/src/crypto/enc_string.rs
+chaveiro-core/src/proto.rs          case-insensitive JSON entry points
+chaveiro-core/src/proto/identity.rs prelogin, token, errors
+chaveiro-core/src/proto/sync.rs     sync response
+chaveiro-core/src/proto/cipher.rs   cipher and folder request/response
+chaveiro-core/src/vault.rs         decrypted domain types
+chaveiro-core/src/core.rs          Core, Input, Effect, State
+chaveiro-core/src/core/request.rs  RequestId, pending-request table
 app/src/main.rs                        the App: owns Core, view, update
 app/src/shell.rs                       effect runner
 ```
 
-Dependencies of `vault-core`: `zeroize`, `aes`, `cbc`, `hmac`, `sha2`,
+Dependencies of `chaveiro-core`: `zeroize`, `aes`, `cbc`, `hmac`, `sha2`,
 `sha1`, `hkdf`, `pbkdf2`, `argon2`, `rsa`, `base64`, `serde`, `serde_json`,
 `uuid`, `rand_core`, `p256` (ECDSA for passkeys). Dev: `proptest`. The app
-crate adds `winui-immediate`, `vault-core`, `ureq`, `getrandom`,
+crate adds `winui-immediate`, `chaveiro-core`, `ureq`, `getrandom`,
 `windows-sys` (DPAPI, `webauthn.dll`) and `windows` (KeyCredentialManager,
 COM).
 
@@ -676,7 +676,7 @@ Secure Enclave signatures are randomized.
 
 ```rust
 // crypto/key.rs
-/// HKDF-SHA256(salt = "vault-core device v1", ikm = secret) -> 64 bytes.
+/// HKDF-SHA256(salt = "chaveiro-core device v1", ikm = secret) -> 64 bytes.
 pub fn device_key(secret: &[u8]) -> SymmetricKey;
 
 // core.rs, stored as JSON in StoreSlot::DeviceWrap (protected storage)
@@ -912,7 +912,7 @@ request with failure.
 
 "Approve for this session" is left out of this plan: each sign asks.
 
-New dependencies of `vault-core`: `ssh-key` (features `ed25519`, `rsa`,
+New dependencies of `chaveiro-core`: `ssh-key` (features `ed25519`, `rsa`,
 `p256`, `p384`, `alloc`; no `std` RNG).
 
 ## Fit with winui-immediate and the threat model
@@ -1003,8 +1003,8 @@ SecretString }` into `State::Prelogin`. `LoginForm` holds only the email.
     `-512`, and with neither it fails. Deny, a 60 s timeout, an unknown key
     and lock each give `SSH_AGENT_FAILURE`. After the reply, the state holds
     no private key.
-16. Platform-neutral API: a compile check (`cargo check -p vault-core`)
-    plus `cargo tree -p vault-core` showing no `windows*`, `objc2*` or HTTP
+16. Platform-neutral API: a compile check (`cargo check -p chaveiro-core`)
+    plus `cargo tree -p chaveiro-core` showing no `windows*`, `objc2*` or HTTP
     crate.
 17. Integration (`#[ignore]`, run by hand): a recorded session against a
     Vaultwarden test server, replayed through `handle` from fixtures.
@@ -1013,7 +1013,7 @@ SecretString }` into `State::Prelogin`. `LoginForm` holds only the email.
 
 1. Check the protocol facts against `bitwarden/clients` and
    `vaultwarden` source, and save the sample JSON for sync, token and errors
-   as fixtures in `vault-core/tests/fixtures/`. Record the source
+   as fixtures in `chaveiro-core/tests/fixtures/`. Record the source
    commit of each fixture. Fix "Facts" where they differ.
 2. Workspace and `crypto`: tests 1–4 and 16. Test 16 then runs in every
    later step. Done (2026-11-20): 18 tests pass (KDF and type 0, 2, 3, 4
@@ -1056,7 +1056,7 @@ SecretString }` into `State::Prelogin`. `LoginForm` holds only the email.
    prompt opens in front with focus, and the derived secret is the same
    across two unlocks and an app restart on this machine.
    Partial (2026-11-20): test 11 passes (9 named checks in `tests/core.rs`),
-   and `cargo test -p vault-core` is green (94 tests). The shell calls
+   and `cargo test -p chaveiro-core` is green (94 tests). The shell calls
    `RequestCreateForWindowAsync` (ReplaceExisting) or `OpenAsync`, then
    `RequestDeriveSharedSecretAsync`, through windows-bindgen 0.100 bindings
    (`app/bindings.txt`), because the `windows` crate 0.62 lacks these
@@ -1070,7 +1070,7 @@ SecretString }` into `State::Prelogin`. `LoginForm` holds only the email.
    found 0 copies (7 while unlocked).
 9. `core` passkeys: tests 12–14.
    Done (2026-11-20): tests 12–14 and the passkey counter part of test 15
-   pass, and `cargo test -p vault-core` is green (77 tests). MakeCredential
+   pass, and `cargo test -p chaveiro-core` is green (77 tests). MakeCredential
    always asks the user to pick a login whose URI host matches `rp_id`, or
    "new login", and replies only after the cipher write returns 200.
    GetAssertion answers at once when one passkey fits, or else asks. A
@@ -1085,7 +1085,7 @@ SecretString }` into `State::Prelogin`. `LoginForm` holds only the email.
     SshKey ciphers using `record.py`. `core` SSH agent: tests 21–22.
     Done (2026-11-21): the keys were encrypted under the fixture user key
     instead of re-recorded (see `SOURCES.md`). Tests 21–22 pass in
-    `tests/core.rs` with 5 named tests; 100 vault-core tests pass. The RSA
+    `tests/core.rs` with 5 named tests; 100 chaveiro-core tests pass. The RSA
     path builds its `rsa` key by hand, because ssh-key 0.6.7's conversion
     passes `p` twice and always fails. The approval shows on
     `VaultScreen::ssh_approval`.
@@ -1100,13 +1100,13 @@ SecretString }` into `State::Prelogin`. `LoginForm` holds only the email.
 
 Status: done (2026-11-20). 11 fixtures, 9 recorded from Vaultwarden 1.37.4
 in WSL NixOS, 2 hand-written from bitwarden/server@8c88e007. See
-`vault-core/tests/fixtures/SOURCES.md`. Follow-up for WP-04: Vaultwarden
+`chaveiro-core/tests/fixtures/SOURCES.md`. Follow-up for WP-04: Vaultwarden
 needs `encryptedFor` on cipher bodies, and wrong-password errors differ by
 server.  
 Owner: subagent  
 Depends on: none
 
-Scope: `vault-core/tests/fixtures/*.json`, "Facts" in this plan.
+Scope: `chaveiro-core/tests/fixtures/*.json`, "Facts" in this plan.
 
 Deliverable: fixtures for prelogin, token (success, 2FA, new device, wrong
 password), sync (every cipher type, an org cipher, a cipher with `key`),
@@ -1123,12 +1123,12 @@ Status: done
 Owner: subagent  
 Depends on: none
 
-Scope: workspace `Cargo.toml`, `vault-core/src/crypto*`.
+Scope: workspace `Cargo.toml`, `chaveiro-core/src/crypto*`.
 
 Deliverable: the crypto module of this plan.
 
-Acceptance: `cargo test -p vault-core crypto` passes tests 1–4, and
-`cargo tree -p vault-core` lists no HTTP, async or file crate.
+Acceptance: `cargo test -p chaveiro-core crypto` passes tests 1–4, and
+`cargo tree -p chaveiro-core` lists no HTTP, async or file crate.
 
 Handoff: changed paths, test output.
 
@@ -1138,7 +1138,7 @@ Status: done
 Owner: subagent  
 Depends on: WP-01, WP-02
 
-Scope: `vault-core/src/proto*`, `vault.rs`.
+Scope: `chaveiro-core/src/proto*`, `vault.rs`.
 
 Deliverable: proto types and decrypt to `VaultIndex` and `CipherView`.
 
@@ -1152,7 +1152,7 @@ Status: done
 Owner: main agent  
 Depends on: WP-03
 
-Scope: `vault-core/src/core*`.
+Scope: `chaveiro-core/src/core*`.
 
 Deliverable: `Core`, `Input`, `Effect`, `State` and `handle`.
 
@@ -1168,7 +1168,7 @@ Depends on: WP-04
 
 Scope: the new `app` crate (`app/Cargo.toml`, `app/src/main.rs`,
 `app/src/shell.rs`), a workspace member that depends on `winui-immediate`
-and `vault-core`.
+and `chaveiro-core`.
 
 Deliverable: the app logs in, syncs, lists and edits against a test server.
 
@@ -1183,7 +1183,7 @@ Status: code done, test 11 and the memory scan pass; the manual Hello run
 Owner: main agent  
 Depends on: WP-05
 
-Scope: device-key arms in `vault-core/src/core.rs`, `device_key` in
+Scope: device-key arms in `chaveiro-core/src/core.rs`, `device_key` in
 `crypto/key.rs`, `app/src/shell/device_key.rs`.
 
 Deliverable: enroll and unlock with Hello, with nothing kept while locked.
@@ -1200,7 +1200,7 @@ Status: done
 Owner: subagent  
 Depends on: WP-04
 
-Scope: `vault-core/src/core/passkey.rs`, `Fido2CredentialView` in
+Scope: `chaveiro-core/src/core/passkey.rs`, `Fido2CredentialView` in
 `vault.rs`, P-256 helpers in `crypto`.
 
 Deliverable: MakeCredential, GetAssertion, the catalog and the locked wait.
@@ -1231,8 +1231,8 @@ Status: done (2026-11-21)
 Owner: subagent  
 Depends on: WP-04
 
-Scope: `vault-core/src/core/ssh_agent.rs`, the SSH arms in `core.rs`,
-`SshKeySummary` in `vault.rs`, `vault-core/tests/fixtures/sync.json` and
+Scope: `chaveiro-core/src/core/ssh_agent.rs`, the SSH arms in `core.rs`,
+`SshKeySummary` in `vault.rs`, `chaveiro-core/tests/fixtures/sync.json` and
 `record.py`.
 
 Deliverable: listing, approval, signing and the locked wait.
@@ -1259,12 +1259,12 @@ Handoff: the run log and screenshots.
 
 Status: done (2026-11-20). Org create, folder writes, `CipherView: Clone`,
 password history, `Config::server_urls` and `VaultScreen::index_revision`
-landed with 8 named tests in `tests/core.rs`; 85 vault-core tests pass. The
+landed with 8 named tests in `tests/core.rs`; 85 chaveiro-core tests pass. The
 live save-and-sync check of a passkey login is still by hand.  
 Owner: subagent  
 Depends on: WP-07
 
-Scope: `vault-core/src/core.rs`, `vault.rs`, `proto/cipher.rs`, and the
+Scope: `chaveiro-core/src/core.rs`, `vault.rs`, `proto/cipher.rs`, and the
 matching changes in `app/src/main.rs`.
 
 Deliverable: create org ciphers (`{cipher, collectionIds}`) and folder

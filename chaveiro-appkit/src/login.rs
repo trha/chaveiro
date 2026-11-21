@@ -7,10 +7,10 @@
 //! the error clears as soon as the value is valid.
 
 use appkit_immediate::{Align, Orientation, Style, TextColor, Ui};
-use url::Url;
-use vault_core::login_form::{
+use chaveiro_core::login_form::{
     CLOUDS, EmailError, ServerError, email_error, server_text, server_url, with_scheme,
 };
+use url::Url;
 use zeroize::Zeroizing;
 
 pub struct LoginForm {

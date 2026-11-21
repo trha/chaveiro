@@ -1,15 +1,15 @@
 //! Tests 5 and 6, plus the identity and write fixtures, for `proto`.
 
-use expect_test::expect;
-use proptest::prelude::*;
-use serde_json::{Map, Value};
-use uuid::Uuid;
-use vault_core::proto::{
+use chaveiro_core::proto::{
     self,
     cipher::{CipherResponse, is_out_of_date},
     identity::{ErrorResponse, PreloginResponse, TokenResponse},
     sync::SyncResponse,
 };
+use expect_test::expect;
+use proptest::prelude::*;
+use serde_json::{Map, Value};
+use uuid::Uuid;
 
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(64))]

@@ -1,4 +1,4 @@
-//! Test 16: `vault-core` stays platform-neutral and free of I/O crates.
+//! Test 16: `chaveiro-core` stays platform-neutral and free of I/O crates.
 
 use std::process::Command;
 
@@ -8,7 +8,7 @@ fn no_platform_http_async_or_file_crates() {
         .args([
             "tree",
             "-p",
-            "vault-core",
+            "chaveiro-core",
             "-e",
             "normal",
             "--prefix",

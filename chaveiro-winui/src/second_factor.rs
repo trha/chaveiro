@@ -10,7 +10,7 @@
 //! server refuses shows there too, and empties the entry. Other errors go
 //! in the InfoBar.
 
-use vault_core::core::{CODE_PROVIDERS, Challenge, LoginError, UserAction};
+use chaveiro_core::core::{CODE_PROVIDERS, Challenge, LoginError, UserAction};
 use windows_core::Result;
 use winui_immediate::{Align, CodeDigits, Orientation, SettingsCard, Severity, Ui};
 use zeroize::Zeroizing;
@@ -143,7 +143,8 @@ pub fn view(
         if card.clicked() && enabled {
             form.provider = None;
         }
-        card.enabled(enabled)?.margin(crate::screen::GROUP_GAP_BELOW)?;
+        card.enabled(enabled)?
+            .margin(crate::screen::GROUP_GAP_BELOW)?;
 
         // The code.
         let mut first_empty = None;
@@ -286,7 +287,10 @@ fn methods(
             )?;
         }
         ui.stack("list", Orientation::Vertical, 4.0, |ui| {
-            for provider in LISTED.into_iter().filter(|provider| providers.contains(provider)) {
+            for provider in LISTED
+                .into_iter()
+                .filter(|provider| providers.contains(provider))
+            {
                 let row = row(provider, masked_email.as_deref());
                 let supported = CODE_PROVIDERS.contains(&provider);
                 let card = SettingsCard {
@@ -355,7 +359,11 @@ fn row(provider: u8, masked_email: Option<&str>) -> Row {
         2 => ("Duo", String::new(), SHIELD),
         _ => ("Duo (organization)", String::new(), SHIELD),
     };
-    Row { name, caption, icon }
+    Row {
+        name,
+        caption,
+        icon,
+    }
 }
 
 /// One way to answer the challenge, as the code screen names it.
@@ -406,7 +414,9 @@ fn method(state: &SecondFactorState<'_>, chosen: Option<u8>) -> Option<Method> {
         _ => "Insert your key, then touch it".to_owned(),
     };
     let row = row(provider, masked_email.as_deref());
-    let listed = LISTED.into_iter().filter(|provider| providers.contains(provider));
+    let listed = LISTED
+        .into_iter()
+        .filter(|provider| providers.contains(provider));
     Some(Method {
         provider: Some(provider),
         title: "Two-step login",
