@@ -3,5 +3,6 @@
 
 pub mod core;
 pub mod crypto;
+pub mod login_form;
 pub mod proto;
 pub mod vault;

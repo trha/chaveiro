@@ -1,12 +1,13 @@
-use super::{email_error, server_url, with_scheme};
+use super::{CLOUDS, EmailError, ServerError, email_error, server_text, server_url, with_scheme};
 use proptest::prelude::*;
+use url::Url;
 
-const ENTER_EMAIL: Option<&str> = Some("Enter your email");
-const LIKE_EXAMPLE: Option<&str> = Some("Enter an email address like name@example.com");
+const ENTER_EMAIL: Option<EmailError> = Some(EmailError::Empty);
+const LIKE_EXAMPLE: Option<EmailError> = Some(EmailError::Malformed);
 
 #[test]
-fn server_url_errors_name_the_fix() {
-    assert_eq!(server_url("  ").err(), Some("Enter your server’s address"));
+fn server_url_errors_say_what_is_wrong() {
+    assert_eq!(server_url("  ").err(), Some(ServerError::Empty));
     for wrong in [
         "http://vault.example.com",
         "http://localhost.example.com",
@@ -17,14 +18,14 @@ fn server_url_errors_name_the_fix() {
     ] {
         assert_eq!(
             server_url(wrong).err(),
-            Some("Use an address that starts with https://"),
+            Some(ServerError::NotHttps),
             "{wrong}"
         );
     }
     for hostless in ["https://", "https://vault"] {
         assert_eq!(
             server_url(hostless).err(),
-            Some("Enter an address like https://vault.example.com"),
+            Some(ServerError::NoHost),
             "{hostless}"
         );
     }
@@ -102,4 +103,13 @@ proptest! {
         let address = format!("{name} x@{domain}.{tld}");
         prop_assert_eq!(email_error(&address), LIKE_EXAMPLE);
     }
+}
+
+#[test]
+fn server_text_names_clouds_and_keeps_addresses() {
+    for (name, url) in CLOUDS {
+        assert_eq!(server_text(&Url::parse(url).unwrap()), name);
+    }
+    let own = Url::parse("https://vault.example.com/").unwrap();
+    assert_eq!(server_text(&own), "https://vault.example.com/");
 }

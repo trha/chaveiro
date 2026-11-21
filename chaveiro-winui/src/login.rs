@@ -7,6 +7,9 @@
 //! field, such as a refusal from the server, go in the InfoBar.
 
 use url::Url;
+use vault_core::login_form::{
+    CLOUDS, EmailError, ServerError, email_error, server_text, server_url, with_scheme,
+};
 use windows_core::Result;
 use winui_immediate::{Align, Severity, Ui};
 use zeroize::Zeroizing;
@@ -50,18 +53,31 @@ pub struct Submit {
     pub password: Zeroizing<String>,
 }
 
-/// The cloud servers, as the Server box names them and the URL each means.
-const CLOUDS: [(&str, &str); 2] = [
-    ("bitwarden.com", "https://vault.bitwarden.com"),
-    ("bitwarden.eu", "https://vault.bitwarden.eu"),
-];
-
 /// The last item of the Server box, which clears it for a typed address.
 const OTHER: &str = "Other server…";
 
 /// The caption under the Server box while it has no error, because an
 /// editable combo box looks like a plain drop-down.
 const SERVER_HINT: &str = "Pick one, or type your server’s address";
+
+const PASSWORD_ERROR: &str = "Enter your master password";
+
+/// The line under the Server box for `error`.
+fn server_message(error: ServerError) -> &'static str {
+    match error {
+        ServerError::Empty => "Enter your server’s address",
+        ServerError::NotHttps => "Use an address that starts with https://",
+        ServerError::NoHost => "Enter an address like https://vault.example.com",
+    }
+}
+
+/// The line under the Email box for `error`.
+fn email_message(error: EmailError) -> &'static str {
+    match error {
+        EmailError::Empty => "Enter your email",
+        EmailError::Malformed => "Enter an email address like name@example.com",
+    }
+}
 
 impl LoginForm {
     pub fn new() -> Self {
@@ -75,82 +91,9 @@ impl LoginForm {
 
     /// Shows `server` in the form: a cloud by its name, or else the address.
     pub fn set_server(&mut self, server: &Url) {
-        let host = server
-            .host_str()
-            .map(|host| host.strip_prefix("vault.").unwrap_or(host));
-        self.server = match CLOUDS.iter().find(|(name, _)| Some(*name) == host) {
-            Some((name, _)) => (*name).to_owned(),
-            None => server.to_string(),
-        };
+        self.server = server_text(server);
     }
 }
-
-/// The Server box's text as a server URL, or the error to show under it. A
-/// cloud name means that cloud. Only a loopback host may use `http://`,
-/// because its traffic stays on this machine.
-fn server_url(text: &str) -> std::result::Result<Url, &'static str> {
-    let text = text.trim();
-    if text.is_empty() {
-        return Err("Enter your server’s address");
-    }
-    if let Some((_, url)) = CLOUDS.iter().find(|(name, _)| *name == text) {
-        return Ok(Url::parse(url).expect("a fixed, valid URL"));
-    }
-    match Url::parse(text) {
-        Ok(url) if url.scheme() == "http" && is_loopback(&url) => Ok(url),
-        Ok(url) if url.scheme() != "https" => Err("Use an address that starts with https://"),
-        // A dot in the host catches a half-typed name such as `https://vault`.
-        Ok(url) if url.host_str().is_some_and(|host| host.contains('.')) => Ok(url),
-        _ if !text.to_ascii_lowercase().starts_with("https://") => {
-            Err("Use an address that starts with https://")
-        }
-        _ => Err("Enter an address like https://vault.example.com"),
-    }
-}
-
-/// `localhost`, or an address in 127.0.0.0/8 or `::1`.
-fn is_loopback(url: &Url) -> bool {
-    match url.host() {
-        Some(url::Host::Domain(name)) => name.eq_ignore_ascii_case("localhost"),
-        Some(url::Host::Ipv4(address)) => address.is_loopback(),
-        Some(url::Host::Ipv6(address)) => address.is_loopback(),
-        None => false,
-    }
-}
-
-/// `text` with `https://` in front when it names no scheme, as the box does
-/// when the user leaves it: `vault.example.com` becomes
-/// `https://vault.example.com`. Cloud names and empty text stay.
-fn with_scheme(text: &str) -> Option<String> {
-    let text = text.trim();
-    let bare =
-        !text.is_empty() && !text.contains("://") && CLOUDS.iter().all(|(name, _)| *name != text);
-    bare.then(|| format!("https://{text}"))
-}
-
-/// The error to show under the Email box, if any.
-fn email_error(text: &str) -> Option<&'static str> {
-    let text = text.trim();
-    if text.is_empty() {
-        return Some("Enter your email");
-    }
-    // One `@` with text on both sides and a dot inside the domain, and no
-    // spaces: the check only catches typos, the server decides the rest.
-    let valid = !text.contains(char::is_whitespace)
-        && text.split_once('@').is_some_and(|(name, domain)| {
-            !name.is_empty()
-                && !domain.contains('@')
-                && domain
-                    .split_once('.')
-                    .is_some_and(|(left, right)| !left.is_empty() && !right.is_empty())
-        });
-    match valid {
-        true => None,
-        false => Some("Enter an email address like name@example.com"),
-    }
-}
-
-const PASSWORD_ERROR: &str = "Enter your master password";
 
 /// Draws the screen and returns the login the user asked for with Log in
 /// or Enter. While a field is wrong, Log in sends nothing: every wrong field
@@ -191,7 +134,7 @@ pub fn view(ui: &mut Ui, form: &mut LoginForm, state: LoginState<'_>) -> Result<
             }
             form.shown.server |= !form.server.trim().is_empty();
         }
-        let mut server_error = server_url(&form.server).err();
+        let mut server_error = server_url(&form.server).err().map(server_message);
 
         server
             .header("Server")?
@@ -210,7 +153,7 @@ pub fn view(ui: &mut Ui, form: &mut LoginForm, state: LoginState<'_>) -> Result<
         let mut email = ui.text_box("email", "name@example.com", &mut form.email)?;
         enter |= email.enter_pressed()?;
         form.shown.email |= email.left()? && !form.email.trim().is_empty();
-        let email_error = email_error(&form.email);
+        let email_error = email_error(&form.email).map(email_message);
 
         email
             .header("Email")?
@@ -279,7 +222,7 @@ pub fn view(ui: &mut Ui, form: &mut LoginForm, state: LoginState<'_>) -> Result<
                     });
                 }
                 server => {
-                    server_error = server.err();
+                    server_error = server.err().map(server_message);
                     // Focus goes to the first wrong field, top to bottom.
                     let first = [
                         server_error.map(|_| server_field),
@@ -308,6 +251,3 @@ pub fn view(ui: &mut Ui, form: &mut LoginForm, state: LoginState<'_>) -> Result<
     })?;
     Ok(submitted)
 }
-
-#[cfg(test)]
-mod tests;
