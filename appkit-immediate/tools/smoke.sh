@@ -3,7 +3,7 @@
 # Accessibility access for the terminal that runs it.
 set -euo pipefail
 root=$(cd "$(dirname "$0")/../.." && pwd)
-cargo build -q -p appkit-immediate --example smoke --example grid --example form --example login --manifest-path "$root/Cargo.toml"
+cargo build -q -p appkit-immediate --example smoke --example grid --example form --example login --example vault_table --manifest-path "$root/Cargo.toml"
 binary="$root/target/debug/examples/smoke"
 log=$(mktemp -t smoke.XXXXXX)
 failures=0
@@ -147,6 +147,45 @@ check "a busy form disables its pop-up button" '[ "$(server_enabled)" = false ]'
 check "the error clears on a good submit" "! status | grep -q 'Enter your master password'"
 sleep 2
 check "the result arrives and enables the form again" 'status | grep -q "signed in with 2 characters" && [ "$(server_enabled)" = true ]'
+kill "$pid"
+
+# Run 6: a 10,000-row table view. Scrolls through it, then picks a row.
+"$root/target/debug/examples/vault_table" >"$log" 2>&1 &
+pid=$!
+sleep 2
+vault='tell application "System Events" to tell (first process whose name is "vault_table")'
+table='table 1 of scroll area 1 of window "vault"'
+vault_status() { osascript -e "$vault to get value of static text 1 of window \"vault\""; }
+row_count() { osascript -e "$vault to get count of rows of $table"; }
+check "the table view reports every row" '[ "$(row_count)" = 10000 ]'
+for position in 0.1 0.3 0.5 0.7 0.9 0.6 0.2 0.45; do
+    osascript -e "$vault to set value of scroll bar 1 of scroll area 1 of window \"vault\" to $position" >/dev/null
+    sleep 0.2
+done
+# The first fully shown row near where the last scroll (0.45) put the
+# table: AX row n shows item n - 1.
+first_visible() { # AX row positions are only right for rows on screen, so
+    # start from the scroll value's estimate and check a few rows near it.
+    osascript -e 'tell application "System Events" to tell (first process whose name is "vault_table")
+        set area to scroll area 1 of window "vault"
+        set rows_table to table 1 of area
+        set top to item 2 of (get position of area)
+        set shown to (item 2 of (get size of area)) div 40
+        set guess to round ((value of scroll bar 1 of area) * (10000 - shown)) rounding down
+        repeat with index from guess - 3 to guess + 10
+            if item 2 of (get position of row index of rows_table) >= top then return index
+        end repeat
+        return 0
+    end tell'
+}
+index=$(first_visible)
+picked=$((index - 1))
+check "the row AppKit shows is built for its item" '[ "$(osascript -e "$vault to get value of static text 1 of UI element 1 of row $index of $table")" = "Entry $picked" ]'
+osascript -e "$vault to click button \"Pick\" of UI element 1 of row $index of $table" >/dev/null
+sleep 0.4
+check "a click in a scrolled row picks that row's item" 'vault_status | grep -q "picked: Some($picked)"'
+slots=$(vault_status | sed -n "s/.*slots: //p")
+check "scrolling far keeps about one screen of row views" '[ "$slots" -gt 0 ] && [ "$slots" -lt 40 ]'
 kill "$pid"
 
 rm -f "$log"

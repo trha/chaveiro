@@ -134,6 +134,23 @@ impl<P> Tree<P> {
         self.drop_stack = stack;
     }
 
+    /// Creates the node `key` under `parent` outside the parent's build, and
+    /// appends it to the parent's children at once, so it stays reachable
+    /// until the parent's next [`close`](Self::close) lists it. Used for rows
+    /// that AppKit asks for during layout.
+    ///
+    /// Panics when `key` is already live.
+    pub(crate) fn adopt(&mut self, parent: NodeId, key: Key, payload: P) -> NodeId {
+        assert!(self.find(key).is_none(), "key {key:?} is already live");
+        let id = self.insert(key, Some(parent), payload);
+        self.node_mut(parent).children.push(id);
+        id
+    }
+
+    pub(crate) fn find(&self, key: Key) -> Option<NodeId> {
+        self.by_key.get(&key).copied()
+    }
+
     /// Marks `id` and its ancestors as having an event this pass.
     pub(crate) fn mark_event(&mut self, id: NodeId) {
         let pass = self.pass;
@@ -336,10 +353,6 @@ impl<P> Tree<P> {
     /// Whether an event targeted `id` or a node under it this pass.
     pub(crate) fn has_event(&self, id: NodeId) -> bool {
         self.node(id).event_stamp == self.pass
-    }
-
-    pub(crate) fn find(&self, key: Key) -> Option<NodeId> {
-        self.by_key.get(&key).copied()
     }
 
     /// Ids of every live node.

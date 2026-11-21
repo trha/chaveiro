@@ -9,7 +9,7 @@ use crate::{
 };
 use objc2::{MainThreadMarker, rc::Retained, runtime::ProtocolObject};
 use objc2_app_kit::{
-    NSApplication, NSLayoutConstraint, NSLayoutConstraintOrientation, NSStackView,
+    NSApplication, NSLayoutConstraint, NSLayoutConstraintOrientation, NSStackView, NSTableView,
     NSUserInterfaceLayoutOrientation, NSView, NSVisualEffectView, NSWindow,
 };
 use objc2_foundation::NSArray;
@@ -27,6 +27,11 @@ pub struct Ui {
     pub(crate) scratch: String,
     /// Windows created this pass, shown when it ends.
     pub(crate) new_windows: Vec<NodeId>,
+    /// Table views declared this pass, whose rows are built after the view.
+    pub(crate) tables: Vec<NodeId>,
+    /// Table views to reload after the pass, with no borrow held, because
+    /// AppKit asks for rows inside `reloadData`.
+    pub(crate) reloads: Vec<Retained<NSTableView>>,
 }
 
 impl Ui {
@@ -38,12 +43,15 @@ impl Ui {
             mtm,
             scratch: String::new(),
             new_windows: Vec::new(),
+            tables: Vec::new(),
+            reloads: Vec::new(),
         }
     }
 
     /// Starts a pass. Returns whether events arrived since the last one.
     pub(crate) fn begin(&mut self) -> bool {
         debug_assert!(self.frames.is_empty(), "the last pass closed its frames");
+        self.tables.clear();
         self.tree.begin_pass();
         let consumed = self.events.begin_pass(&mut self.tree);
         let root = self.tree.root();
@@ -179,25 +187,50 @@ impl Ui {
                     return;
                 };
                 let view = self.control(content).view.clone();
-                container.addSubview(&view);
                 // The content fills the window, and its size bounds the
                 // window's, so a window cannot shrink below its content.
-                let pins = vec![
-                    view.leadingAnchor()
-                        .constraintEqualToAnchor(&container.leadingAnchor()),
-                    view.trailingAnchor()
-                        .constraintEqualToAnchor(&container.trailingAnchor()),
-                    view.topAnchor()
-                        .constraintEqualToAnchor(&container.topAnchor()),
-                    view.bottomAnchor()
-                        .constraintEqualToAnchor(&container.bottomAnchor()),
-                ];
-                NSLayoutConstraint::activateConstraints(&NSArray::from_retained_slice(&pins));
+                let pins = pin_to_edges(&container, &view);
                 let Payload::Window(window) = &mut self.tree.node_mut(node).payload else {
                     unreachable!("matched above")
                 };
                 window.pins = pins;
                 window.pinned = Some(view);
+            }
+            Payload::Control(ControlNode {
+                control:
+                    Control::Row {
+                        shell,
+                        content,
+                        pins,
+                    },
+                ..
+            }) => {
+                assert!(declared.len() <= 1, "a table row declares one control");
+                let declared_content = declared.first().copied();
+                if *content == declared_content {
+                    return;
+                }
+                let old = std::mem::replace(content, declared_content);
+                NSLayoutConstraint::deactivateConstraints(&NSArray::from_retained_slice(
+                    &std::mem::take(pins),
+                ));
+                let shell = shell.clone();
+                if let Some(old) = old.and_then(|old| self.tree.get(old)) {
+                    let Payload::Control(old) = &old.payload else {
+                        unreachable!("visual children are controls")
+                    };
+                    old.view.removeFromSuperview();
+                }
+                let Some(declared_content) = declared_content else {
+                    return;
+                };
+                let view = self.control(declared_content).view.clone();
+                // The content's constraints give the row its height.
+                let built = pin_to_edges(&shell, &view);
+                let Control::Row { pins, .. } = &mut self.control_mut(node).control else {
+                    unreachable!("matched above")
+                };
+                *pins = built;
             }
             Payload::Control(ControlNode {
                 control:
@@ -434,6 +467,24 @@ impl ControlNode {
         node.field = Some(field);
         Payload::Control(node)
     }
+}
+
+/// Adds `view` to `container` and pins it to all four edges. Returns the
+/// active constraints.
+fn pin_to_edges(container: &NSView, view: &NSView) -> Vec<Retained<NSLayoutConstraint>> {
+    container.addSubview(view);
+    let pins = vec![
+        view.leadingAnchor()
+            .constraintEqualToAnchor(&container.leadingAnchor()),
+        view.trailingAnchor()
+            .constraintEqualToAnchor(&container.trailingAnchor()),
+        view.topAnchor()
+            .constraintEqualToAnchor(&container.topAnchor()),
+        view.bottomAnchor()
+            .constraintEqualToAnchor(&container.bottomAnchor()),
+    ];
+    NSLayoutConstraint::activateConstraints(&NSArray::from_retained_slice(&pins));
+    pins
 }
 
 /// The constraints that place `view` across `stack` by `align`, inside the

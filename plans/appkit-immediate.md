@@ -553,7 +553,18 @@ The main agent owns every step, one at a time, because all steps edit
    - `header`, `required`, `error`, `hint` and `field` live on `Response`
      and panic on a view that is not a field.
 7. Table view with the slot pool, `table_view_state` and deferred `reloadData`. Runs
-   test 5.
+   test 5. Done (2026-11-21): `examples/vault_table.rs`, 10,000 rows in a
+   star grid row; after 8 scroll jumps the table keeps 10 row views for
+   about 5 shown rows, and a click in a row scrolled to item 4499 picks
+   4499. `tools/smoke.sh` passes 34 checks. Two cases the design did not
+   name: AppKit asks for the row count and for rows while a pass runs (when
+   the data source is set, and in a new window's first fit). The shared
+   `Target` keeps each table's row count, so the count needs no `Ui`; a
+   row asked for during a pass gets an empty placeholder, and the runner
+   reloads that table after the pass. A row removed during a pass is
+   recycled after it. A panic in a row function, which runs inside AppKit's
+   layout, closes every window like a pass panic. Not covered by a check:
+   reloading after `len` or `revision` changes.
 8. `native`, `cached`, `state`. Runs test 2.
 9. `cargo +nightly fmt`, clippy, and `cargo doc --no-deps
    --document-private-items` with no broken links. Update the memory notes.

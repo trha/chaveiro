@@ -7,9 +7,10 @@ use objc2::{
 };
 use objc2_app_kit::{
     NSApplication, NSApplicationDelegate, NSApplicationTerminateReply, NSComboBoxDelegate,
-    NSControlTextEditingDelegate, NSTextFieldDelegate, NSWindowDelegate,
+    NSControlTextEditingDelegate, NSTableColumn, NSTableRowView, NSTableView,
+    NSTableViewDataSource, NSTableViewDelegate, NSTextFieldDelegate, NSView, NSWindowDelegate,
 };
-use objc2_foundation::{NSNotification, NSObject, NSObjectProtocol};
+use objc2_foundation::{NSInteger, NSNotification, NSObject, NSObjectProtocol};
 use std::{
     cell::RefCell,
     collections::{HashMap, hash_map::Entry},
@@ -31,6 +32,7 @@ impl Events {
         let target = Target::alloc(mtm).set_ivars(TargetIvars {
             pending: RefCell::new(Vec::new()),
             senders: RefCell::new(HashMap::new()),
+            row_counts: RefCell::new(HashMap::new()),
             wake,
         });
         Events {
@@ -86,11 +88,19 @@ impl Events {
     /// Stops routing events of `sender`. Call before `sender` is released, so
     /// a later object at the same address is not mistaken for it.
     pub(crate) fn forget(&self, sender: &AnyObject) {
+        let ivars = self.target.ivars();
+        ivars.senders.borrow_mut().remove(&address(sender));
+        ivars.row_counts.borrow_mut().remove(&address(sender));
+    }
+
+    /// Makes the shared target report `count` rows for `table`, which AppKit
+    /// may ask while a pass runs.
+    pub(crate) fn set_row_count(&self, table: &NSTableView, count: usize) {
         self.target
             .ivars()
-            .senders
+            .row_counts
             .borrow_mut()
-            .remove(&address(sender));
+            .insert(address(table), count);
     }
 }
 
@@ -111,6 +121,9 @@ pub(crate) struct TargetIvars {
     pending: RefCell<Vec<(NodeId, EventKind)>>,
     /// The node of each registered sender, by object address.
     senders: RefCell<HashMap<usize, NodeId>>,
+    /// The row count of each table view, by address, kept here so AppKit can
+    /// read it without the [`Ui`](crate::Ui).
+    row_counts: RefCell<HashMap<usize, usize>>,
     wake: Rc<dyn Fn()>,
 }
 
@@ -163,6 +176,49 @@ define_class!(
 
     unsafe impl NSComboBoxDelegate for Target {}
 
+    unsafe impl NSTableViewDataSource for Target {
+        #[unsafe(method(numberOfRowsInTableView:))]
+        fn number_of_rows(&self, table: &NSTableView) -> NSInteger {
+            let count = self
+                .ivars()
+                .row_counts
+                .borrow()
+                .get(&address(table))
+                .copied()
+                .unwrap_or(0);
+            NSInteger::try_from(count).expect("a table view has fewer than 2^63 rows")
+        }
+    }
+
+    unsafe impl NSTableViewDelegate for Target {
+        #[unsafe(method_id(tableView:viewForTableColumn:row:))]
+        fn view_for_row(
+            &self,
+            table: &NSTableView,
+            _column: Option<&NSTableColumn>,
+            row: NSInteger,
+        ) -> Option<Retained<NSView>> {
+            // The macro wraps the body, so `?` is not available here.
+            let node = self.node_of(table);
+            let row = usize::try_from(row).ok();
+            match (node, row) {
+                (Some(node), Some(row)) => Some(crate::runner::realize_row(self.mtm(), node, row)),
+                _ => None,
+            }
+        }
+
+        #[unsafe(method(tableView:didRemoveRowView:forRow:))]
+        fn did_remove_row_view(&self, table: &NSTableView, row_view: &NSTableRowView, _row: NSInteger) {
+            let Some(node) = self.node_of(table) else {
+                return;
+            };
+            // A row view without a cell held a placeholder or nothing.
+            if let Some(cell) = row_view.viewAtColumn(0) {
+                crate::runner::recycle_row(node, address(&cell));
+            }
+        }
+    }
+
     unsafe impl NSApplicationDelegate for Target {
         /// Reports the request and keeps running: the app quits by declaring
         /// no window.
@@ -178,6 +234,11 @@ define_class!(
 );
 
 impl Target {
+    /// The node registered for `sender`.
+    fn node_of(&self, sender: &AnyObject) -> Option<NodeId> {
+        self.ivars().senders.borrow().get(&address(sender)).copied()
+    }
+
     /// Queues `kind` for the node of `sender` and wakes the runner. Ignores a
     /// sender with no node, such as a control dropped while its event was in
     /// flight.

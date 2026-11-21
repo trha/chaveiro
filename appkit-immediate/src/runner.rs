@@ -3,6 +3,7 @@
 use crate::{
     mailbox::{Handle, Mailbox},
     pass::Ui,
+    tree::NodeId,
 };
 use dispatch2::DispatchQueue;
 use objc2::{
@@ -12,7 +13,7 @@ use objc2::{
 };
 use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy, NSEvent, NSEventModifierFlags, NSEventType,
-    NSMenu, NSMenuItem,
+    NSMenu, NSMenuItem, NSView,
 };
 use objc2_foundation::{NSPoint, NSString};
 use std::{
@@ -78,6 +79,8 @@ pub fn run<A: App>(make: impl FnOnce(Handle<A::Message>) -> A) {
                 scheduled: Cell::new(false),
                 running: Cell::new(false),
                 panic: RefCell::new(None),
+                deferred_reloads: RefCell::new(Vec::new()),
+                deferred_recycles: RefCell::new(Vec::new()),
             }
         });
         runner.ui.borrow().adopt_application(&application);
@@ -110,6 +113,25 @@ thread_local! {
     static CURRENT: RefCell<Option<Rc<dyn Turn>>> = const { RefCell::new(None) };
 }
 
+/// Builds row `row` of the table view `table` for AppKit's layout. Returns
+/// an empty placeholder, and reloads the table after the pass, when AppKit
+/// asks while a pass runs, such as during a window's first fit.
+pub(crate) fn realize_row(mtm: MainThreadMarker, table: NodeId, row: usize) -> Retained<NSView> {
+    let current = CURRENT.with_borrow(Option::clone);
+    current
+        .and_then(|current| current.realize(table, row))
+        .unwrap_or_else(|| NSView::new(mtm))
+}
+
+/// Returns the row whose cell view is at address `view` to `table`'s free
+/// rows.
+pub(crate) fn recycle_row(table: NodeId, view: usize) {
+    let current = CURRENT.with_borrow(Option::clone);
+    if let Some(current) = current {
+        current.recycle(table, view);
+    }
+}
+
 fn turn_current() {
     let current = CURRENT.with_borrow(Option::clone);
     if let Some(current) = current {
@@ -121,6 +143,9 @@ trait Turn {
     /// Applies queued messages and runs one pass. Returns whether a window
     /// is still open.
     fn turn(&self) -> bool;
+    /// Builds a table row; [`None`] when it cannot be built now.
+    fn realize(&self, table: NodeId, row: usize) -> Option<Retained<NSView>>;
+    fn recycle(&self, table: NodeId, view: usize);
 }
 
 struct Runner<A: App> {
@@ -135,6 +160,10 @@ struct Runner<A: App> {
     running: Cell<bool>,
     /// The panic of a failed pass, which [`run`] resumes.
     panic: RefCell<Option<Box<dyn Any + Send>>>,
+    /// Table views that asked for rows while a pass ran, reloaded after it.
+    deferred_reloads: RefCell<Vec<NodeId>>,
+    /// Rows AppKit removed while a pass ran, recycled after it.
+    deferred_recycles: RefCell<Vec<(NodeId, usize)>>,
 }
 
 impl<A: App> Runner<A> {
@@ -157,11 +186,82 @@ impl<A: App> Runner<A> {
         let mut ui = self.ui.borrow_mut();
         let consumed = ui.begin();
         app.view(&mut ui);
+        ui.build_rows(&mut *app);
         (consumed, ui.end())
+    }
+
+    /// Recycles and reloads what table views asked for during the pass, and
+    /// reloads the tables the pass changed. Runs with no borrow held,
+    /// because AppKit asks for rows inside `reloadData`.
+    fn settle_tables(&self) {
+        for (table, view) in self.deferred_recycles.take() {
+            self.recycle(table, view);
+        }
+        let mut tables = std::mem::take(&mut self.ui.borrow_mut().reloads);
+        {
+            let ui = self.ui.borrow();
+            for table in self.deferred_reloads.take() {
+                if let Some(table) = ui.table_of(table) {
+                    tables.push(table);
+                }
+            }
+        }
+        for table in tables {
+            table.reloadData();
+        }
+    }
+
+    /// Stores the panic, closes every window and stops the app, for a panic
+    /// outside a pass, in a row function.
+    fn fail(&self, payload: Box<dyn Any + Send>) {
+        *self.panic.borrow_mut() = Some(payload);
+        autoreleasepool(|_| self.ui.borrow_mut().close_all());
+        self.mailbox.close();
+        if self.running.replace(false) {
+            stop(self.ui.borrow().mtm);
+        }
     }
 }
 
 impl<A: App> Turn for Runner<A> {
+    fn realize(&self, table: NodeId, row: usize) -> Option<Retained<NSView>> {
+        if self.panic.borrow().is_some() {
+            return None;
+        }
+        let (Ok(mut ui), Ok(mut app)) = (self.ui.try_borrow_mut(), self.app.try_borrow_mut())
+        else {
+            // A pass is running: AppKit lays out inside it, such as for a
+            // window's first fit.
+            self.deferred_reloads.borrow_mut().push(table);
+            return None;
+        };
+        if ui.table_len(table).is_none_or(|len| row >= len) {
+            return None;
+        }
+        // A panic must not unwind into AppKit's layout.
+        let outcome = autoreleasepool(|_| {
+            catch_unwind(AssertUnwindSafe(|| ui.realize(table, row, &mut *app)))
+        });
+        drop((ui, app));
+        match outcome {
+            Ok(view) => Some(view),
+            Err(payload) => {
+                self.fail(payload);
+                None
+            }
+        }
+    }
+
+    fn recycle(&self, table: NodeId, view: usize) {
+        let Ok(mut ui) = self.ui.try_borrow_mut() else {
+            self.deferred_recycles.borrow_mut().push((table, view));
+            return;
+        };
+        if ui.table_len(table).is_some() {
+            ui.recycle(table, view);
+        }
+    }
+
     fn turn(&self) -> bool {
         self.scheduled.set(false);
         if self.panic.borrow().is_some() {
@@ -172,6 +272,9 @@ impl<A: App> Turn for Runner<A> {
         let outcome = autoreleasepool(|_| catch_unwind(AssertUnwindSafe(|| self.pass())));
         let windows = match outcome {
             Ok((consumed, windows)) => {
+                if windows > 0 {
+                    autoreleasepool(|_| self.settle_tables());
+                }
                 // A widget declared before the one that read an event shows
                 // the old state, so one more pass catches it up.
                 if consumed && windows > 0 {

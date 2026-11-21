@@ -9,7 +9,7 @@ use objc2::rc::Retained;
 use objc2_app_kit::{
     NSButton, NSComboBox, NSControl, NSFont, NSFontTextStyleBody, NSFontTextStyleCaption1,
     NSFontTextStyleTitle1, NSLayoutConstraint, NSPopUpButton, NSProgressIndicator,
-    NSSecureTextField, NSStackView, NSTextField, NSView,
+    NSSecureTextField, NSStackView, NSTableView, NSTextField, NSView,
 };
 use objc2_foundation::{NSDictionary, NSEdgeInsets};
 
@@ -21,6 +21,7 @@ mod label;
 mod pop_up_button;
 mod secure_text_field;
 mod stack_view;
+mod table_view;
 mod text_field;
 mod window;
 
@@ -33,6 +34,8 @@ pub(crate) use grid::{Rule as GridRule, constraints as grid_constraints, rules a
 pub use pop_up_button::PopUpButtonResponse;
 pub use secure_text_field::{SecureTextFieldHandle, SecureTextFieldResponse};
 pub use stack_view::Orientation;
+pub(crate) use table_view::TableData;
+pub use table_view::{RowFn, TableViewId};
 pub use text_field::TextFieldResponse;
 pub use window::WindowResponse;
 
@@ -248,6 +251,18 @@ pub(crate) enum Control {
     },
     /// The box itself is the node's view.
     BoxView { stack: Retained<NSStackView> },
+    /// The node's view is the scroll view around `table`.
+    TableView {
+        table: Retained<NSTableView>,
+        data: Box<TableData>,
+    },
+    /// The cell view AppKit gets for one table row; the row's control is
+    /// pinned inside it by `pins`.
+    Row {
+        shell: Retained<NSView>,
+        content: Option<NodeId>,
+        pins: Vec<Retained<NSLayoutConstraint>>,
+    },
 }
 
 impl Control {
@@ -268,7 +283,11 @@ impl Control {
             Control::ComboBox { combo_box, .. } => {
                 Retained::clone(combo_box).into_super().into_super()
             }
-            Control::Stack { .. } | Control::Grid { .. } | Control::BoxView { .. } => return None,
+            Control::Stack { .. }
+            | Control::Grid { .. }
+            | Control::BoxView { .. }
+            | Control::TableView { .. }
+            | Control::Row { .. } => return None,
         })
     }
 
