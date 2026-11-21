@@ -1,6 +1,7 @@
 //! Events from AppKit controls, queued for the next pass.
 
 use crate::tree::{NodeId, Tree};
+use ahash::AHashMap;
 use objc2::{
     DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, rc::Retained,
     runtime::AnyObject,
@@ -11,11 +12,7 @@ use objc2_app_kit::{
     NSTableViewDataSource, NSTableViewDelegate, NSTextFieldDelegate, NSView, NSWindowDelegate,
 };
 use objc2_foundation::{NSInteger, NSNotification, NSObject, NSObjectProtocol};
-use std::{
-    cell::RefCell,
-    collections::{HashMap, hash_map::Entry},
-    rc::Rc,
-};
+use std::{cell::RefCell, collections::hash_map::Entry, rc::Rc};
 
 /// Events seen by the shared target since the last pass, and the events of
 /// this pass.
@@ -31,8 +28,8 @@ impl Events {
     pub(crate) fn new(mtm: MainThreadMarker, wake: Rc<dyn Fn()>) -> Self {
         let target = Target::alloc(mtm).set_ivars(TargetIvars {
             pending: RefCell::new(Vec::new()),
-            senders: RefCell::new(HashMap::new()),
-            row_counts: RefCell::new(HashMap::new()),
+            senders: RefCell::new(AHashMap::new()),
+            row_counts: RefCell::new(AHashMap::new()),
             wake,
         });
         Events {
@@ -120,10 +117,10 @@ pub(crate) enum EventKind {
 pub(crate) struct TargetIvars {
     pending: RefCell<Vec<(NodeId, EventKind)>>,
     /// The node of each registered sender, by object address.
-    senders: RefCell<HashMap<usize, NodeId>>,
+    senders: RefCell<AHashMap<usize, NodeId>>,
     /// The row count of each table view, by address, kept here so AppKit can
     /// read it without the [`Ui`](crate::Ui).
-    row_counts: RefCell<HashMap<usize, usize>>,
+    row_counts: RefCell<AHashMap<usize, usize>>,
     wake: Rc<dyn Fn()>,
 }
 

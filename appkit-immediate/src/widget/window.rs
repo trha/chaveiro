@@ -83,7 +83,7 @@ impl Ui {
     /// that [`size_to_fit`](WindowResponse::size_to_fit) already sized keeps
     /// that size; others open at least 360×200.
     pub(crate) fn show_new_windows(&mut self) {
-        for node in std::mem::take(&mut self.new_windows) {
+        for node in self.new_windows.drain(..) {
             // A window created and dropped in the same pass is gone.
             let Some(Payload::Window(window)) = self.tree.get(node).map(|node| &node.payload)
             else {
