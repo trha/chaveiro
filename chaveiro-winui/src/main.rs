@@ -1,8 +1,9 @@
 //! Chaveiro for Windows: a winui-immediate [`App`] over the chaveiro-core
 //! [`Core`], with [`Io`] running the core's effects.
 //!
-//! Only the login screen is built. The other screens show a placeholder
-//! with the one action that leads back to login.
+//! The login and two-step screens are built, and the vault window has its
+//! navigation pane. The unlock screen shows a placeholder with the one
+//! action that leads back to login.
 
 // The program is Windows only. On other targets it is empty, so it checks
 // but does not link.
@@ -16,6 +17,7 @@ mod login;
 mod route;
 mod screen;
 mod second_factor;
+mod vault;
 mod wipe;
 
 use chaveiro_core::core::{Config, Core, Input, LoginError, Screen, UserAction};
@@ -26,6 +28,7 @@ use route::Route;
 use screen::{form, title};
 use second_factor::{SecondFactorForm, SecondFactorState};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use vault::{VaultAction, VaultForm};
 use windows_core::Result;
 use winui_immediate::{App, Handle, Orientation, Slide, Ui, run};
 
@@ -81,6 +84,7 @@ struct Chaveiro {
     route: Route,
     /// How the last change of `route` moved.
     slide: Slide,
+    vault: VaultForm,
 }
 
 /// What the user asked for in a pass, applied after the screen's borrow
@@ -90,6 +94,8 @@ enum Next {
     User(UserAction),
     /// The title bar's back button.
     Back,
+    /// The window's close button.
+    Close,
 }
 
 /// Lock after this long with no user action.
@@ -126,39 +132,59 @@ impl App for Chaveiro {
             if self.route.has_back() && !route.has_back() {
                 self.second_factor = SecondFactorForm::default();
             }
+            // The vault starts on All items each time it opens.
+            if route == Route::Vault {
+                self.vault.reset();
+            }
             self.slide = self.route.slide_to(route);
             self.route = route;
         }
-        let mut next = None;
-        let mut main = ui.window("main", "Chaveiro", |ui| {
-            ui.stack("window", Orientation::Vertical, 0.0, |ui| {
-                let mut title_bar = ui.title_bar("title bar", "Chaveiro", route.has_back())?;
-                if title_bar.back_requested()? && route.has_back() {
-                    next = Some(Next::Back);
-                }
-                ui.navigator("screens", route, self.slide, |ui| {
-                    if let Some(asked) = self.body(ui)? {
-                        next = Some(asked);
-                    }
+        let next = match route {
+            Route::Vault => {
+                let Some(Screen::Vault(screen)) = self.core.as_ref().map(Core::screen) else {
+                    unreachable!("Route::Vault comes from Screen::Vault")
+                };
+                let pass = vault::view(ui, &mut self.vault, &screen)?;
+                self.io.set_window(pass.window);
+                pass.action.map(|action| match action {
+                    VaultAction::Close => Next::Close,
+                    VaultAction::User(action) => Next::User(action),
+                })
+            }
+            Route::Login | Route::Methods | Route::SecondFactor | Route::Locked => {
+                let mut next = None;
+                let mut main = ui.window("main", "Chaveiro", |ui| {
+                    ui.stack("window", Orientation::Vertical, 0.0, |ui| {
+                        let mut title_bar =
+                            ui.title_bar("title bar", "Chaveiro", route.has_back())?;
+                        if title_bar.back_requested()? && route.has_back() {
+                            next = Some(Next::Back);
+                        }
+                        ui.navigator("screens", route, self.slide, |ui| {
+                            if let Some(asked) = self.body(ui)? {
+                                next = Some(asked);
+                            }
+                            Ok(())
+                        })?;
+                        Ok(())
+                    })?
+                    .width(FORM_WIDTH)?;
                     Ok(())
                 })?;
-                Ok(())
-            })?
-            .width(FORM_WIDTH)?;
-            Ok(())
-        })?;
-        main.mica()?.compact()?.fit_to_content()?;
-        if self.io.window().is_none() {
-            let id = main.id()?;
-            self.io.set_window(id);
-        }
-        if main.close_requested() {
-            self.open = false;
-            self.io.close();
-            return Ok(());
-        }
+                main.mica()?.compact()?.fit_to_content()?;
+                self.io.set_window(main.id()?);
+                match main.close_requested() {
+                    true => Some(Next::Close),
+                    false => next,
+                }
+            }
+        };
         match next {
             None => {}
+            Some(Next::Close) => {
+                self.open = false;
+                self.io.close();
+            }
             Some(Next::Submit(submit)) => {
                 self.pending = Some(submit);
                 self.advance();
@@ -199,6 +225,7 @@ impl Chaveiro {
             second_factor: SecondFactorForm::default(),
             route: Route::Login,
             slide: Slide::Instant,
+            vault: VaultForm::default(),
         })
     }
 
@@ -331,9 +358,10 @@ impl Chaveiro {
 /// A screen this app does not draw yet, with the action that leads back to
 /// login.
 fn placeholder(ui: &mut Ui, screen: &Screen<'_>) -> Result<Option<Next>> {
+    // The vault has its own window, so only the unlock screen lands here.
     let (name, button, action) = match screen {
         Screen::Locked { .. } => ("Unlock", "Log out", UserAction::Logout),
-        _ => ("The vault", "Lock", UserAction::Lock),
+        _ => ("This screen", "Lock", UserAction::Lock),
     };
     let mut next = None;
     form(ui, "placeholder", |ui| {

@@ -88,11 +88,8 @@ impl Io {
         })
     }
 
-    /// The window that owns the Hello prompt, once set.
-    pub fn window(&self) -> Option<u64> {
-        self.window
-    }
-
+    /// Sets the window that owns the Hello prompt: the one the last pass
+    /// showed.
     pub fn set_window(&mut self, window: u64) {
         self.window = Some(window);
     }
