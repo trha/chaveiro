@@ -86,3 +86,44 @@ rows off screen are wrong.
   (`insertText:replacementRange:`, `doCommandBySelector:`) from
   `App::update`, which works from the Claude Code session where System
   Events does not.
+
+## Learned while building the vault sidebar (2026-11-21)
+
+- `source_list` has its own data source and delegate (`Source`) holding a
+  copy of the entries, so AppKit can ask for rows mid-pass with no `Ui`
+  borrow, and `reloadData` runs inside the pass.
+- `selectRowIndexes:` from code skips `tableView:shouldSelectRow:` but
+  still posts the selection notification, so the widget mutes its own
+  selects and filters a read-back row through "is it an item".
+- `split_view` is an `NSSplitViewController`; each pane is an
+  `NSViewController` whose plain view holds the control, pinned. The first
+  is `sidebarWithViewController`, which AppKit puts in an
+  `NSGlassEffectView` (Liquid Glass) once the binary is linked against
+  SDK 26+ (`otool -l` → `LC_BUILD_VERSION sdk`). An `NSVisualEffectView`
+  with the sidebar material never turns into glass.
+- The sidebar opens at the item's minimum (144 pt at 800 wide) and reaches
+  its preferred fraction only after a later layout, so dump frames late.
+- On SDK 26+ an `NSButton`'s title is drawn by a SwiftUI hosting view, so a
+  dump of `NSTextField`s no longer lists button titles.
+- `examples/sidebar.rs` and `chaveiro-appkit/examples/vault.rs` drive
+  picks through the table from `App::update` and print the text; the vault
+  example checks steady passes allocate 0.
+- `WindowResponse::full_size_content` lets the sidebar reach the window's
+  top. Panes after the first pin their top to the safe area guide, and the
+  source list's scroll view insets its rows below the title bar by itself.
+
+## Window glass (2026-11-21)
+
+- About This Mac (System Information.app, `SPAboutViewController`) makes an
+  `NSGlassEffectView` the view controller's view, so it is the window's
+  content view, with the content as its `contentView`. Its window is
+  `windowWithContentViewController:`, style mask 0x8003 (Titled, Closable,
+  FullSizeContentView), movable by background, transparent title bar. It
+  sets no corner radius, tint, or clear window background.
+- A glass view placed as a subview behind the content, with the window
+  made clear, did not look like Liquid Glass. `WindowResponse::glass` now
+  copies the About window.
+- To read how a stripped system app builds a view: `nix shell
+  nixpkgs#ipsw -c ipsw macho disass <binary> --arch arm64e -x
+  __TEXT.__text`, which names each `objc_msgSend` selector; `ipsw
+  class-dump` lists the classes.
