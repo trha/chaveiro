@@ -7,12 +7,14 @@
 use crate::{events::EventKind, pass::Ui, tree::NodeId};
 use objc2::rc::Retained;
 use objc2_app_kit::{
-    NSButton, NSComboBox, NSControl, NSFont, NSFontTextStyleBody, NSFontTextStyleCaption1,
-    NSFontTextStyleTitle1, NSLayoutConstraint, NSPopUpButton, NSProgressIndicator,
-    NSSecureTextField, NSStackView, NSTableView, NSTextField, NSView,
+    NSButton, NSColor, NSComboBox, NSControl, NSFont, NSFontDescriptorSymbolicTraits,
+    NSFontTextStyleBody, NSFontTextStyleCaption1, NSFontTextStyleTitle1, NSFontTextStyleTitle2,
+    NSLayoutConstraint, NSPopUpButton, NSProgressIndicator, NSSecureTextField, NSStackView,
+    NSTableView, NSTextField, NSView,
 };
 use objc2_foundation::{NSDictionary, NSEdgeInsets};
 
+mod alert_line;
 mod button;
 mod cache;
 mod combo_box;
@@ -29,8 +31,8 @@ mod window;
 
 pub use button::ButtonResponse;
 pub use combo_box::ComboBoxResponse;
-pub(crate) use field::Field;
 pub use field::FieldHandle;
+pub(crate) use field::{ErrorLine, Field};
 pub use grid::Length;
 pub(crate) use grid::{Rule as GridRule, constraints as grid_constraints, rules as grid_rules};
 pub use pop_up_button::PopUpButtonResponse;
@@ -67,6 +69,7 @@ impl Response<'_> {
         control.enabled = None;
         control.style = None;
         control.padding = None;
+        control.text_color = None;
     }
 
     /// Sets whether the user can interact with the control.
@@ -93,6 +96,7 @@ impl Response<'_> {
         if must_write(self.node, false, &control.style, &Some(style)) {
             let text_style = match style {
                 Style::Title => unsafe { NSFontTextStyleTitle1 },
+                Style::Title2 | Style::Heading => unsafe { NSFontTextStyleTitle2 },
                 Style::Body => unsafe { NSFontTextStyleBody },
                 Style::Caption => unsafe { NSFontTextStyleCaption1 },
             };
@@ -100,12 +104,41 @@ impl Response<'_> {
             let font = unsafe {
                 NSFont::preferredFontForTextStyle_options(text_style, &NSDictionary::new())
             };
+            let font = match style {
+                Style::Heading => {
+                    let descriptor = font.fontDescriptor().fontDescriptorWithSymbolicTraits(
+                        NSFontDescriptorSymbolicTraits::TraitBold,
+                    );
+                    NSFont::fontWithDescriptor_size(&descriptor, 0.0)
+                        .expect("the system font has a bold face")
+                }
+                _ => font,
+            };
             control
                 .control
                 .as_control()
                 .expect("only controls have a font")
                 .setFont(Some(&font));
             control.style = Some(style);
+        }
+        self
+    }
+
+    /// Sets the text color of a label.
+    ///
+    /// Panics when the view is not a label.
+    pub fn text_color(&mut self, color: TextColor) -> &mut Self {
+        let control = self.ui.control_mut(self.node);
+        if must_write(self.node, false, &control.text_color, &Some(color)) {
+            let Control::Label { field, .. } = &control.control else {
+                panic!("only labels take a text color")
+            };
+            let ns_color = match color {
+                TextColor::Label => NSColor::labelColor(),
+                TextColor::Secondary => NSColor::secondaryLabelColor(),
+            };
+            field.setTextColor(Some(&ns_color));
+            control.text_color = Some(color);
         }
         self
     }
@@ -161,10 +194,12 @@ impl Response<'_> {
                 right,
             });
             control.padding = Some(padding);
-            // The children's cross-axis constraints carry the insets.
+            // The children's cross-axis constraints carry the insets. They
+            // are rebuilt now, because the stack may already be closed.
             for child in control.visual.clone() {
                 self.ui.control_mut(child).cross_stale = true;
             }
+            self.ui.place_across(self.node, &stack);
         }
         self
     }
@@ -185,11 +220,25 @@ pub enum Align {
     Stretch,
 }
 
+/// A system text color for [`Response::text_color`], which follows the
+/// appearance.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TextColor {
+    Label,
+    /// For text under a title, such as a subtitle.
+    Secondary,
+}
+
 /// A text style for [`Response::style`], mapped to the system's preferred
 /// font for it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Style {
+    /// 22 points.
     Title,
+    /// 17 points.
+    Title2,
+    /// [`Title2`](Self::Title2) in bold, for a window's heading.
+    Heading,
     Body,
     Caption,
 }
@@ -237,10 +286,14 @@ pub(crate) enum Control {
         label: String,
         /// [`None`] after an invalidate, until written again: the options
         /// run after the body has taken `stale`, so they cannot read it.
-        default: Option<bool>,
+        /// The key equivalent, `""` for none. A button has one, so
+        /// [`default_button`](ButtonResponse::default_button) and
+        /// [`cancel_button`](ButtonResponse::cancel_button) replace each
+        /// other's.
+        key: Option<&'static str>,
         /// The spinner shown while busy, made on first use.
         spinner: Option<Retained<NSProgressIndicator>>,
-        /// Like `default`.
+        /// Like `key`.
         busy: Option<bool>,
     },
     TextField {
@@ -265,6 +318,8 @@ pub(crate) enum Control {
         /// The text last written or read back.
         text: String,
     },
+    /// The node's view is the line's row.
+    AlertLine { line: ErrorLine },
     /// The box itself is the node's view.
     BoxView { stack: Retained<NSStackView> },
     /// From [`Ui::native`]: only the view is known.
@@ -302,6 +357,7 @@ impl Control {
                 Retained::clone(combo_box).into_super().into_super()
             }
             Control::Stack { .. }
+            | Control::AlertLine { .. }
             | Control::Grid { .. }
             | Control::BoxView { .. }
             | Control::TableView { .. }
@@ -322,6 +378,7 @@ impl Control {
             Control::PopUpButton { .. } => "pop_up_button",
             Control::ComboBox { .. } => "combo_box",
             Control::BoxView { .. } => "box_view",
+            Control::AlertLine { .. } => "alert_line",
             Control::Native => "native",
             Control::TableView { .. } => "table_view",
             Control::Row { .. } => "row",

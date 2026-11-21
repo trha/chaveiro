@@ -20,7 +20,7 @@ pub use pass::Ui;
 pub use runner::{App, run};
 pub use widget::{
     Align, ButtonResponse, ComboBoxResponse, FieldHandle, Length, Orientation, PopUpButtonResponse,
-    Response, RowFn, SecureTextFieldHandle, SecureTextFieldResponse, Style, TableViewId,
+    Response, RowFn, SecureTextFieldHandle, SecureTextFieldResponse, Style, TableViewId, TextColor,
     TextFieldResponse, WindowResponse,
 };
 /// The type [`Ui::take_password`] returns.

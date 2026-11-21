@@ -1,4 +1,4 @@
-use super::{Control, Response, must_write};
+use super::{Control, FieldHandle, Response, must_write};
 use crate::{
     events::EventKind,
     pass::{ChildKind, ControlNode, Ui},
@@ -147,6 +147,14 @@ impl SecureTextFieldResponse<'_> {
 /// declared it.
 #[derive(Clone, Copy, Debug)]
 pub struct SecureTextFieldHandle(NodeId);
+
+impl SecureTextFieldHandle {
+    /// The same field as a [`FieldHandle`], for [`Ui::set_error`] and
+    /// [`Ui::make_first_responder`].
+    pub fn field(self) -> FieldHandle {
+        FieldHandle(self.0)
+    }
+}
 
 impl<'u> Deref for SecureTextFieldResponse<'u> {
     type Target = Response<'u>;

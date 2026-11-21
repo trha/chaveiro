@@ -2,18 +2,26 @@
 
 use super::Response;
 use crate::{pass::Ui, tree::NodeId};
-use objc2::{MainThreadMarker, rc::Retained};
+use objc2::{MainThreadMarker, Message, rc::Retained};
 use objc2_app_kit::{
-    NSColor, NSFont, NSImage, NSImageView, NSLayoutAttribute, NSStackView, NSTextField,
-    NSUserInterfaceLayoutOrientation, NSView,
+    NSColor, NSFont, NSImage, NSImageView, NSLayoutAttribute, NSLayoutConstraintOrientation,
+    NSLineBreakMode, NSStackView, NSTextAlignment, NSTextField, NSUserInterfaceLayoutOrientation,
+    NSView,
 };
 use objc2_foundation::NSString;
 
-/// A field's control in a vertical stack: an optional header above it and
-/// an optional error line below it, each made on first use.
+/// A field's control with an optional header and an optional error line,
+/// each made on first use. `stack` holds the header and `body`, and `body`
+/// holds the control over the error line. Inside a [`Ui::form`] the header
+/// sits beside `body`, else above it.
 pub(crate) struct Field {
     pub(crate) stack: Retained<NSStackView>,
+    body: Retained<NSStackView>,
+    control: Retained<NSView>,
     header: Option<Retained<NSTextField>>,
+    /// The header sits beside `body`, as a form row. Fixed when the header
+    /// is made.
+    beside: bool,
     /// The header as last declared, before the " *" a required field adds.
     header_text: String,
     required: bool,
@@ -23,17 +31,19 @@ pub(crate) struct Field {
 impl Field {
     /// Wraps `control` in a new field stack.
     pub(crate) fn new(mtm: MainThreadMarker, control: &NSView) -> Box<Self> {
-        let stack = NSStackView::new(mtm);
-        stack.setOrientation(NSUserInterfaceLayoutOrientation::Vertical);
-        // `Leading` pins each row's leading edge; `stretch` adds the
-        // trailing one, since the `Width` alignment does not fill the stack.
-        stack.setAlignment(NSLayoutAttribute::Leading);
-        stack.setSpacing(4.0);
-        stack.addArrangedSubview(control);
-        stretch(&stack, control);
+        let stack = vertical(mtm);
+        let body = vertical(mtm);
+        body.setTranslatesAutoresizingMaskIntoConstraints(false);
+        body.addArrangedSubview(control);
+        stretch(&body, control);
+        stack.addArrangedSubview(&body);
+        stretch(&stack, &body);
         Box::new(Field {
             stack,
+            body,
+            control: control.retain(),
             header: None,
+            beside: false,
             header_text: String::new(),
             required: false,
             error: None,
@@ -42,7 +52,17 @@ impl Field {
 
     /// Writes the header of `node`'s field when `text` or `required`
     /// changed.
-    fn set_header(&mut self, node: NodeId, mtm: MainThreadMarker, text: &str, required: bool) {
+    ///
+    /// `side_width` is the header column's width inside a form. It takes effect
+    /// when the header is made, so a field keeps its layout after that.
+    fn set_header(
+        &mut self,
+        node: NodeId,
+        mtm: MainThreadMarker,
+        side_width: Option<f64>,
+        text: &str,
+        required: bool,
+    ) {
         if self.header.is_some() && self.header_text == text && self.required == required {
             return;
         }
@@ -50,28 +70,77 @@ impl Field {
         self.header_text.clear();
         self.header_text.push_str(text);
         self.required = required;
-        let shown = if required {
-            format!("{text} *")
-        } else {
-            text.to_owned()
+        if self.header.is_none() {
+            self.beside = side_width.is_some();
+        }
+        // A Mac form labels its fields "Name:" and marks no required field.
+        let shown = match (self.beside, required) {
+            (true, _) => format!("{text}:"),
+            (false, true) => format!("{text} *"),
+            (false, false) => text.to_owned(),
         };
-        let header = self.header.get_or_insert_with(|| {
-            let header = NSTextField::labelWithString(&NSString::new(), mtm);
-            self.stack.insertArrangedSubview_atIndex(&header, 0);
-            stretch(&self.stack, &header);
-            header
-        });
+        let header = match &self.header {
+            Some(header) => header,
+            None => {
+                let header = NSTextField::labelWithString(&NSString::new(), mtm);
+                self.stack.insertArrangedSubview_atIndex(&header, 0);
+                match side_width {
+                    Some(width) => self.beside(&header, width),
+                    None => stretch(&self.stack, &header),
+                }
+                self.header.insert(header)
+            }
+        };
         header.setStringValue(&NSString::from_str(&shown));
+    }
+
+    /// Lays the field out as a form row: `header`, `width` points wide and
+    /// right-aligned, sits on the control's first baseline, beside `body`.
+    fn beside(&self, header: &NSTextField, width: f64) {
+        let stack = &self.stack;
+        stack.setOrientation(NSUserInterfaceLayoutOrientation::Horizontal);
+        // The constraints below place both rows across the stack.
+        stack.setAlignment(NSLayoutAttribute::NotAnAttribute);
+        stack.setSpacing(8.0);
+        header.setAlignment(NSTextAlignment::Right);
+        for constraint in [
+            header.widthAnchor().constraintEqualToConstant(width),
+            header
+                .firstBaselineAnchor()
+                .constraintEqualToAnchor(&self.control.firstBaselineAnchor()),
+            header
+                .topAnchor()
+                .constraintGreaterThanOrEqualToAnchor(&stack.topAnchor()),
+            self.body
+                .topAnchor()
+                .constraintEqualToAnchor(&stack.topAnchor()),
+            self.body
+                .bottomAnchor()
+                .constraintEqualToAnchor(&stack.bottomAnchor()),
+        ] {
+            constraint.setActive(true);
+        }
     }
 
     fn error_line(&mut self, mtm: MainThreadMarker) -> &mut ErrorLine {
         self.error.get_or_insert_with(|| {
-            let line = ErrorLine::new(mtm);
-            self.stack.addArrangedSubview(&line.row);
-            stretch(&self.stack, &line.row);
+            let line = ErrorLine::new(mtm, false);
+            self.body.addArrangedSubview(&line.row);
+            stretch(&self.body, &line.row);
             line
         })
     }
+}
+
+/// A vertical stack whose rows start at its leading edge.
+fn vertical(mtm: MainThreadMarker) -> Retained<NSStackView> {
+    let stack = NSStackView::new(mtm);
+    stack.setOrientation(NSUserInterfaceLayoutOrientation::Vertical);
+    // `Leading` pins each row's leading edge; `stretch` adds the trailing
+    // one, since the `Width` alignment does not fill the stack.
+    stack.setAlignment(NSLayoutAttribute::Leading);
+    stack.setSpacing(4.0);
+    stack
 }
 
 /// Pins `row`'s trailing edge to `stack`'s, so the row fills the field.
@@ -84,18 +153,20 @@ fn stretch(stack: &NSStackView, row: &NSView) {
 /// The line under a field: an error with its icon in red, or else the hint
 /// in the secondary color. Its height is reserved from its first use, so a
 /// later error never moves the controls below.
-struct ErrorLine {
-    row: Retained<NSStackView>,
+pub(crate) struct ErrorLine {
+    pub(crate) row: Retained<NSStackView>,
     icon: Retained<NSImageView>,
     text: Retained<NSTextField>,
     /// The error shown; [`None`] while the field is fine.
-    message: Option<String>,
+    pub(crate) message: Option<String>,
     /// The caption shown while there is no error; empty for none.
     hint: String,
 }
 
 impl ErrorLine {
-    fn new(mtm: MainThreadMarker) -> Self {
+    /// `wrap` lets a long message wrap onto more lines, for a line that
+    /// sits under the whole form.
+    pub(crate) fn new(mtm: MainThreadMarker, wrap: bool) -> Self {
         let symbol = NSImage::imageWithSystemSymbolName_accessibilityDescription(
             &NSString::from_str("exclamationmark.circle"),
             Some(&NSString::from_str("Error")),
@@ -105,6 +176,17 @@ impl ErrorLine {
         icon.setContentTintColor(Some(&NSColor::systemRedColor()));
         let text = NSTextField::labelWithString(&NSString::new(), mtm);
         text.setFont(Some(&NSFont::systemFontOfSize(11.0)));
+        if wrap {
+            text.setLineBreakMode(NSLineBreakMode::ByWordWrapping);
+            text.setUsesSingleLineMode(false);
+            text.setMaximumNumberOfLines(0);
+            // Without this the label asks for its one-line width and widens
+            // its container.
+            text.setContentCompressionResistancePriority_forOrientation(
+                1.0,
+                NSLayoutConstraintOrientation::Horizontal,
+            );
+        }
         let row = NSStackView::new(mtm);
         row.setOrientation(NSUserInterfaceLayoutOrientation::Horizontal);
         row.setSpacing(4.0);
@@ -113,6 +195,11 @@ impl ErrorLine {
         row.heightAnchor()
             .constraintGreaterThanOrEqualToConstant(16.0)
             .setActive(true);
+        if wrap {
+            // The line takes the room its row leaves, such as the space left
+            // of a form's buttons.
+            row.setHuggingPriority_forOrientation(1.0, NSLayoutConstraintOrientation::Horizontal);
+        }
         let line = ErrorLine {
             row,
             icon,
@@ -124,7 +211,7 @@ impl ErrorLine {
         line
     }
 
-    fn render(&self) {
+    pub(crate) fn render(&self) {
         let (text, color) = match &self.message {
             Some(message) => (message.as_str(), NSColor::systemRedColor()),
             None => (self.hint.as_str(), NSColor::secondaryLabelColor()),
@@ -168,22 +255,24 @@ impl Response<'_> {
         FieldHandle(self.node)
     }
 
-    /// Writes the text shown above a field.
+    /// Writes the text shown above a field, or beside it inside a
+    /// [`Ui::form`], where it reads "`text`:".
     ///
     /// Panics when the control is not a field.
     pub fn header(&mut self, text: &str) -> &mut Self {
-        let (mtm, node) = (self.ui.mtm, self.node);
+        let (mtm, node, side) = (self.ui.mtm, self.node, self.ui.form_header_width);
         let field = self.field_mut();
         let required = field.required;
-        field.set_header(node, mtm, text, required);
+        field.set_header(node, mtm, side, text, required);
         self
     }
 
-    /// Marks a field as required, which adds " *" to its header.
+    /// Marks a field as required, which adds " *" to its header outside a
+    /// [`Ui::form`].
     ///
     /// Panics when the control is not a field.
     pub fn required(&mut self, on: bool) -> &mut Self {
-        let (mtm, node) = (self.ui.mtm, self.node);
+        let (mtm, node, side) = (self.ui.mtm, self.node, self.ui.form_header_width);
         let field = self.field_mut();
         if field.required == on {
             return self;
@@ -191,7 +280,7 @@ impl Response<'_> {
         // `set_header` reads the text from an argument, so the field's own
         // copy moves out; `set_header` writes it back.
         let text = std::mem::take(&mut field.header_text);
-        field.set_header(node, mtm, &text, on);
+        field.set_header(node, mtm, side, &text, on);
         self
     }
 

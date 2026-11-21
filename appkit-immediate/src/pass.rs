@@ -5,7 +5,9 @@ use crate::{
     children::{Edit, edits},
     events::{EventKind, Events},
     tree::{Key, NodeId, Tree, Visit},
-    widget::{Align, Control, Field, GridRule as Rule, Style, grid_constraints, grid_rules},
+    widget::{
+        Align, Control, Field, GridRule as Rule, Style, TextColor, grid_constraints, grid_rules,
+    },
 };
 use objc2::{MainThreadMarker, rc::Retained, runtime::ProtocolObject};
 use objc2_app_kit::{
@@ -35,6 +37,8 @@ pub struct Ui {
     /// Whether this pass called [`Response::invalidate`](crate::Response::invalidate),
     /// so the next pass writes by request and is no idle pass.
     pub(crate) invalidated: bool,
+    /// The header column's width while the body of a [`Ui::form`] runs.
+    pub(crate) form_header_width: Option<f64>,
 }
 
 impl Ui {
@@ -49,6 +53,7 @@ impl Ui {
             tables: Vec::new(),
             reloads: Vec::new(),
             invalidated: false,
+            form_header_width: None,
         }
     }
 
@@ -176,6 +181,27 @@ impl Ui {
         match &mut self.tree.node_mut(node).payload {
             Payload::Control(control) => control,
             _ => unreachable!("widget keys hold controls"),
+        }
+    }
+
+    /// Rebuilds the constraints across `stack` of each child of `node`
+    /// whose `cross_stale` is set. The stack places children along its axis
+    /// only; each child carries its own constraints across it, by its
+    /// `align`.
+    pub(crate) fn place_across(&mut self, node: NodeId, stack: &NSStackView) {
+        for position in 0..self.control(node).visual.len() {
+            let child = self.control(node).visual[position];
+            if self.control(child).cross_stale {
+                crate::write_check::record(child);
+                let child = self.control_mut(child);
+                child.cross_stale = false;
+                NSLayoutConstraint::deactivateConstraints(&NSArray::from_retained_slice(
+                    &std::mem::take(&mut child.cross),
+                ));
+                let cross = cross_constraints(stack, &child.view, child.align);
+                NSLayoutConstraint::activateConstraints(&NSArray::from_retained_slice(&cross));
+                child.cross = cross;
+            }
         }
     }
 
@@ -381,24 +407,7 @@ impl Ui {
                         }
                     }
                 }
-                // The stack places children along its axis only; each child
-                // carries its own constraints across it, by its `align`.
-                for position in 0..self.control(node).visual.len() {
-                    let child = self.control(node).visual[position];
-                    if self.control(child).cross_stale {
-                        crate::write_check::record(child);
-                        let child = self.control_mut(child);
-                        child.cross_stale = false;
-                        NSLayoutConstraint::deactivateConstraints(&NSArray::from_retained_slice(
-                            &std::mem::take(&mut child.cross),
-                        ));
-                        let cross = cross_constraints(&stack, &child.view, child.align);
-                        NSLayoutConstraint::activateConstraints(&NSArray::from_retained_slice(
-                            &cross,
-                        ));
-                        child.cross = cross;
-                    }
-                }
+                self.place_across(node, &stack);
             }
         }
     }
@@ -472,6 +481,7 @@ pub(crate) struct ControlNode {
     pub(crate) enabled: Option<bool>,
     pub(crate) style: Option<Style>,
     pub(crate) padding: Option<[f64; 4]>,
+    pub(crate) text_color: Option<TextColor>,
     /// The header and error line of a form field.
     pub(crate) field: Option<Box<Field>>,
 }
@@ -498,6 +508,7 @@ impl ControlNode {
             enabled: None,
             style: None,
             padding: None,
+            text_color: None,
             field: None,
         })
     }
@@ -575,7 +586,8 @@ fn cross_constraints(
             }
         }};
     }
-    if stack.orientation() == NSUserInterfaceLayoutOrientation::Vertical {
+    let vertical = stack.orientation() == NSUserInterfaceLayoutOrientation::Vertical;
+    let mut constraints = if vertical {
         place!(
             leadingAnchor,
             trailingAnchor,
@@ -591,8 +603,24 @@ fn cross_constraints(
             insets.top,
             insets.bottom
         )
+    };
+    // A view that is not stretched is as small as its content allows. A
+    // view with no width of its own, such as a stack view, is otherwise
+    // free to grow and has an ambiguous layout.
+    if align != Align::Stretch {
+        let shrink = match vertical {
+            true => view.widthAnchor().constraintEqualToConstant(0.0),
+            false => view.heightAnchor().constraintEqualToConstant(0.0),
+        };
+        shrink.setPriority(SHRINK);
+        constraints.push(shrink);
     }
+    constraints
 }
+
+/// Weaker than every content hugging and compression resistance AppKit
+/// sets, so it only settles what nothing else decides.
+const SHRINK: f32 = 1.0;
 
 /// One open container during a pass.
 struct Frame {

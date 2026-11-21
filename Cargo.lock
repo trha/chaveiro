@@ -223,6 +223,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "chaveiro-appkit"
+version = "0.1.0"
+dependencies = [
+ "appkit-executor",
+ "appkit-immediate",
+ "block2",
+ "objc2",
+ "objc2-foundation",
+ "rand_core 0.6.4",
+ "serde",
+ "serde_json",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+ "uuid",
+ "vault-core",
+ "zeroize",
+ "zeroizing-alloc",
+]
+
+[[package]]
 name = "chaveiro-winui"
 version = "0.1.0"
 dependencies = [

@@ -66,6 +66,47 @@ impl Ui {
 }
 
 impl Ui {
+    /// A vertical stack of form rows, 8 points apart and with no padding.
+    /// Each field `body` declares shows its header beside it, in a column
+    /// `header_width` points wide, as "Name:" right-aligned on the field's
+    /// baseline.
+    pub fn form(
+        &mut self,
+        id: impl Hash,
+        header_width: f64,
+        body: impl FnOnce(&mut Ui),
+    ) -> Response<'_> {
+        let outer = self.form_header_width.replace(header_width);
+        let (node, _) = self.visit(id, ChildKind::Visual, |mtm| {
+            let stack = NSStackView::new(mtm);
+            stack.setOrientation(NSUserInterfaceLayoutOrientation::Vertical);
+            stack.setAlignment(NSLayoutAttribute::NotAnAttribute);
+            stack.setSpacing(8.0);
+            stack.setEdgeInsets(NSEdgeInsets {
+                top: 0.0,
+                left: 0.0,
+                bottom: 0.0,
+                right: 0.0,
+            });
+            ControlNode::payload(
+                Retained::clone(&stack).into_super(),
+                Control::Stack {
+                    stack,
+                    orientation: Some(Orientation::Vertical),
+                    spacing: 8.0,
+                },
+            )
+        });
+        // A form writes nothing after it is made, so an invalidate has
+        // nothing to redo.
+        self.control_mut(node).stale = false;
+        self.open(node);
+        body(self);
+        self.close();
+        self.form_header_width = outer;
+        Response { ui: self, node }
+    }
+
     /// A box `width` points wide, holding a vertical stack of the controls
     /// `body` declares, 8 points apart: the system's control background,
     /// a separator-colored border, 8-point corners and 24 points of

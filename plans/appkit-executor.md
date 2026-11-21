@@ -1,6 +1,6 @@
 # appkit-executor
 
-Status: Plan
+Status: Done (2026-11-21)
 
 Parent plans: `plans/appkit-immediate.md` (the runner and the main queue).
 Where they differ, this plan wins.
@@ -260,23 +260,25 @@ matches WinUI, where `close` is the only abort.
    than panic, because a panic inside a Foundation block aborts.
 3. Port `chaveiro-appkit/src/io/http.rs` and `io.rs` to tasks, and change
    `Message` and `update` in `main.rs`. Run `cargo build -p chaveiro-appkit`
-   and test 5.
-
-## Decisions to confirm
-
-- **Finish by task id, as WinUI does.** It keeps the two `Io` types alike.
-  The other choice is `SpawnHandle::is_finished` and a reap on each `run`,
-  which keeps `Message::Io(Input)` unchanged but leaves dead entries until
-  the next effect.
-- **`off_thread` does not wait for its job on drop.** This matches WinUI,
-  but a key derivation then runs unowned for up to a few seconds after
-  `close`. The stricter choice keeps a join counter that `Io::close` waits
-  on, which delays quit by up to one derivation.
-- **The main-thread check uses `objc2::MainThreadMarker`.** `objc2` is
-  already in every macOS build. `libc::pthread_main_np` avoids the
-  dependency.
+   and test 5. Done (2026-11-21): clippy is clean. The app was driven
+   with a temporary in-process script, because System Events and
+   `screencapture` see no windows from the agent session. A wrong password
+   against bitwarden.com shows the server's refusal. Cancel during the
+   request returns to the form, and closing the window during the request
+   quits with exit 0. `http::send` returns `impl Future + use<>` rather
+   than an `async fn`, so the request starts in `run` and the future borrows
+   no session and can be spawned. `Message::Io` carries `task:
+   Option<TaskId>`, because the Store and DeviceSecret answers have no
+   task.
 
 ## Settled
+
+- **Finish by task id, as WinUI does** (2026-11-21). The two `Io` types
+  stay alike.
+- **`off_thread` does not wait for its job on drop** (2026-11-21). This
+  matches WinUI. A key derivation may run unowned for a few seconds after
+  `close`, and its result drops on the pool thread.
+- **The main-thread check uses `objc2::MainThreadMarker`** (2026-11-21).
 
 - **`Completer` is not `Clone`** (2026-11-21). `complete` takes `&self`,
   which already fits a `Fn` block, and no caller needs two completers. The

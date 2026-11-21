@@ -8,7 +8,7 @@ metadata:
 `appkit-immediate` is the macOS counterpart of [[widgets-in-winui-immediate]],
 planned in `plans/appkit-immediate.md` (all 9 steps done 2026-11-21). The
 two crates share no code and may drift; the app crate is `chaveiro-appkit`
-(not started). Widget and option names follow AppKit classes.
+(login screen built 2026-11-21). Widget and option names follow AppKit classes.
 
 Measured on macOS 27, each one easy to get wrong again:
 
@@ -50,3 +50,18 @@ rows off screen are wrong.
 - AppKit still calls setters while the main thread exits, after
   thread-locals are destroyed: use `try_with` in any hook.
 - `labelWithString` calls `setStringValue:` itself.
+
+## Learned while building chaveiro-appkit (2026-11-21)
+
+- A stack view with `Align::End` (or Start or Center) had an ambiguous
+  width and grew to fill its parent. Raising the stack's own hugging made
+  it worse, because the buttons inside stretched. `cross_constraints` now
+  adds a size-0 constraint at priority 1 for any child that is not stretched.
+- `Response::padding` called after a stack's body used to mark the children
+  stale, so the idle rerun rebuilt their constraints and the write check
+  panicked. It now rebuilds them at once through `Ui::place_across`.
+- From the Claude Code session, System Events sees 0 windows and
+  `screencapture` fails, so `tools/smoke.sh` cannot run there. To check
+  layout, render the content view in the app with
+  `cacheDisplayInRect:toBitmapImageRep:` from `App::update`, never from
+  `view`, where the layout writes trip the idle check.

@@ -28,7 +28,7 @@ impl Ui {
                     button,
                     label: String::new(),
                     // A new button has no key equivalent and no spinner.
-                    default: Some(false),
+                    key: Some(""),
                     spinner: None,
                     busy: Some(false),
                 },
@@ -51,7 +51,7 @@ impl Ui {
         let Control::Button {
             button,
             label: written,
-            default,
+            key,
             busy,
             ..
         } = &mut control.control
@@ -61,7 +61,7 @@ impl Ui {
         // The options read no `stale`, so an invalidate forgets what they
         // wrote, and their next call writes again.
         if stale {
-            *default = None;
+            *key = None;
             *busy = None;
         }
         if must_write(node, stale, written.as_str(), label) {
@@ -85,16 +85,24 @@ impl ButtonResponse<'_> {
     /// Makes the button the window's default button: AppKit draws it in the
     /// accent color, and Return presses it.
     pub fn default_button(&mut self, on: bool) -> &mut Self {
+        self.key_equivalent(if on { "\r" } else { "" })
+    }
+
+    /// Makes Escape press the button, for a Cancel
+    /// button.
+    pub fn cancel_button(&mut self, on: bool) -> &mut Self {
+        self.key_equivalent(if on { "\u{1b}" } else { "" })
+    }
+
+    #[track_caller]
+    fn key_equivalent(&mut self, declared: &'static str) -> &mut Self {
         let control = self.0.ui.control_mut(self.0.node);
-        let Control::Button {
-            button, default, ..
-        } = &mut control.control
-        else {
+        let Control::Button { button, key, .. } = &mut control.control else {
             unreachable!("button keys hold buttons")
         };
-        if must_write(self.0.node, false, default, &Some(on)) {
-            button.setKeyEquivalent(&NSString::from_str(if on { "\r" } else { "" }));
-            *default = Some(on);
+        if must_write(self.0.node, false, key, &Some(declared)) {
+            button.setKeyEquivalent(&NSString::from_str(declared));
+            *key = Some(declared);
         }
         self
     }
