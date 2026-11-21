@@ -1,0 +1,16 @@
+[package]
+name = "winui-executor"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Runs !Send futures on the WinUI dispatcher of the current thread"
+
+[dependencies]
+windows-core = "0.100.0"
+
+[dev-dependencies]
+windows-future = "0.100.0"
+winui-immediate = { path = "../winui-immediate" }
+
+[build-dependencies]
+windows-bindgen = "0.100.0"

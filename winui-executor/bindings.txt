@@ -1,0 +1,3 @@
+Microsoft.UI.Dispatching.DispatcherQueue::{GetForCurrentThread, TryEnqueue}
+Microsoft.UI.Dispatching.IDispatcherQueueStatics::GetForCurrentThread
+Microsoft.UI.Dispatching.DispatcherQueueHandler
