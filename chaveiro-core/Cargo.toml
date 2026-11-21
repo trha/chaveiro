@@ -12,6 +12,7 @@ base64 = "0.22"
 cbc = { version = "0.1", features = ["alloc", "block-padding"] }
 hkdf = "0.12"
 hmac = "0.12"
+icu_normalizer = "2"
 p256 = { version = "0.13", default-features = false, features = ["alloc", "ecdsa", "pkcs8"] }
 pbkdf2 = { version = "0.12", default-features = false, features = ["hmac"] }
 rand_core = "0.6"

@@ -171,6 +171,7 @@ mod tests {
                         kind,
                         name: SecretString::default(),
                         subtitle: SecretString::default(),
+                        uris: Vec::new(),
                         folder_id: (folder != 0).then(|| Uuid::from_u128(folder)),
                         organization_id: None,
                         favorite,

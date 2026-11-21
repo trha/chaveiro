@@ -6,4 +6,5 @@ pub mod crypto;
 pub mod filter;
 pub mod login_form;
 pub mod proto;
+pub mod search;
 pub mod vault;

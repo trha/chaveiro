@@ -250,12 +250,15 @@ pub struct CipherSummary {
     /// The login username, card brand and last digits, identity name or SSH
     /// key fingerprint. Empty when there is none.
     pub subtitle: SecretString,
+    /// A login's website addresses, in its order, for search. Empty for
+    /// other types.
+    pub uris: Vec<SecretString>,
     pub folder_id: Option<Uuid>,
     pub organization_id: Option<Uuid>,
     pub favorite: bool,
     pub deleted: bool,
-    /// False when a key or field failed; `name` and `subtitle` are then
-    /// empty.
+    /// False when a key or field failed; `name`, `subtitle` and `uris`
+    /// are then empty.
     pub readable: bool,
 }
 
@@ -265,15 +268,26 @@ impl CipherSummary {
         let decrypted = keys.cipher_key(cipher).and_then(|key| {
             let name = decrypt_text(&cipher.name, &key)?;
             let subtitle = subtitle(cipher, &key)?;
-            Ok((name, subtitle))
+            let uris = match CipherKind::from(cipher.kind) {
+                CipherKind::Login => cipher
+                    .login
+                    .iter()
+                    .flat_map(|login| &login.uris)
+                    .filter_map(|uri| uri.uri.as_ref())
+                    .map(|uri| decrypt_text(uri, &key))
+                    .collect::<Result<_, _>>()?,
+                _ => Vec::new(),
+            };
+            Ok((name, subtitle, uris))
         });
         let readable = decrypted.is_ok();
-        let (name, subtitle) = decrypted.unwrap_or_default();
+        let (name, subtitle, uris) = decrypted.unwrap_or_default();
         Self {
             id: cipher.id,
             kind: CipherKind::from(cipher.kind),
             name,
             subtitle,
+            uris,
             folder_id: cipher.folder_id,
             organization_id: cipher.organization_id,
             favorite: cipher.favorite,
