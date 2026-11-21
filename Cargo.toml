@@ -21,3 +21,9 @@ opt-level = 3
 
 [profile.dev.package.sha2]
 opt-level = 3
+
+# `pbkdf2_hmac::<Sha256>` is generic, so it compiles at vault-core's opt level,
+# and the three entries above do not reach it. Unoptimized, one derive takes
+# 3 s; at level 3 it takes 80 ms.
+[profile.dev.package.vault-core]
+opt-level = 3

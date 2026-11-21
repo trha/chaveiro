@@ -590,6 +590,9 @@ fn a_failed_email_send_shows_its_error_and_stops_sending() {
 }
 
 proptest! {
+    // Each case logs in, which derives 600,000 PBKDF2 rounds.
+    #![proptest_config(ProptestConfig { cases: 8, ..ProptestConfig::default() })]
+
     /// Email is sent at once exactly when it is the only method. With any
     /// other method offered, the core waits for the user's pick.
     #[test]
