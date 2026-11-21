@@ -48,7 +48,7 @@ impl App for Navigation {
             ui.stack("window", Orientation::Vertical, 0.0, |ui| {
                 let back = self.screen == Screen::Second;
                 if ui
-                    .title_bar("title bar", "Navigator", back)?
+                    .title_bar("title bar", "Navigator", back, |_| Ok(()))?
                     .back_requested()?
                     && back
                 {

@@ -25,6 +25,9 @@ pub struct Ui {
     /// Item sources to set after the pass, with no borrow held, because
     /// WinUI may ask for rows inside `SetItemsSource`.
     pub(crate) sources: Vec<(ItemsRepeater, usize)>,
+    /// Rows to scroll into view after the sources are set, for the same
+    /// reason: WinUI builds a row that does not exist yet.
+    pub(crate) reveals: Vec<(ItemsRepeater, usize)>,
     /// Set by [`request_pass`](Self::request_pass) during a pass.
     pass_requested: bool,
 }
@@ -38,6 +41,7 @@ impl Ui {
             scratch: String::new(),
             lists: Vec::new(),
             sources: Vec::new(),
+            reveals: Vec::new(),
             pass_requested: false,
         }
     }
@@ -255,6 +259,27 @@ impl Ui {
                         view.SetContent(&self.control(declared_content).element)
                     }
                     None => view.SetContent(None::<&IInspectable>),
+                }
+            }
+            Payload::Control(ControlNode {
+                control:
+                    Control::TitleBar {
+                        title_bar, content, ..
+                    },
+                ..
+            }) => {
+                assert!(declared.len() <= 1, "a title bar declares one control");
+                let declared_content = declared.first().copied();
+                if *content == declared_content {
+                    return Ok(());
+                }
+                *content = declared_content;
+                let title_bar = title_bar.clone();
+                match declared_content {
+                    Some(declared_content) => {
+                        title_bar.SetContent(&self.control(declared_content).element)
+                    }
+                    None => title_bar.SetContent(None::<&UIElement>),
                 }
             }
             Payload::Control(ControlNode {

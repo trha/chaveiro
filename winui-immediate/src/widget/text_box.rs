@@ -3,6 +3,7 @@ use crate::{
     bindings::TextBox,
     events::{EventKind, Key},
     pass::{ChildKind, ControlNode, Ui},
+    tree::NodeId,
 };
 use std::{
     hash::Hash,
@@ -37,9 +38,28 @@ impl Ui {
                 },
             ))
         })?;
+        let changed = self.bind_text(node, placeholder, value)?;
+        Ok(TextBoxResponse {
+            response: Response { ui: self, node },
+            changed,
+        })
+    }
+
+    /// Syncs the text box of `node`, a [`Control::TextBox`] or
+    /// [`Control::SearchBox`], with `placeholder` and `value`, as
+    /// [`Ui::text_box`] describes. Returns whether the user changed the
+    /// text.
+    pub(crate) fn bind_text(
+        &mut self,
+        node: NodeId,
+        placeholder: &str,
+        value: &mut String,
+    ) -> Result<bool> {
         let control = self.control_mut(node);
-        let Control::TextBox { text_box, .. } = &control.control else {
-            unreachable!("text box keys hold text boxes")
+        let (Control::TextBox { text_box, .. } | Control::SearchBox { text_box, .. }) =
+            &control.control
+        else {
+            unreachable!("text keys hold text boxes")
         };
         let text_box = text_box.clone();
         let mut subscribed = control.subscribed;
@@ -60,14 +80,20 @@ impl Ui {
         let control = self.control_mut(node);
         control.subscribed = subscribed;
         let stale = std::mem::take(&mut control.stale);
-        let Control::TextBox {
+        let (Control::TextBox {
             text,
             placeholder: written_placeholder,
             composing,
             ..
-        } = &mut control.control
+        }
+        | Control::SearchBox {
+            text,
+            placeholder: written_placeholder,
+            composing,
+            ..
+        }) = &mut control.control
         else {
-            unreachable!("text box keys hold text boxes")
+            unreachable!("text keys hold text boxes")
         };
         if let Some(kind) = composition {
             *composing = kind == EventKind::CompositionStarted;
@@ -90,10 +116,7 @@ impl Ui {
             text_box.SetText(value)?;
             text.clone_from(value);
         }
-        Ok(TextBoxResponse {
-            response: Response { ui: self, node },
-            changed,
-        })
+        Ok(changed)
     }
 }
 

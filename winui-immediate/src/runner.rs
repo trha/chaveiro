@@ -188,14 +188,21 @@ impl<A: App> Runner<A> {
         Ok(false)
     }
 
-    /// Gives each list whose rows changed its new item source. Runs with no
-    /// borrow held, because WinUI may ask for rows inside `SetItemsSource`.
+    /// Gives each list whose rows changed its new item source, then scrolls
+    /// the rows asked for into view. Runs with no borrow held, because
+    /// WinUI may ask for rows inside both.
     fn set_sources(&self) -> Result<()> {
         let mut sources = std::mem::take(&mut self.ui.borrow_mut().sources);
         for (repeater, len) in sources.drain(..) {
             repeater.SetItemsSource(&index_source(len).cast::<IInspectable>()?)?;
         }
         self.ui.borrow_mut().sources = sources;
+        let mut reveals = std::mem::take(&mut self.ui.borrow_mut().reveals);
+        for (repeater, index) in reveals.drain(..) {
+            let index = i32::try_from(index).expect("a list has fewer than 2^31 rows");
+            repeater.GetOrCreateElement(index)?.StartBringIntoView()?;
+        }
+        self.ui.borrow_mut().reveals = reveals;
         Ok(())
     }
 

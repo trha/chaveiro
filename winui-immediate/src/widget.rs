@@ -39,6 +39,7 @@ mod navigator;
 mod password_box;
 mod pressable;
 mod scroll;
+mod search_box;
 mod settings_card;
 mod stack;
 mod text_box;
@@ -63,6 +64,7 @@ pub(crate) use navigator::Navigator;
 pub use navigator::{SLIDE_DURATION, Slide};
 pub use password_box::{PasswordField, PasswordHandle};
 pub use pressable::PressableResponse;
+pub use search_box::SearchBoxResponse;
 pub use settings_card::{ContentAlignment, SettingsCard, SettingsCardResponse};
 pub use stack::Orientation;
 pub use text_box::TextBoxResponse;
@@ -267,13 +269,13 @@ impl Response<'_> {
     }
 
     /// Moves keyboard focus to the control, as code does, so no focus
-    /// rectangle shows.
-    pub fn focus(&mut self) -> Result<&mut Self> {
+    /// rectangle shows. Returns whether the control took focus; one not
+    /// yet in the window cannot, so call it again on a later pass.
+    pub fn focus(&mut self) -> Result<bool> {
         self.ui
             .control(self.node)
             .element
-            .Focus(FocusState::Programmatic)?;
-        Ok(self)
+            .Focus(FocusState::Programmatic)
     }
 
     /// Whether keyboard focus left the control since the last pass. The
@@ -622,6 +624,19 @@ pub(crate) enum Control {
         /// Whether an IME composition is open; app writes wait until it ends.
         composing: bool,
     },
+    /// From [`Ui::search_box`].
+    /// Its fields mean what [`Control::TextBox`]'s do, so the two share
+    /// one binding; the node's element is a grid around `text_box`.
+    SearchBox {
+        text_box: TextBox,
+        /// The control's text as last written or read back.
+        text: String,
+        placeholder: String,
+        /// Whether an IME composition is open; app writes wait until it ends.
+        composing: bool,
+        /// The letter of the Ctrl shortcut, as last set.
+        shortcut: Option<char>,
+    },
     PasswordBox {
         password_box: PasswordBox,
         placeholder: String,
@@ -657,6 +672,8 @@ pub(crate) enum Control {
         title: String,
         /// Whether the back button shows, as last written.
         back: Option<bool>,
+        /// The control in the bar's middle, from the body.
+        content: Option<NodeId>,
     },
     FontIcon {
         icon: FontIcon,

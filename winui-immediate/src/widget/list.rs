@@ -118,6 +118,18 @@ impl Ui {
             .expect("an item keeps one state type")
     }
 
+    /// Scrolls `list` so row `index` shows, after this pass; WinUI builds
+    /// the row first if it does not exist. An index past the end does
+    /// nothing.
+    pub fn bring_into_view(&mut self, list: ListId, index: usize) {
+        let Control::List { repeater, data } = &self.control(list.0).control else {
+            unreachable!("list ids name lists")
+        };
+        if index < data.len {
+            self.reveals.push((repeater.clone(), index));
+        }
+    }
+
     /// Drops the [`list_state`](Self::list_state) of every item for which
     /// `keep` returns false. Call it when items leave the app's data;
     /// otherwise their state stays until the list is dropped.

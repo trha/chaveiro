@@ -160,7 +160,7 @@ impl App for Chaveiro {
                 let mut main = ui.window("main", "Chaveiro", |ui| {
                     ui.stack("window", Orientation::Vertical, 0.0, |ui| {
                         let mut title_bar =
-                            ui.title_bar("title bar", "Chaveiro", route.has_back())?;
+                            ui.title_bar("title bar", "Chaveiro", route.has_back(), |_| Ok(()))?;
                         if title_bar.back_requested()? && route.has_back() {
                             next = Some(Next::Back);
                         }

@@ -82,7 +82,7 @@ impl App for Preview {
         let revision = (self.extra as u64) << 32 | self.count as u64;
         let mut main = ui.window("main", "winui-immediate navigation view", |ui| {
             ui.grid("window", &[Length::Auto, Length::Star(1.0)], |ui| {
-                ui.title_bar("title bar", "Navigation view", false)?;
+                ui.title_bar("title bar", "Navigation view", false, |_| Ok(()))?;
                 let push = |pane: &mut Vec<_>| pane.extend_from_slice(&entries);
                 picked = ui
                     .navigation_view("nav", revision, push, &mut self.selected, |ui, selected| {

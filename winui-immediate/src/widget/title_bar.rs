@@ -8,10 +8,12 @@ use std::hash::Hash;
 use windows_core::{Interface, Result};
 
 impl Ui {
-    /// The window's title bar: `title`, and a back button while `back` is
-    /// true. It becomes the window's drag area, with the back button left
-    /// clickable, so use it in a window made [`compact`] or
-    /// [`extends_into_title_bar`], and declare at most one per window.
+    /// The window's title bar: `title`, a back button while `back` is true,
+    /// and in its middle the one control `body` declares, if any, such as a
+    /// search box. It becomes the window's drag area, with the back button
+    /// and the middle control left clickable, so use it in a window made
+    /// [`compact`] or [`extends_into_title_bar`], and declare at most one
+    /// per window.
     ///
     /// [`compact`]: crate::WindowResponse::compact
     /// [`extends_into_title_bar`]: crate::WindowResponse::extends_into_title_bar
@@ -20,6 +22,7 @@ impl Ui {
         id: impl Hash,
         title: &str,
         back: bool,
+        body: impl FnOnce(&mut Ui) -> Result<()>,
     ) -> Result<TitleBarResponse<'_>> {
         let (node, _) = self.visit(id, ChildKind::Visual, || {
             let title_bar = TitleBar::new()?;
@@ -32,6 +35,7 @@ impl Ui {
                     title_bar,
                     title: String::new(),
                     back: None,
+                    content: None,
                 },
             ))
         })?;
@@ -41,6 +45,7 @@ impl Ui {
             title_bar,
             title: written_title,
             back: written_back,
+            ..
         } = &mut control.control
         else {
             unreachable!("title bar keys hold title bars")
@@ -56,6 +61,9 @@ impl Ui {
             *written_back = Some(back);
         }
         let element = control.element.clone();
+        self.open(node);
+        body(self)?;
+        self.close()?;
         let window = self.enclosing_window();
         let Payload::Window(window) = &mut self.tree.node_mut(window).payload else {
             unreachable!("enclosing_window returns a window")

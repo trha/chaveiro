@@ -24,8 +24,9 @@ pub use widget::{
     CodeDigits, ComboBoxResponse, ContentAlignment, FieldHandle, FontIconResponse,
     IconButtonResponse, LabelResponse, Length, LinkResponse, ListId, NavigationEntry,
     NavigationSelection, NavigationViewResponse, Orientation, Overflow, PasswordField,
-    PasswordHandle, PressableResponse, Response, RowFn, SLIDE_DURATION, SettingsCard,
-    SettingsCardResponse, Severity, Slide, TextBoxResponse, TitleBarResponse, WindowResponse,
+    PasswordHandle, PressableResponse, Response, RowFn, SLIDE_DURATION, SearchBoxResponse,
+    SettingsCard, SettingsCardResponse, Severity, Slide, TextBoxResponse, TitleBarResponse,
+    WindowResponse,
 };
 /// The type [Ui::take_password] returns.
 pub use zeroize::Zeroizing;

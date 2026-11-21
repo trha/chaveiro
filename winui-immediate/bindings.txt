@@ -199,3 +199,9 @@ Microsoft.UI.Xaml.Controls.ICommandBarElement
 Microsoft.UI.Xaml.Controls.AppBarButton::{put_Label, put_Icon}
 Microsoft.UI.Xaml.Controls.Control::{put_BorderThickness}
 Microsoft.UI.Xaml.Controls.IAppBarButtonFactory::CreateInstance
+Microsoft.UI.Xaml.Controls.TitleBar::{put_Content}
+Microsoft.UI.Xaml.Input.KeyboardAccelerator::{put_Key, put_Modifiers, add_Invoked, remove_Invoked}
+Microsoft.UI.Xaml.Input.IKeyboardAcceleratorFactory::CreateInstance
+Microsoft.UI.Xaml.Input.KeyboardAcceleratorInvokedEventArgs::{put_Handled}
+Microsoft.UI.Xaml.UIElement::{get_KeyboardAccelerators, put_KeyboardAcceleratorPlacementMode, StartBringIntoView}
+Microsoft.UI.Xaml.Controls.ItemsRepeater::{GetOrCreateElement}

@@ -91,7 +91,7 @@ impl App for Preview {
         let mut asked = None;
         let mut main = ui.window("main", "Chaveiro preview", |ui| {
             ui.stack("window", Orientation::Vertical, 0.0, |ui| {
-                ui.title_bar("title bar", "Chaveiro", true)?;
+                ui.title_bar("title bar", "Chaveiro", true, |_| Ok(()))?;
                 let state = SecondFactorState {
                     challenge: &self.challenge,
                     email: "fixture-user@example.com",
