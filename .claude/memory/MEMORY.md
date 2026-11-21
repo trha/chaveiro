@@ -13,4 +13,5 @@
 - [Theme transitions](theme-transitions.md) — measured: transitions play only on new identity; removed children stay drawn up to ~450 ms; two-way push works via Translation + Vector3Transition
 - [Widgets in winui-immediate](widgets-in-winui-immediate.md) — new WinUI controls go in winui-immediate; Ui::native is a last resort
 - [appkit-immediate](appkit-immediate.md) — measured AppKit facts behind the crate: pools, caret, stack alignment, table reuse, hugging; smoke script notes
+- [Platform target](platform-target.md) — on Windows: chaveiro-winui and the "Chaveiro" design system artifact, never the macOS canvas
 - [Core errors are enums](core-errors-are-enums.md) — chaveiro-core returns enums; UI crates own the text
