@@ -6,7 +6,7 @@ use crate::{
 };
 use objc2::{AnyThread, rc::Retained, sel};
 use objc2_app_kit::{
-    NSButton, NSCellImagePosition, NSControlSize, NSImage, NSProgressIndicator,
+    NSButton, NSCellImagePosition, NSColor, NSControlSize, NSImage, NSProgressIndicator,
     NSProgressIndicatorStyle,
 };
 use objc2_foundation::{NSSize, NSString};
@@ -18,10 +18,25 @@ use std::{
 impl Ui {
     /// A push button showing `label`.
     pub fn button(&mut self, id: impl Hash, label: &str) -> ButtonResponse<'_> {
+        self.any_button(id, label, false)
+    }
+
+    /// A button drawn as a link: `label` in the link color, with no
+    /// border. It takes every option of [`Ui::button`].
+    pub fn link(&mut self, id: impl Hash, label: &str) -> ButtonResponse<'_> {
+        self.any_button(id, label, true)
+    }
+
+    fn any_button(&mut self, id: impl Hash, label: &str, link: bool) -> ButtonResponse<'_> {
         let (node, visit) = self.visit(id, ChildKind::Visual, |mtm| {
             let button = unsafe {
                 NSButton::buttonWithTitle_target_action(&NSString::new(), None, None, mtm)
             };
+            // Fixed for life, so the id of a link must not be a button's.
+            if link {
+                button.setBordered(false);
+                button.setContentTintColor(Some(&NSColor::linkColor()));
+            }
             ControlNode::payload(
                 Retained::clone(&button).into_super().into_super(),
                 Control::Button {

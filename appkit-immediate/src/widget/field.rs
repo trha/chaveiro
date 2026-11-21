@@ -1,6 +1,6 @@
 //! The header and the error line around a form field.
 
-use super::Response;
+use super::{Control, Response};
 use crate::{pass::Ui, tree::NodeId};
 use objc2::{MainThreadMarker, Message, rc::Retained};
 use objc2_app_kit::{
@@ -74,7 +74,10 @@ impl Field {
             self.beside = side_width.is_some();
         }
         // A Mac form labels its fields "Name:" and marks no required field.
+        // An empty header in a form keeps the column, such as for a check
+        // box under the fields.
         let shown = match (self.beside, required) {
+            (true, _) if text.is_empty() => String::new(),
             (true, _) => format!("{text}:"),
             (false, true) => format!("{text} *"),
             (false, false) => text.to_owned(),
@@ -316,23 +319,38 @@ impl Response<'_> {
         self
     }
 
-    /// Moves the keyboard focus to the control. Does nothing while the
-    /// control is not in a window.
+    /// Moves the keyboard focus to the control when the pass ends, so it
+    /// works on a control this pass made. For code boxes it focuses the
+    /// first empty box, or the last box when all are full.
+    ///
+    /// The last call in a pass wins. Nothing moves when the pass dropped
+    /// the control or it is not in a window.
     pub fn make_first_responder(&mut self) -> &mut Self {
-        let control = self.ui.control(self.node);
-        let view = control
-            .control
-            .as_control()
-            .map_or_else(|| control.view.clone(), Retained::into_super);
-        if let Some(window) = view.window() {
-            window.makeFirstResponder(Some(&view));
-        }
+        self.ui.focus = Some(self.node);
         self
     }
 
     fn field_mut(&mut self) -> &mut Field {
         self.ui.control_mut(self.node).field.as_deref_mut().expect(
-            "only text fields, secure text fields, pop-up buttons and combo boxes are fields",
+            "only text fields, secure text fields, pop-up buttons, combo boxes, check boxes and code boxes are fields",
         )
+    }
+}
+
+impl crate::pass::ControlNode {
+    /// The view that takes the keyboard focus for this control.
+    pub(crate) fn focus_view(&self) -> Retained<NSView> {
+        match &self.control {
+            Control::CodeBoxes { boxes, digits } => {
+                let index = digits
+                    .iter()
+                    .position(Option::is_none)
+                    .unwrap_or(boxes.len() - 1);
+                Retained::clone(&boxes[index]).into_super().into_super()
+            }
+            other => other
+                .as_control()
+                .map_or_else(|| self.view.clone(), Retained::into_super),
+        }
     }
 }

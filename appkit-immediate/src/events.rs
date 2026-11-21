@@ -3,13 +3,16 @@
 use crate::tree::{NodeId, Tree};
 use ahash::AHashMap;
 use objc2::{
-    DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, rc::Retained,
-    runtime::AnyObject,
+    DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send,
+    rc::Retained,
+    runtime::{AnyObject, Sel},
+    sel,
 };
 use objc2_app_kit::{
     NSApplication, NSApplicationDelegate, NSApplicationTerminateReply, NSComboBoxDelegate,
-    NSControlTextEditingDelegate, NSTableColumn, NSTableRowView, NSTableView,
-    NSTableViewDataSource, NSTableViewDelegate, NSTextFieldDelegate, NSView, NSWindowDelegate,
+    NSControl, NSControlTextEditingDelegate, NSTableColumn, NSTableRowView, NSTableView,
+    NSTableViewDataSource, NSTableViewDelegate, NSTextFieldDelegate, NSTextView, NSView,
+    NSWindowDelegate,
 };
 use objc2_foundation::{NSInteger, NSNotification, NSObject, NSObjectProtocol};
 use std::{cell::RefCell, collections::hash_map::Entry, rc::Rc};
@@ -57,6 +60,16 @@ impl Events {
     /// Whether `kind` happened on `node` since the last pass.
     pub(crate) fn happened(&self, node: NodeId, kind: EventKind) -> bool {
         self.current.contains(&(node, kind))
+    }
+
+    /// The editing commands `node` took since the last pass, in order.
+    pub(crate) fn commands(&self, node: NodeId) -> impl Iterator<Item = Command> {
+        self.current
+            .iter()
+            .filter_map(move |(from, kind)| match kind {
+                EventKind::Command(command) if *from == node => Some(*command),
+                _ => None,
+            })
     }
 
     /// The shared target, to set as a control's target or a window's
@@ -110,8 +123,50 @@ pub(crate) enum EventKind {
     TextDidChange,
     /// A text field lost the keyboard focus after editing.
     DidEndEditing,
+    /// A text field's editor took a command, such as an arrow key. Only
+    /// the commands of [`Command`] are reported.
+    Command(Command),
     ShouldClose,
     ShouldTerminate,
+}
+
+/// An editing command a text field's editor ran, by the key that sends it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Command {
+    Left,
+    Right,
+    /// Home, or Command-Left.
+    Home,
+    /// End, or Command-Right.
+    End,
+    Backspace,
+}
+
+impl Command {
+    fn from_selector(selector: Sel) -> Option<Self> {
+        Some(match selector {
+            selector if selector == sel!(moveLeft:) => Command::Left,
+            selector if selector == sel!(moveRight:) => Command::Right,
+            selector
+                if selector == sel!(moveToBeginningOfLine:)
+                    || selector == sel!(moveToLeftEndOfLine:)
+                    || selector == sel!(moveToBeginningOfDocument:)
+                    || selector == sel!(scrollToBeginningOfDocument:) =>
+            {
+                Command::Home
+            }
+            selector
+                if selector == sel!(moveToEndOfLine:)
+                    || selector == sel!(moveToRightEndOfLine:)
+                    || selector == sel!(moveToEndOfDocument:)
+                    || selector == sel!(scrollToEndOfDocument:) =>
+            {
+                Command::End
+            }
+            selector if selector == sel!(deleteBackward:) => Command::Backspace,
+            _ => return None,
+        })
+    }
 }
 
 pub(crate) struct TargetIvars {
@@ -166,6 +221,16 @@ define_class!(
             if let Some(field) = notification.object() {
                 self.push(&field, EventKind::DidEndEditing);
             }
+        }
+
+        /// Reports the commands of [`Command`] and lets the editor run
+        /// every command as usual.
+        #[unsafe(method(control:textView:doCommandBySelector:))]
+        fn do_command(&self, control: &NSControl, _editor: &NSTextView, selector: Sel) -> bool {
+            if let Some(command) = Command::from_selector(selector) {
+                self.push(control, EventKind::Command(command));
+            }
+            false
         }
     }
 

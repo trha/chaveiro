@@ -1,7 +1,7 @@
 //! Chaveiro for macOS: an appkit-immediate [`App`] over the chaveiro-core
 //! [`Core`], with [`Io`] running the core's effects.
 //!
-//! Only the login screen is built. The other screens show a placeholder
+//! The login and two-step login screens are built. The other screens show a placeholder
 //! with the one action that leads back to login.
 
 // The program is macOS only. On other targets it is empty, so it checks but
@@ -11,6 +11,7 @@
 
 mod io;
 mod login;
+mod second_factor;
 mod wipe;
 
 use appkit_immediate::{App, Handle, Orientation, Style, Ui, run};
@@ -18,6 +19,7 @@ use chaveiro_core::core::{Config, Core, Input, LoginError, Screen, StoredAccount
 use io::{Io, Settings, TaskId};
 use login::{LoginAction, LoginForm, LoginState};
 use rand_core::OsRng;
+use second_factor::{SecondFactorAction, SecondFactorForm, SecondFactorState};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// Logs go to stderr, filtered by `CHAVEIRO_LOG` (such as `debug`),
@@ -49,6 +51,9 @@ struct Chaveiro {
     login: LoginForm,
     /// The last pass showed the core's login screen.
     showed_login: bool,
+    /// The two-step form while its screen shows; a new challenge starts a
+    /// new one.
+    second_factor: Option<SecondFactorForm>,
 }
 
 /// Lock after this long with no user action.
@@ -121,6 +126,7 @@ impl Chaveiro {
             settings_error,
             login: LoginForm::new(),
             showed_login: false,
+            second_factor: None,
         };
         // The store keeps nothing yet, so every start is a first one.
         app.handle_input(Input::Started {
@@ -150,6 +156,31 @@ impl Chaveiro {
     /// The window for the current screen.
     fn body(&mut self, ui: &mut Ui) -> Option<Next> {
         let screen = self.core.screen();
+        if let Screen::SecondFactor {
+            email,
+            challenge,
+            error,
+            busy,
+            sending,
+        } = &screen
+        {
+            self.showed_login = false;
+            let form = self.second_factor.get_or_insert_default();
+            let message = error.map(login_error);
+            let state = SecondFactorState {
+                challenge,
+                email,
+                error: message.as_deref(),
+                refused: second_factor::refused(*error),
+                busy: *busy,
+                sending: *sending,
+            };
+            return match second_factor::view(ui, form, state)? {
+                SecondFactorAction::User(action) => Some(Next::User(action)),
+                SecondFactorAction::Back => Some(Next::User(UserAction::Cancel)),
+            };
+        }
+        self.second_factor = None;
         let (busy, error) = match &screen {
             Screen::Starting => (false, None),
             Screen::Login {
@@ -197,7 +228,6 @@ impl Chaveiro {
 /// login.
 fn placeholder(ui: &mut Ui, screen: &Screen<'_>) -> Option<Next> {
     let (name, button, action) = match screen {
-        Screen::SecondFactor { .. } => ("Two-step login", "Cancel", UserAction::Cancel),
         Screen::Locked { .. } => ("Unlock", "Log Out", UserAction::Logout),
         _ => ("The vault", "Lock", UserAction::Lock),
     };

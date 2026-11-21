@@ -17,6 +17,8 @@ use objc2_foundation::{NSDictionary, NSEdgeInsets};
 mod alert_line;
 mod button;
 mod cache;
+mod check_box;
+mod code_boxes;
 mod combo_box;
 mod field;
 mod grid;
@@ -30,6 +32,8 @@ mod text_field;
 mod window;
 
 pub use button::ButtonResponse;
+pub use check_box::CheckBoxResponse;
+pub use code_boxes::{CODE_LENGTH, CodeBoxesResponse, CodeDigits};
 pub use combo_box::ComboBoxResponse;
 pub use field::FieldHandle;
 pub(crate) use field::{ErrorLine, Field};
@@ -72,17 +76,25 @@ impl Response<'_> {
         control.text_color = None;
     }
 
-    /// Sets whether the user can interact with the control.
+    /// Sets whether the user can interact with the control. Code boxes
+    /// take it for every box.
     ///
-    /// Panics when the view is not an `NSControl`, such as a stack view.
+    /// Panics on any other view that is not an `NSControl`, such as a stack
+    /// view.
     pub fn enabled(&mut self, on: bool) -> &mut Self {
         let control = self.ui.control_mut(self.node);
         if must_write(self.node, false, &control.enabled, &Some(on)) {
-            control
-                .control
-                .as_control()
-                .expect("only controls can be disabled")
-                .setEnabled(on);
+            match &control.control {
+                Control::CodeBoxes { boxes, .. } => {
+                    for field in boxes {
+                        field.setEnabled(on);
+                    }
+                }
+                other => other
+                    .as_control()
+                    .expect("only controls can be disabled")
+                    .setEnabled(on),
+            }
             control.enabled = Some(on);
         }
         self
@@ -306,9 +318,24 @@ pub(crate) enum Control {
         field: Retained<NSSecureTextField>,
         placeholder: String,
     },
+    CheckBox {
+        button: Retained<NSButton>,
+        label: String,
+        /// The state last written or read back.
+        on: bool,
+    },
+    /// The node's view is the field stack around a row of the boxes.
+    CodeBoxes {
+        boxes: [Retained<NSTextField>; CODE_LENGTH],
+        /// The digits last written or read back.
+        digits: CodeDigits,
+    },
     PopUpButton {
         button: Retained<NSPopUpButton>,
         items: Vec<String>,
+        /// Which items the user can pick, as last written; empty after the
+        /// items change, until written again.
+        enabled_items: Vec<bool>,
         /// The index last written or read back; -1 for no selection.
         selected: isize,
     },
@@ -346,7 +373,9 @@ impl Control {
             Control::Label { field, .. } | Control::TextField { field, .. } => {
                 Retained::clone(field).into_super()
             }
-            Control::Button { button, .. } => Retained::clone(button).into_super(),
+            Control::Button { button, .. } | Control::CheckBox { button, .. } => {
+                Retained::clone(button).into_super()
+            }
             Control::SecureTextField { field, .. } => {
                 Retained::clone(field).into_super().into_super()
             }
@@ -357,6 +386,7 @@ impl Control {
                 Retained::clone(combo_box).into_super().into_super()
             }
             Control::Stack { .. }
+            | Control::CodeBoxes { .. }
             | Control::AlertLine { .. }
             | Control::Grid { .. }
             | Control::BoxView { .. }
@@ -373,6 +403,8 @@ impl Control {
             Control::Grid { .. } => "grid",
             Control::Label { .. } => "label",
             Control::Button { .. } => "button",
+            Control::CheckBox { .. } => "check_box",
+            Control::CodeBoxes { .. } => "code_boxes",
             Control::TextField { .. } => "text_field",
             Control::SecureTextField { .. } => "secure_text_field",
             Control::PopUpButton { .. } => "pop_up_button",
@@ -385,24 +417,30 @@ impl Control {
         }
     }
 
-    /// The object this control registered with [`Events`](crate::events::Events),
+    /// The objects this control registered with [`Events`](crate::events::Events),
     /// to forget when the node is dropped.
-    pub(crate) fn sender(&self) -> Option<&AnyObject> {
-        Some(match self {
-            Control::Button { button, .. } => button,
-            Control::TextField { field, .. } => field,
-            Control::SecureTextField { field, .. } => field,
-            Control::PopUpButton { button, .. } => button,
-            Control::ComboBox { combo_box, .. } => combo_box,
-            Control::TableView { table, .. } => table,
+    pub(crate) fn senders(&self) -> impl Iterator<Item = &AnyObject> {
+        // One sender, or the code boxes' fields.
+        let (one, boxes): (Option<&AnyObject>, &[Retained<NSTextField>]) = match self {
+            Control::Button { button, .. } | Control::CheckBox { button, .. } => {
+                (Some(button), &[])
+            }
+            Control::TextField { field, .. } => (Some(field), &[]),
+            Control::SecureTextField { field, .. } => (Some(field), &[]),
+            Control::PopUpButton { button, .. } => (Some(button), &[]),
+            Control::ComboBox { combo_box, .. } => (Some(combo_box), &[]),
+            Control::TableView { table, .. } => (Some(table), &[]),
+            Control::CodeBoxes { boxes, .. } => (None, boxes),
             Control::Stack { .. }
             | Control::Grid { .. }
             | Control::Label { .. }
             | Control::AlertLine { .. }
             | Control::BoxView { .. }
             | Control::Native
-            | Control::Row { .. } => return None,
-        })
+            | Control::Row { .. } => (None, &[]),
+        };
+        one.into_iter()
+            .chain(boxes.iter().map(|field| field.as_ref()))
     }
 
     /// The stack that arranges this control's children, for a stack view

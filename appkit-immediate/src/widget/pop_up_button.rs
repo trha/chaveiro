@@ -37,6 +37,7 @@ impl Ui {
                 Control::PopUpButton {
                     button,
                     items: Vec::new(),
+                    enabled_items: Vec::new(),
                     selected: -1,
                 },
             )
@@ -59,6 +60,7 @@ impl Ui {
             button,
             items: written_items,
             selected: written_selected,
+            enabled_items,
         } = &mut control.control
         else {
             unreachable!("pop-up button keys hold pop-up buttons")
@@ -76,8 +78,10 @@ impl Ui {
             button.addItemsWithTitles(&NSArray::from_retained_slice(&titles));
             written_items.clear();
             written_items.extend(items.iter().map(|item| (*item).to_owned()));
-            // New items reset the selection, so it is written again below.
+            // New items reset the selection and enable every item, so both
+            // are written again.
             *written_selected = -2;
+            enabled_items.clear();
         }
         let mut changed = false;
         if picked {
@@ -116,6 +120,41 @@ impl PopUpButtonResponse<'_> {
     /// then holds its index.
     pub fn changed(&self) -> bool {
         self.changed
+    }
+
+    /// Sets which items the user can pick, one flag per item in order. A
+    /// disabled item still shows, greyed out. Missing flags count as
+    /// enabled.
+    pub fn enabled_items(&mut self, enabled: &[bool]) -> &mut Self {
+        let Response { ui, node } = &mut self.response;
+        let node = *node;
+        let control = ui.control_mut(node);
+        let Control::PopUpButton {
+            button,
+            items,
+            enabled_items,
+            ..
+        } = &mut control.control
+        else {
+            unreachable!("pop-up button keys hold pop-up buttons")
+        };
+        // Missing flags count as enabled.
+        let declared = (0..items.len()).map(|index| enabled.get(index).copied().unwrap_or(true));
+        let same = enabled_items.iter().copied().eq(declared.clone());
+        if !must_write(node, false, &same, &true) {
+            return self;
+        }
+        // AppKit would enable every item again on each menu update.
+        button.setAutoenablesItems(false);
+        enabled_items.clear();
+        for (index, on) in declared.enumerate() {
+            let item = button
+                .itemAtIndex(index as isize)
+                .expect("the button holds every written item");
+            item.setEnabled(on);
+            enabled_items.push(on);
+        }
+        self
     }
 }
 

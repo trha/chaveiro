@@ -39,6 +39,11 @@ pub struct Ui {
     pub(crate) invalidated: bool,
     /// The header column's width while the body of a [`Ui::form`] runs.
     pub(crate) form_header_width: Option<f64>,
+    /// The control to focus when the pass ends, once new views are in
+    /// their windows.
+    pub(crate) focus: Option<NodeId>,
+    /// Schedules a pass.
+    wake: Rc<dyn Fn()>,
 }
 
 impl Ui {
@@ -46,7 +51,7 @@ impl Ui {
         Ui {
             tree: Tree::new(Payload::Root),
             frames: Vec::new(),
-            events: Events::new(mtm, wake),
+            events: Events::new(mtm, Rc::clone(&wake)),
             mtm,
             scratch: String::new(),
             new_windows: Vec::new(),
@@ -54,6 +59,8 @@ impl Ui {
             reloads: Vec::new(),
             invalidated: false,
             form_header_width: None,
+            focus: None,
+            wake,
         }
     }
 
@@ -69,11 +76,24 @@ impl Ui {
         consumed
     }
 
-    /// Ends a pass, closing every window it did not declare. Returns the
-    /// number of open windows.
+    /// Ends a pass, closing every window it did not declare, and moves the
+    /// focus a [`make_first_responder`](crate::Response::make_first_responder)
+    /// asked for. Returns the number of open windows.
     pub(crate) fn end(&mut self) -> usize {
         self.close();
         self.show_new_windows();
+        // Focus waits until here, because a view made this pass joins its
+        // window only when its container closes, and `makeFirstResponder`
+        // ignores a view with no window. A control the pass dropped takes
+        // no focus.
+        if let Some(node) = self.focus.take()
+            && let Some(Payload::Control(control)) = self.tree.get(node).map(|node| &node.payload)
+        {
+            let view = control.focus_view();
+            if let Some(window) = view.window() {
+                window.makeFirstResponder(Some(&view));
+            }
+        }
         self.tree.children(self.tree.root()).len()
     }
 
@@ -92,6 +112,12 @@ impl Ui {
         self.tree
             .close(root, &mut nothing, |payload| release(events, payload));
         self.tree.recycle_list(nothing);
+    }
+
+    /// Runs another pass after this one, for a view that declared controls
+    /// before a later control changed the state they show.
+    pub fn request_pass(&self) {
+        (self.wake)();
     }
 
     /// Whether the user asked to quit (Cmd+Q, the Dock, logout) since the
@@ -645,7 +671,7 @@ fn release(events: &Events, payload: Payload) {
         }
         // A field registers its control, which is not the node's view.
         Payload::Control(control) => {
-            if let Some(sender) = control.control.sender() {
+            for sender in control.control.senders() {
                 events.forget(sender);
             }
         }

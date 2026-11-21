@@ -205,6 +205,7 @@ fn hooks() -> Vec<(&'static AnyClass, Sel, Argument)> {
         (NSButton::class(), sel!(setKeyEquivalent:), Object),
         (NSButton::class(), sel!(setImage:), Object),
         (NSButton::class(), sel!(setImagePosition:), Unsigned),
+        (NSButton::class(), sel!(setState:), Integer),
         (NSPopUpButton::class(), sel!(removeAllItems), Nothing),
         (NSPopUpButton::class(), sel!(addItemsWithTitles:), Object),
         (NSPopUpButton::class(), sel!(selectItemAtIndex:), Integer),
