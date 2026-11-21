@@ -9,6 +9,9 @@ fn server_url_errors_name_the_fix() {
     assert_eq!(server_url("  ").err(), Some("Enter your server’s address"));
     for wrong in [
         "http://vault.example.com",
+        "http://localhost.example.com",
+        "http://10.0.0.1",
+        "ftp://localhost",
         "ftp://vault.example.com",
         "vault.example.com",
     ] {
@@ -29,6 +32,19 @@ fn server_url_errors_name_the_fix() {
         server_url(" https://vault.example.com ").map(String::from),
         Ok("https://vault.example.com/".to_owned())
     );
+}
+
+#[test]
+fn http_is_allowed_on_loopback_only() {
+    for loopback in [
+        "http://localhost:8000",
+        "http://LOCALHOST",
+        "http://127.0.0.1:8000",
+        "http://127.8.9.10",
+        "http://[::1]:8000",
+    ] {
+        assert!(server_url(loopback).is_ok(), "{loopback}");
+    }
 }
 
 #[test]

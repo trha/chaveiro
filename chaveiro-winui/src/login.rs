@@ -86,7 +86,8 @@ impl LoginForm {
 }
 
 /// The Server box's text as a server URL, or the error to show under it. A
-/// cloud name means that cloud.
+/// cloud name means that cloud. Only a loopback host may use `http://`,
+/// because its traffic stays on this machine.
 fn server_url(text: &str) -> std::result::Result<Url, &'static str> {
     let text = text.trim();
     if text.is_empty() {
@@ -96,6 +97,7 @@ fn server_url(text: &str) -> std::result::Result<Url, &'static str> {
         return Ok(Url::parse(url).expect("a fixed, valid URL"));
     }
     match Url::parse(text) {
+        Ok(url) if url.scheme() == "http" && is_loopback(&url) => Ok(url),
         Ok(url) if url.scheme() != "https" => Err("Use an address that starts with https://"),
         // A dot in the host catches a half-typed name such as `https://vault`.
         Ok(url) if url.host_str().is_some_and(|host| host.contains('.')) => Ok(url),
@@ -103,6 +105,16 @@ fn server_url(text: &str) -> std::result::Result<Url, &'static str> {
             Err("Use an address that starts with https://")
         }
         _ => Err("Enter an address like https://vault.example.com"),
+    }
+}
+
+/// `localhost`, or an address in 127.0.0.0/8 or `::1`.
+fn is_loopback(url: &Url) -> bool {
+    match url.host() {
+        Some(url::Host::Domain(name)) => name.eq_ignore_ascii_case("localhost"),
+        Some(url::Host::Ipv4(address)) => address.is_loopback(),
+        Some(url::Host::Ipv6(address)) => address.is_loopback(),
+        None => false,
     }
 }
 

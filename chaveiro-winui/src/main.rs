@@ -69,7 +69,8 @@ struct Chaveiro {
     login: LoginForm,
     /// A login asked for before the core booted.
     pending: Option<Submit>,
-    /// The last pass showed the core's login screen.
+    /// The last pass showed the core's login screen, so the prefill runs only
+    /// when the login screen first appears.
     showed_login: bool,
     second_factor: SecondFactorForm,
     /// The screen the last pass showed.
@@ -83,6 +84,8 @@ struct Chaveiro {
 enum Next {
     Submit(Submit),
     User(UserAction),
+    /// The title bar's back button.
+    Back,
 }
 
 /// Lock after this long with no user action.
@@ -110,10 +113,13 @@ impl App for Chaveiro {
         if !self.open {
             return Ok(());
         }
-        let route = Route::of(self.core.as_ref().map(Core::screen).as_ref());
+        let route = Route::of(self.core.as_ref().map(Core::screen).as_ref(), |challenge| {
+            self.second_factor.choosing(challenge)
+        });
         if route != self.route {
-            // Each visit to the second factor starts with an empty form.
-            if route == Route::SecondFactor {
+            // Each visit to the second factor starts with an empty form,
+            // which its code screen and method list share.
+            if self.route.has_back() && !route.has_back() {
                 self.second_factor = SecondFactorForm::default();
             }
             self.slide = self.route.slide_to(route);
@@ -124,7 +130,7 @@ impl App for Chaveiro {
             ui.stack("window", Orientation::Vertical, 0.0, |ui| {
                 let mut title_bar = ui.title_bar("title bar", "Chaveiro", route.has_back())?;
                 if title_bar.back_requested()? && route.has_back() {
-                    next = Some(Next::User(UserAction::Cancel));
+                    next = Some(Next::Back);
                 }
                 ui.navigator("screens", route, self.slide, |ui| {
                     if let Some(asked) = self.body(ui)? {
@@ -154,6 +160,17 @@ impl App for Chaveiro {
                 self.advance();
             }
             Some(Next::User(action)) => self.handle_input(Input::User(action)),
+            Some(Next::Back) => {
+                // The code screen goes back to the method list when there
+                // is one; otherwise back leaves the login.
+                let to_list = match self.core.as_ref().map(Core::screen) {
+                    Some(Screen::SecondFactor { challenge, .. }) => self.second_factor.back(challenge),
+                    _ => false,
+                };
+                if !to_list {
+                    self.handle_input(Input::User(UserAction::Cancel));
+                }
+            }
         }
         Ok(())
     }

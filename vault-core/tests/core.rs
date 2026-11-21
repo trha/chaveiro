@@ -511,10 +511,10 @@ fn a_new_device_code_in_flight_keeps_the_screen_busy() {
 }
 
 #[test]
-fn email_as_the_default_method_sends_the_code_at_once() {
+fn email_as_the_only_method_sends_the_code_at_once() {
     let mut harness = Harness::logged_out();
     let token = harness.login_until_token();
-    let effects = harness.answer(token, 400, &two_factor_required(&[1, 3]));
+    let effects = harness.answer(token, 400, &two_factor_required(&[1]));
     let (send, _) = one_http(&effects);
     assert_eq!(urls(&effects), [SEND_EMAIL]);
     assert!(matches!(
@@ -590,10 +590,10 @@ fn a_failed_email_send_shows_its_error_and_stops_sending() {
 }
 
 proptest! {
-    /// Email is sent at once exactly when it is the default method: offered,
-    /// with no authenticator, which the screen prefers.
+    /// Email is sent at once exactly when it is the only method. With any
+    /// other method offered, the core waits for the user's pick.
     #[test]
-    fn the_code_is_emailed_at_once_only_when_email_is_the_default(
+    fn the_code_is_emailed_at_once_only_when_email_is_the_one_method(
         providers in prop::collection::btree_set(0u8..8, 1..5)
     ) {
         let providers: Vec<u8> = providers.into_iter().collect();
@@ -601,8 +601,24 @@ proptest! {
         let token = harness.login_until_token();
         let effects = harness.answer(token, 400, &two_factor_required(&providers));
         let emailed = urls(&effects) == [SEND_EMAIL];
-        let expected = providers.contains(&1) && !providers.contains(&0);
+        let expected = providers.len() == 1 && providers.contains(&1);
         prop_assert_eq!(emailed, expected);
+    }
+
+    /// With several methods, picking email sends one code.
+    #[test]
+    fn picking_email_sends_the_code(
+        others in prop::collection::btree_set(0u8..8, 1..4)
+    ) {
+        let mut providers: Vec<u8> = others.into_iter().filter(|provider| *provider != 1).collect();
+        prop_assume!(!providers.is_empty());
+        providers.push(1);
+        providers.sort_unstable();
+        let mut harness = Harness::logged_out();
+        let token = harness.login_until_token();
+        harness.answer(token, 400, &two_factor_required(&providers));
+        let effects = harness.user(UserAction::SendEmailCode);
+        prop_assert_eq!(urls(&effects), [SEND_EMAIL]);
     }
 
     #[test]

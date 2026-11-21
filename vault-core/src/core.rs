@@ -1012,12 +1012,13 @@ impl Core {
                                     masked_email,
                                 };
                                 let error = answer_error(answer);
-                                // The first time this login reaches email as
-                                // the default method, ask for the code, so it
-                                // is on its way when the screen opens. A wrong
+                                // With more than one method the code waits for
+                                // the user's pick. With email alone there is no pick,
+                                // so the first time this login gets here, ask for the code
+                                // so it is on its way when the screen opens. A wrong
                                 // code returns here with an error and sends
                                 // nothing.
-                                if error.is_none() && challenge.default_provider() == Some(1) {
+                                if error.is_none() && challenge.only_email() {
                                     let id = requests.start(Purpose::SendEmailCode);
                                     effects.push(Effect::Http {
                                         id,
@@ -3007,6 +3008,11 @@ impl Challenge {
                 .find(|provider| providers.contains(provider)),
             Challenge::NewDevice => None,
         }
+    }
+
+    /// Email is the account's one method, so there is nothing to pick.
+    pub fn only_email(&self) -> bool {
+        matches!(self, Challenge::TwoFactor { providers, .. } if providers[..] == [1])
     }
 }
 
