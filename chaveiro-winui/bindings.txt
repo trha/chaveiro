@@ -1,0 +1,29 @@
+Windows.Foundation.Uri::{CreateUri}
+Windows.Foundation.IUriRuntimeClassFactory::CreateUri
+Windows.Web.Http.HttpClient::{SendRequestAsync}
+Windows.Web.Http.IHttpClientFactory::Create
+Windows.Web.Http.HttpRequestMessage::{get_Headers, put_Content}
+Windows.Web.Http.IHttpRequestMessageFactory::Create
+Windows.Web.Http.HttpMethod::{get_Get, get_Post, get_Put, get_Delete}
+Windows.Web.Http.IHttpMethodStatics
+Windows.Web.Http.HttpResponseMessage::{get_StatusCode, get_Content}
+Windows.Web.Http.HttpStatusCode
+Windows.Web.Http.IHttpContent::{get_Headers, ReadAsBufferAsync}
+Windows.Web.Http.HttpBufferContent::{}
+Windows.Web.Http.IHttpBufferContentFactory::CreateFromBuffer
+Windows.Web.Http.Headers.HttpRequestHeaderCollection::{TryAppendWithoutValidation}
+Windows.Web.Http.Headers.HttpContentHeaderCollection::{TryAppendWithoutValidation}
+Windows.Web.Http.Filters.HttpBaseProtocolFilter::{CreateInstance, get_CacheControl, put_AllowUI, put_CookieUsageBehavior}
+Windows.Web.Http.Filters.HttpCacheControl::{put_ReadBehavior, put_WriteBehavior}
+Windows.Web.Http.Filters.HttpCacheReadBehavior
+Windows.Web.Http.Filters.HttpCacheWriteBehavior
+Windows.Web.Http.Filters.IHttpFilter
+Windows.Security.Credentials.KeyCredentialManager::{IsSupportedAsync, RequestCreateForWindowAsync, OpenAsync}
+Windows.Security.Credentials.KeyCredentialRetrievalResult::{get_Credential, get_Status}
+Windows.Security.Credentials.KeyCredential::{RequestDeriveSharedSecretAsync}
+Windows.Security.Credentials.KeyCredentialOperationResult::{get_Result, get_Status}
+Windows.Security.Credentials.KeyCredentialStatus
+Windows.Security.Credentials.KeyCredentialCreationOption
+Windows.Security.Cryptography.CryptographicBuffer::{CreateFromByteArray, CopyToByteArray}
+Windows.UI.WindowId
+Windows.Web.Http.Filters.HttpCookieUsageBehavior

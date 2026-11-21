@@ -1,6 +1,12 @@
 [workspace]
 resolver = "3"
-members = ["spikes", "vault-core", "winui-immediate"]
+members = [
+  "chaveiro-winui",
+  "spikes",
+  "vault-core",
+  "winui-executor",
+  "winui-immediate",
+]
 
 # PBKDF2 with 600,000 rounds takes seconds unoptimized; the vault-core tests
 # derive the fixture account's key many times.

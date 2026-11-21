@@ -192,6 +192,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "chaveiro-winui"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "rand_core 0.6.4",
+ "serde",
+ "serde_json",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+ "uuid",
+ "vault-core",
+ "windows-bindgen",
+ "windows-collections",
+ "windows-core",
+ "windows-future",
+ "windows-reference",
+ "windows-strings",
+ "windows-sys",
+ "winui-executor",
+ "winui-immediate",
+ "zeroize",
+ "zeroizing-alloc",
+]
+
+[[package]]
 name = "cipher"
 version = "0.4.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -468,6 +494,17 @@ dependencies = [
  "typenum",
  "version_check",
  "zeroize",
+]
+
+[[package]]
+name = "getrandom"
+version = "0.2.17"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ff2abc00be7fca6ebc474524697ae276ad847ad0a6b3faa4bcb027e9a4614ad0"
+dependencies = [
+ "cfg-if",
+ "libc",
+ "wasi",
 ]
 
 [[package]]
@@ -998,6 +1035,9 @@ name = "rand_core"
 version = "0.6.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ec0be4795e2f6a28069bec0b5ff3e2ac9bafc99e6a9a7dc3547996c5c816922c"
+dependencies = [
+ "getrandom 0.2.17",
+]
 
 [[package]]
 name = "rand_core"
@@ -1238,6 +1278,7 @@ dependencies = [
  "windows-sys",
  "windows-threading",
  "windows-time",
+ "winui-immediate",
 ]
 
 [[package]]
@@ -1518,6 +1559,7 @@ version = "1.29.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3c14b15dffa2f4bd712103e857140aa04a4f2ff6e955c77d7eb8e53ee02a3b64"
 dependencies = [
+ "getrandom 0.4.3",
  "js-sys",
  "serde_core",
  "wasm-bindgen",
@@ -1571,6 +1613,12 @@ checksum = "09ac3b126d3914f9849036f826e054cbabdc8519970b8998ddaf3b5bd3c65f11"
 dependencies = [
  "libc",
 ]
+
+[[package]]
+name = "wasi"
+version = "0.11.1+wasi-snapshot-preview1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ccf3ec651a847eb01de73ccad15eb7d99f80485de043efb2f370cd654f4ea44b"
 
 [[package]]
 name = "wasip2"
@@ -1806,6 +1854,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "winui-executor"
+version = "0.1.0"
+dependencies = [
+ "windows-bindgen",
+ "windows-core",
+ "windows-future",
+ "winui-immediate",
+]
+
+[[package]]
 name = "winui-immediate"
 version = "0.1.0"
 dependencies = [
@@ -1817,6 +1875,7 @@ dependencies = [
  "windows-collections",
  "windows-core",
  "windows-reference",
+ "zeroize",
 ]
 
 [[package]]
@@ -1914,6 +1973,12 @@ dependencies = [
  "quote",
  "syn 2.0.119",
 ]
+
+[[package]]
+name = "zeroizing-alloc"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1b5564c80013ee0edbfc4e4d7d66d1a5a44b8adaffbf0103069f51ce0efc5031"
 
 [[package]]
 name = "zerotrie"
