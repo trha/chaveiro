@@ -36,6 +36,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "appkit-executor"
+version = "0.1.0"
+dependencies = [
+ "dispatch2",
+ "objc2",
+ "proptest",
+]
+
+[[package]]
 name = "appkit-immediate"
 version = "0.1.0"
 dependencies = [
