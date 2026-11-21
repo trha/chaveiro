@@ -8,7 +8,7 @@ windows_core::imp::interface_hierarchy!(
 );
 windows_core::imp::required_hierarchy!(AddDeleteThemeTransition, Transition, DependencyObject);
 impl AddDeleteThemeTransition {
-    pub(crate) fn new() -> windows_core::Result<Self> {
+    pub fn new() -> windows_core::Result<Self> {
         Self::IActivationFactory(|f| f.ActivateInstance::<Self>())
     }
     fn IActivationFactory<
@@ -58,7 +58,7 @@ windows_core::imp::required_hierarchy!(
     DependencyObject
 );
 impl ContentPresenter {
-    pub(crate) fn new() -> windows_core::Result<Self> {
+    pub fn new() -> windows_core::Result<Self> {
         Self::IContentPresenterFactory(|this| unsafe {
             let mut result__ = core::mem::zeroed();
             (windows_core::Interface::vtable(this).CreateInstance)(
@@ -110,7 +110,7 @@ windows_core::imp::interface_hierarchy!(
 );
 windows_core::imp::required_hierarchy!(ContentThemeTransition, Transition, DependencyObject);
 impl ContentThemeTransition {
-    pub(crate) fn new() -> windows_core::Result<Self> {
+    pub fn new() -> windows_core::Result<Self> {
         Self::IActivationFactory(|f| f.ActivateInstance::<Self>())
     }
     fn IActivationFactory<
@@ -182,7 +182,7 @@ windows_core::imp::interface_hierarchy!(
 );
 windows_core::imp::required_hierarchy!(EntranceThemeTransition, Transition, DependencyObject);
 impl EntranceThemeTransition {
-    pub(crate) fn new() -> windows_core::Result<Self> {
+    pub fn new() -> windows_core::Result<Self> {
         Self::IActivationFactory(|f| f.ActivateInstance::<Self>())
     }
     fn IActivationFactory<
@@ -245,6 +245,79 @@ impl windows_core::RuntimeName for FrameworkElement {
 }
 unsafe impl Send for FrameworkElement {}
 unsafe impl Sync for FrameworkElement {}
+#[repr(transparent)]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Geometry(windows_core::IUnknown);
+windows_core::imp::interface_hierarchy!(
+    Geometry,
+    windows_core::IUnknown,
+    windows_core::IInspectable
+);
+windows_core::imp::required_hierarchy!(Geometry, DependencyObject);
+impl windows_core::RuntimeType for Geometry {
+    const SIGNATURE: windows_core::imp::ConstBuffer =
+        windows_core::imp::ConstBuffer::for_class::<Self, IGeometry>();
+}
+unsafe impl windows_core::Interface for Geometry {
+    type Vtable = <IGeometry as windows_core::Interface>::Vtable;
+    const IID: windows_core::GUID = <IGeometry as windows_core::Interface>::IID;
+}
+impl core::ops::Deref for Geometry {
+    type Target = IGeometry;
+    fn deref(&self) -> &Self::Target {
+        unsafe { core::mem::transmute(self) }
+    }
+}
+impl windows_core::RuntimeName for Geometry {
+    const NAME: &'static str = "Microsoft.UI.Xaml.Media.Geometry";
+}
+unsafe impl Send for Geometry {}
+unsafe impl Sync for Geometry {}
+#[repr(transparent)]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Grid(windows_core::IUnknown);
+windows_core::imp::interface_hierarchy!(Grid, windows_core::IUnknown, windows_core::IInspectable);
+windows_core::imp::required_hierarchy!(Grid, Panel, FrameworkElement, UIElement, DependencyObject);
+impl Grid {
+    pub fn new() -> windows_core::Result<Self> {
+        Self::IGridFactory(|this| unsafe {
+            let mut result__ = core::mem::zeroed();
+            (windows_core::Interface::vtable(this).CreateInstance)(
+                windows_core::Interface::as_raw(this),
+                core::ptr::null_mut(),
+                core::ptr::null_mut(),
+                &mut result__,
+            )
+            .and_then(|| windows_core::imp::Type::from_abi(result__))
+        })
+    }
+    fn IGridFactory<R, F: FnOnce(&IGridFactory) -> windows_core::Result<R>>(
+        callback: F,
+    ) -> windows_core::Result<R> {
+        static SHARED: windows_core::imp::FactoryCache<Grid, IGridFactory> =
+            windows_core::imp::FactoryCache::new();
+        SHARED.call(callback)
+    }
+}
+impl windows_core::RuntimeType for Grid {
+    const SIGNATURE: windows_core::imp::ConstBuffer =
+        windows_core::imp::ConstBuffer::for_class::<Self, IGrid>();
+}
+unsafe impl windows_core::Interface for Grid {
+    type Vtable = <IGrid as windows_core::Interface>::Vtable;
+    const IID: windows_core::GUID = <IGrid as windows_core::Interface>::IID;
+}
+impl core::ops::Deref for Grid {
+    type Target = IGrid;
+    fn deref(&self) -> &Self::Target {
+        unsafe { core::mem::transmute(self) }
+    }
+}
+impl windows_core::RuntimeName for Grid {
+    const NAME: &'static str = "Microsoft.UI.Xaml.Controls.Grid";
+}
+unsafe impl Send for Grid {}
+unsafe impl Sync for Grid {}
 windows_core::imp::define_interface!(
     IAddDeleteThemeTransition,
     IAddDeleteThemeTransition_Vtbl,
@@ -268,7 +341,7 @@ impl windows_core::RuntimeType for IContentPresenter {
         windows_core::imp::ConstBuffer::for_interface::<Self>();
 }
 impl IContentPresenter {
-    pub(crate) fn SetContent<P0>(&self, value: P0) -> windows_core::Result<()>
+    pub fn SetContent<P0>(&self, value: P0) -> windows_core::Result<()>
     where
         P0: windows_core::Param<windows_core::IInspectable>,
     {
@@ -280,7 +353,7 @@ impl IContentPresenter {
             .ok()
         }
     }
-    pub(crate) fn SetContentTransitions<P0>(&self, value: P0) -> windows_core::Result<()>
+    pub fn SetContentTransitions<P0>(&self, value: P0) -> windows_core::Result<()>
     where
         P0: windows_core::Param<TransitionCollection>,
     {
@@ -292,7 +365,7 @@ impl IContentPresenter {
             .ok()
         }
     }
-    pub(crate) fn SetFontSize(&self, value: f64) -> windows_core::Result<()> {
+    pub fn SetFontSize(&self, value: f64) -> windows_core::Result<()> {
         unsafe {
             (windows_core::Interface::vtable(self).SetFontSize)(
                 windows_core::Interface::as_raw(self),
@@ -352,7 +425,7 @@ impl windows_core::RuntimeType for IContentThemeTransition {
         windows_core::imp::ConstBuffer::for_interface::<Self>();
 }
 impl IContentThemeTransition {
-    pub(crate) fn SetHorizontalOffset(&self, value: f64) -> windows_core::Result<()> {
+    pub fn SetHorizontalOffset(&self, value: f64) -> windows_core::Result<()> {
         unsafe {
             (windows_core::Interface::vtable(self).SetHorizontalOffset)(
                 windows_core::Interface::as_raw(self),
@@ -404,9 +477,83 @@ impl windows_core::RuntimeType for IFrameworkElement {
     const SIGNATURE: windows_core::imp::ConstBuffer =
         windows_core::imp::ConstBuffer::for_interface::<Self>();
 }
+impl IFrameworkElement {
+    pub fn SetWidth(&self, value: f64) -> windows_core::Result<()> {
+        unsafe {
+            (windows_core::Interface::vtable(self).SetWidth)(
+                windows_core::Interface::as_raw(self),
+                value,
+            )
+            .ok()
+        }
+    }
+    pub fn SetHeight(&self, value: f64) -> windows_core::Result<()> {
+        unsafe {
+            (windows_core::Interface::vtable(self).SetHeight)(
+                windows_core::Interface::as_raw(self),
+                value,
+            )
+            .ok()
+        }
+    }
+}
 #[repr(C)]
 pub struct IFrameworkElement_Vtbl {
     pub base__: windows_core::IInspectable_Vtbl,
+    Triggers: usize,
+    Resources: usize,
+    SetResources: usize,
+    Tag: usize,
+    SetTag: usize,
+    Language: usize,
+    SetLanguage: usize,
+    ActualWidth: usize,
+    ActualHeight: usize,
+    Width: usize,
+    pub SetWidth: unsafe extern "system" fn(*mut core::ffi::c_void, f64) -> windows_core::HRESULT,
+    Height: usize,
+    pub SetHeight: unsafe extern "system" fn(*mut core::ffi::c_void, f64) -> windows_core::HRESULT,
+}
+windows_core::imp::define_interface!(
+    IGeometry,
+    IGeometry_Vtbl,
+    0xdc102dcc_3be2_5414_8599_94b6e76ef39b
+);
+impl windows_core::RuntimeType for IGeometry {
+    const SIGNATURE: windows_core::imp::ConstBuffer =
+        windows_core::imp::ConstBuffer::for_interface::<Self>();
+}
+#[repr(C)]
+pub struct IGeometry_Vtbl {
+    pub base__: windows_core::IInspectable_Vtbl,
+}
+windows_core::imp::define_interface!(IGrid, IGrid_Vtbl, 0xc4496219_9014_58a1_b4ad_c5044913a5bb);
+impl windows_core::RuntimeType for IGrid {
+    const SIGNATURE: windows_core::imp::ConstBuffer =
+        windows_core::imp::ConstBuffer::for_interface::<Self>();
+}
+#[repr(C)]
+pub struct IGrid_Vtbl {
+    pub base__: windows_core::IInspectable_Vtbl,
+}
+windows_core::imp::define_interface!(
+    IGridFactory,
+    IGridFactory_Vtbl,
+    0xb16bf561_fc6c_57c6_8ebc_0b06ce4513aa
+);
+impl windows_core::RuntimeType for IGridFactory {
+    const SIGNATURE: windows_core::imp::ConstBuffer =
+        windows_core::imp::ConstBuffer::for_interface::<Self>();
+}
+#[repr(C)]
+pub struct IGridFactory_Vtbl {
+    pub base__: windows_core::IInspectable_Vtbl,
+    pub CreateInstance: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut core::ffi::c_void,
+        *mut *mut core::ffi::c_void,
+        *mut *mut core::ffi::c_void,
+    ) -> windows_core::HRESULT,
 }
 windows_core::imp::define_interface!(IPanel, IPanel_Vtbl, 0x27a1b418_56f3_525e_b883_cefed905eed3);
 impl windows_core::RuntimeType for IPanel {
@@ -414,7 +561,17 @@ impl windows_core::RuntimeType for IPanel {
         windows_core::imp::ConstBuffer::for_interface::<Self>();
 }
 impl IPanel {
-    pub(crate) fn SetChildrenTransitions<P0>(&self, value: P0) -> windows_core::Result<()>
+    pub fn Children(&self) -> windows_core::Result<UIElementCollection> {
+        unsafe {
+            let mut result__ = core::mem::zeroed();
+            (windows_core::Interface::vtable(self).Children)(
+                windows_core::Interface::as_raw(self),
+                &mut result__,
+            )
+            .and_then(|| windows_core::imp::Type::from_abi(result__))
+        }
+    }
+    pub fn SetChildrenTransitions<P0>(&self, value: P0) -> windows_core::Result<()>
     where
         P0: windows_core::Param<TransitionCollection>,
     {
@@ -430,7 +587,10 @@ impl IPanel {
 #[repr(C)]
 pub struct IPanel_Vtbl {
     pub base__: windows_core::IInspectable_Vtbl,
-    Children: usize,
+    pub Children: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut *mut core::ffi::c_void,
+    ) -> windows_core::HRESULT,
     Background: usize,
     SetBackground: usize,
     IsItemsHost: usize,
@@ -439,6 +599,32 @@ pub struct IPanel_Vtbl {
         *mut core::ffi::c_void,
         *mut core::ffi::c_void,
     ) -> windows_core::HRESULT,
+}
+windows_core::imp::define_interface!(
+    IRectangleGeometry,
+    IRectangleGeometry_Vtbl,
+    0xb6143890_a5f5_54e0_ab42_d88bab451f04
+);
+impl windows_core::RuntimeType for IRectangleGeometry {
+    const SIGNATURE: windows_core::imp::ConstBuffer =
+        windows_core::imp::ConstBuffer::for_interface::<Self>();
+}
+impl IRectangleGeometry {
+    pub fn SetRect(&self, value: Rect) -> windows_core::Result<()> {
+        unsafe {
+            (windows_core::Interface::vtable(self).SetRect)(
+                windows_core::Interface::as_raw(self),
+                value,
+            )
+            .ok()
+        }
+    }
+}
+#[repr(C)]
+pub struct IRectangleGeometry_Vtbl {
+    pub base__: windows_core::IInspectable_Vtbl,
+    Rect: usize,
+    pub SetRect: unsafe extern "system" fn(*mut core::ffi::c_void, Rect) -> windows_core::HRESULT,
 }
 windows_core::imp::define_interface!(
     ITextBlock,
@@ -450,7 +636,7 @@ impl windows_core::RuntimeType for ITextBlock {
         windows_core::imp::ConstBuffer::for_interface::<Self>();
 }
 impl ITextBlock {
-    pub(crate) fn SetFontSize(&self, value: f64) -> windows_core::Result<()> {
+    pub fn SetFontSize(&self, value: f64) -> windows_core::Result<()> {
         unsafe {
             (windows_core::Interface::vtable(self).SetFontSize)(
                 windows_core::Interface::as_raw(self),
@@ -459,7 +645,7 @@ impl ITextBlock {
             .ok()
         }
     }
-    pub(crate) fn SetText(&self, value: &str) -> windows_core::Result<()> {
+    pub fn SetText(&self, value: &str) -> windows_core::Result<()> {
         unsafe {
             (windows_core::Interface::vtable(self).SetText)(
                 windows_core::Interface::as_raw(self),
@@ -522,12 +708,45 @@ impl windows_core::RuntimeType for IUIElement {
         windows_core::imp::ConstBuffer::for_interface::<Self>();
 }
 impl IUIElement {
-    pub(crate) fn SetTransitions<P0>(&self, value: P0) -> windows_core::Result<()>
+    pub fn SetClip<P0>(&self, value: P0) -> windows_core::Result<()>
+    where
+        P0: windows_core::Param<RectangleGeometry>,
+    {
+        unsafe {
+            (windows_core::Interface::vtable(self).SetClip)(
+                windows_core::Interface::as_raw(self),
+                value.param().abi(),
+            )
+            .ok()
+        }
+    }
+    pub fn SetTransitions<P0>(&self, value: P0) -> windows_core::Result<()>
     where
         P0: windows_core::Param<TransitionCollection>,
     {
         unsafe {
             (windows_core::Interface::vtable(self).SetTransitions)(
+                windows_core::Interface::as_raw(self),
+                value.param().abi(),
+            )
+            .ok()
+        }
+    }
+    pub fn SetTranslation(&self, value: windows_numerics::Vector3) -> windows_core::Result<()> {
+        unsafe {
+            (windows_core::Interface::vtable(self).SetTranslation)(
+                windows_core::Interface::as_raw(self),
+                value,
+            )
+            .ok()
+        }
+    }
+    pub fn SetTranslationTransition<P0>(&self, value: P0) -> windows_core::Result<()>
+    where
+        P0: windows_core::Param<Vector3Transition>,
+    {
+        unsafe {
+            (windows_core::Interface::vtable(self).SetTranslationTransition)(
                 windows_core::Interface::as_raw(self),
                 value.param().abi(),
             )
@@ -544,7 +763,10 @@ pub struct IUIElement_Vtbl {
     Opacity: usize,
     SetOpacity: usize,
     Clip: usize,
-    SetClip: usize,
+    pub SetClip: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut core::ffi::c_void,
+    ) -> windows_core::HRESULT,
     RenderTransform: usize,
     SetRenderTransform: usize,
     Projection: usize,
@@ -564,6 +786,123 @@ pub struct IUIElement_Vtbl {
     pub SetTransitions: unsafe extern "system" fn(
         *mut core::ffi::c_void,
         *mut core::ffi::c_void,
+    ) -> windows_core::HRESULT,
+    CacheMode: usize,
+    SetCacheMode: usize,
+    IsTapEnabled: usize,
+    SetIsTapEnabled: usize,
+    IsDoubleTapEnabled: usize,
+    SetIsDoubleTapEnabled: usize,
+    CanDrag: usize,
+    SetCanDrag: usize,
+    IsRightTapEnabled: usize,
+    SetIsRightTapEnabled: usize,
+    IsHoldingEnabled: usize,
+    SetIsHoldingEnabled: usize,
+    ManipulationMode: usize,
+    SetManipulationMode: usize,
+    PointerCaptures: usize,
+    ContextFlyout: usize,
+    SetContextFlyout: usize,
+    CompositeMode: usize,
+    SetCompositeMode: usize,
+    Lights: usize,
+    CanBeScrollAnchor: usize,
+    SetCanBeScrollAnchor: usize,
+    ExitDisplayModeOnAccessKeyInvoked: usize,
+    SetExitDisplayModeOnAccessKeyInvoked: usize,
+    IsAccessKeyScope: usize,
+    SetIsAccessKeyScope: usize,
+    AccessKeyScopeOwner: usize,
+    SetAccessKeyScopeOwner: usize,
+    AccessKey: usize,
+    SetAccessKey: usize,
+    KeyTipPlacementMode: usize,
+    SetKeyTipPlacementMode: usize,
+    KeyTipHorizontalOffset: usize,
+    SetKeyTipHorizontalOffset: usize,
+    KeyTipVerticalOffset: usize,
+    SetKeyTipVerticalOffset: usize,
+    KeyTipTarget: usize,
+    SetKeyTipTarget: usize,
+    XYFocusKeyboardNavigation: usize,
+    SetXYFocusKeyboardNavigation: usize,
+    XYFocusUpNavigationStrategy: usize,
+    SetXYFocusUpNavigationStrategy: usize,
+    XYFocusDownNavigationStrategy: usize,
+    SetXYFocusDownNavigationStrategy: usize,
+    XYFocusLeftNavigationStrategy: usize,
+    SetXYFocusLeftNavigationStrategy: usize,
+    XYFocusRightNavigationStrategy: usize,
+    SetXYFocusRightNavigationStrategy: usize,
+    KeyboardAccelerators: usize,
+    KeyboardAcceleratorPlacementTarget: usize,
+    SetKeyboardAcceleratorPlacementTarget: usize,
+    KeyboardAcceleratorPlacementMode: usize,
+    SetKeyboardAcceleratorPlacementMode: usize,
+    HighContrastAdjustment: usize,
+    SetHighContrastAdjustment: usize,
+    TabFocusNavigation: usize,
+    SetTabFocusNavigation: usize,
+    OpacityTransition: usize,
+    SetOpacityTransition: usize,
+    Translation: usize,
+    pub SetTranslation: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        windows_numerics::Vector3,
+    ) -> windows_core::HRESULT,
+    TranslationTransition: usize,
+    pub SetTranslationTransition: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut core::ffi::c_void,
+    ) -> windows_core::HRESULT,
+}
+windows_core::imp::define_interface!(
+    IVector3Transition,
+    IVector3Transition_Vtbl,
+    0x0c408bb9_f9a2_55d7_8aed_143d36d603f2
+);
+impl windows_core::RuntimeType for IVector3Transition {
+    const SIGNATURE: windows_core::imp::ConstBuffer =
+        windows_core::imp::ConstBuffer::for_interface::<Self>();
+}
+impl IVector3Transition {
+    pub fn SetDuration(&self, value: windows_time::TimeSpan) -> windows_core::Result<()> {
+        unsafe {
+            (windows_core::Interface::vtable(self).SetDuration)(
+                windows_core::Interface::as_raw(self),
+                value,
+            )
+            .ok()
+        }
+    }
+}
+#[repr(C)]
+pub struct IVector3Transition_Vtbl {
+    pub base__: windows_core::IInspectable_Vtbl,
+    Duration: usize,
+    pub SetDuration: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        windows_time::TimeSpan,
+    ) -> windows_core::HRESULT,
+}
+windows_core::imp::define_interface!(
+    IVector3TransitionFactory,
+    IVector3TransitionFactory_Vtbl,
+    0xa3a084fc_b965_534b_900f_78e288129232
+);
+impl windows_core::RuntimeType for IVector3TransitionFactory {
+    const SIGNATURE: windows_core::imp::ConstBuffer =
+        windows_core::imp::ConstBuffer::for_interface::<Self>();
+}
+#[repr(C)]
+pub struct IVector3TransitionFactory_Vtbl {
+    pub base__: windows_core::IInspectable_Vtbl,
+    pub CreateInstance: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut core::ffi::c_void,
+        *mut *mut core::ffi::c_void,
+        *mut *mut core::ffi::c_void,
     ) -> windows_core::HRESULT,
 }
 windows_core::imp::define_interface!(
@@ -626,6 +965,66 @@ impl windows_core::RuntimeName for Panel {
 }
 unsafe impl Send for Panel {}
 unsafe impl Sync for Panel {}
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Rect {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+}
+impl windows_core::imp::TypeKind for Rect {
+    type TypeKind = windows_core::imp::CopyType;
+}
+impl windows_core::RuntimeType for Rect {
+    const SIGNATURE: windows_core::imp::ConstBuffer =
+        windows_core::imp::ConstBuffer::from_slice(b"struct(Windows.Foundation.Rect;f4;f4;f4;f4)");
+}
+#[repr(transparent)]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RectangleGeometry(windows_core::IUnknown);
+windows_core::imp::interface_hierarchy!(
+    RectangleGeometry,
+    windows_core::IUnknown,
+    windows_core::IInspectable
+);
+windows_core::imp::required_hierarchy!(RectangleGeometry, Geometry, DependencyObject);
+impl RectangleGeometry {
+    pub fn new() -> windows_core::Result<Self> {
+        Self::IActivationFactory(|f| f.ActivateInstance::<Self>())
+    }
+    fn IActivationFactory<
+        R,
+        F: FnOnce(&windows_core::imp::IGenericFactory) -> windows_core::Result<R>,
+    >(
+        callback: F,
+    ) -> windows_core::Result<R> {
+        static SHARED: windows_core::imp::FactoryCache<
+            RectangleGeometry,
+            windows_core::imp::IGenericFactory,
+        > = windows_core::imp::FactoryCache::new();
+        SHARED.call(callback)
+    }
+}
+impl windows_core::RuntimeType for RectangleGeometry {
+    const SIGNATURE: windows_core::imp::ConstBuffer =
+        windows_core::imp::ConstBuffer::for_class::<Self, IRectangleGeometry>();
+}
+unsafe impl windows_core::Interface for RectangleGeometry {
+    type Vtable = <IRectangleGeometry as windows_core::Interface>::Vtable;
+    const IID: windows_core::GUID = <IRectangleGeometry as windows_core::Interface>::IID;
+}
+impl core::ops::Deref for RectangleGeometry {
+    type Target = IRectangleGeometry;
+    fn deref(&self) -> &Self::Target {
+        unsafe { core::mem::transmute(self) }
+    }
+}
+impl windows_core::RuntimeName for RectangleGeometry {
+    const NAME: &'static str = "Microsoft.UI.Xaml.Media.RectangleGeometry";
+}
+unsafe impl Send for RectangleGeometry {}
+unsafe impl Sync for RectangleGeometry {}
 #[repr(transparent)]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TextBlock(windows_core::IUnknown);
@@ -636,7 +1035,7 @@ windows_core::imp::interface_hierarchy!(
 );
 windows_core::imp::required_hierarchy!(TextBlock, FrameworkElement, UIElement, DependencyObject);
 impl TextBlock {
-    pub(crate) fn new() -> windows_core::Result<Self> {
+    pub fn new() -> windows_core::Result<Self> {
         Self::IActivationFactory(|f| f.ActivateInstance::<Self>())
     }
     fn IActivationFactory<
@@ -709,7 +1108,7 @@ windows_core::imp::interface_hierarchy!(
     windows_collections::IVector<Transition>
 );
 impl TransitionCollection {
-    pub(crate) fn new() -> windows_core::Result<Self> {
+    pub fn new() -> windows_core::Result<Self> {
         Self::IActivationFactory(|f| f.ActivateInstance::<Self>())
     }
     fn IActivationFactory<
@@ -777,6 +1176,89 @@ unsafe impl Send for UIElement {}
 unsafe impl Sync for UIElement {}
 #[repr(transparent)]
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct UIElementCollection(windows_core::IUnknown);
+windows_core::imp::interface_hierarchy!(
+    UIElementCollection,
+    windows_core::IUnknown,
+    windows_core::IInspectable,
+    windows_collections::IVector<UIElement>
+);
+impl windows_core::RuntimeType for UIElementCollection {
+    const SIGNATURE: windows_core::imp::ConstBuffer =
+        windows_core::imp::ConstBuffer::for_class::<Self, windows_collections::IVector<UIElement>>(
+        );
+}
+unsafe impl windows_core::Interface for UIElementCollection {
+    type Vtable = <windows_collections::IVector<UIElement> as windows_core::Interface>::Vtable;
+    const IID: windows_core::GUID =
+        <windows_collections::IVector<UIElement> as windows_core::Interface>::IID;
+}
+impl core::ops::Deref for UIElementCollection {
+    type Target = windows_collections::IVector<UIElement>;
+    fn deref(&self) -> &Self::Target {
+        unsafe { core::mem::transmute(self) }
+    }
+}
+impl windows_core::RuntimeName for UIElementCollection {
+    const NAME: &'static str = "Microsoft.UI.Xaml.Controls.UIElementCollection";
+}
+unsafe impl Send for UIElementCollection {}
+unsafe impl Sync for UIElementCollection {}
+#[repr(transparent)]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Vector3Transition(windows_core::IUnknown);
+windows_core::imp::interface_hierarchy!(
+    Vector3Transition,
+    windows_core::IUnknown,
+    windows_core::IInspectable
+);
+impl Vector3Transition {
+    pub fn new() -> windows_core::Result<Self> {
+        Self::IVector3TransitionFactory(|this| unsafe {
+            let mut result__ = core::mem::zeroed();
+            (windows_core::Interface::vtable(this).CreateInstance)(
+                windows_core::Interface::as_raw(this),
+                core::ptr::null_mut(),
+                core::ptr::null_mut(),
+                &mut result__,
+            )
+            .and_then(|| windows_core::imp::Type::from_abi(result__))
+        })
+    }
+    fn IVector3TransitionFactory<
+        R,
+        F: FnOnce(&IVector3TransitionFactory) -> windows_core::Result<R>,
+    >(
+        callback: F,
+    ) -> windows_core::Result<R> {
+        static SHARED: windows_core::imp::FactoryCache<
+            Vector3Transition,
+            IVector3TransitionFactory,
+        > = windows_core::imp::FactoryCache::new();
+        SHARED.call(callback)
+    }
+}
+impl windows_core::RuntimeType for Vector3Transition {
+    const SIGNATURE: windows_core::imp::ConstBuffer =
+        windows_core::imp::ConstBuffer::for_class::<Self, IVector3Transition>();
+}
+unsafe impl windows_core::Interface for Vector3Transition {
+    type Vtable = <IVector3Transition as windows_core::Interface>::Vtable;
+    const IID: windows_core::GUID = <IVector3Transition as windows_core::Interface>::IID;
+}
+impl core::ops::Deref for Vector3Transition {
+    type Target = IVector3Transition;
+    fn deref(&self) -> &Self::Target {
+        unsafe { core::mem::transmute(self) }
+    }
+}
+impl windows_core::RuntimeName for Vector3Transition {
+    const NAME: &'static str = "Microsoft.UI.Xaml.Vector3Transition";
+}
+unsafe impl Send for Vector3Transition {}
+unsafe impl Sync for Vector3Transition {}
+#[repr(transparent)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct VisualTreeHelper(windows_core::IUnknown);
 windows_core::imp::interface_hierarchy!(
     VisualTreeHelper,
@@ -784,7 +1266,7 @@ windows_core::imp::interface_hierarchy!(
     windows_core::IInspectable
 );
 impl VisualTreeHelper {
-    pub(crate) fn GetChildrenCount<P0>(reference: P0) -> windows_core::Result<i32>
+    pub fn GetChildrenCount<P0>(reference: P0) -> windows_core::Result<i32>
     where
         P0: windows_core::Param<DependencyObject>,
     {

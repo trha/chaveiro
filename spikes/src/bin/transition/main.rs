@@ -7,6 +7,9 @@
 //! 2. The same stack, child under one fixed id, so only its text changes.
 //! 3. A `ContentPresenter` with `ContentThemeTransition`, content swapped.
 //! 4. A plain stack, child keyed by screen, `EntranceThemeTransition` on it.
+//! 5. A push: a clipped grid where the new screen slides in and the old one
+//!    slides out the other side, both through `UIElement.Translation` with a
+//!    `Vector3Transition`. A to B goes left, B to A goes right.
 //!
 //! Every 50 ms a tick runs a pass that logs how many visual children
 //! columns 1 and 4 hold, to see how long a removed child stays drawn.
@@ -42,6 +45,7 @@ fn main() -> Result<()> {
             presented: None,
             counts: (0, 0),
             started: Instant::now(),
+            slide: Some(Slide::default()),
         })
     })
 }
@@ -56,6 +60,88 @@ struct Spike {
     /// Visual child counts of columns 1 and 4 at the last log line.
     counts: (i32, i32),
     started: Instant,
+    /// Column 5. Taken out for the pass, because the native closure borrows
+    /// it while `self` is borrowed for the name.
+    slide: Option<Slide>,
+}
+
+/// Column 5's screens: the one shown, and those still sliding out.
+#[derive(Default)]
+struct Slide {
+    shown: Option<u32>,
+    current: Option<UIElement>,
+    /// Each with the time after which it leaves the grid.
+    leaving: Vec<(UIElement, Instant)>,
+    count: u32,
+}
+
+const PUSH_WIDTH: f32 = 260.0;
+const PUSH_DURATION: Duration = Duration::from_millis(250);
+/// How long a leaving screen stays in the grid: the slide plus a margin.
+const PUSH_REMOVE_AFTER: Duration = Duration::from_millis(350);
+
+/// Runs on every pass: drops leaving screens whose slide is over, and on a
+/// new screen starts both slides.
+fn push(element: &IInspectable, slide: &mut Slide, screen: u32, name: &str) -> Result<()> {
+    let children = element
+        .cast::<Panel>()?
+        .Children()?
+        .cast::<windows_collections::IVector<UIElement>>()?;
+    let now = Instant::now();
+    let mut kept = Vec::new();
+    for (leaving, deadline) in slide.leaving.drain(..) {
+        if now < deadline {
+            kept.push((leaving, deadline));
+            continue;
+        }
+        let mut index = 0;
+        if children.IndexOf(&leaving, &mut index)? {
+            children.RemoveAt(index)?;
+        }
+    }
+    slide.leaving = kept;
+
+    if slide.shown != Some(screen) {
+        let block = TextBlock::new()?;
+        block.SetText(name)?;
+        big(block.clone())?;
+        let entering = block.cast::<UIElement>()?;
+        match slide.current.take() {
+            None => children.Append(&entering)?,
+            Some(old) => {
+                // Odd screens come after even ones: forward, so the new
+                // screen enters from the right.
+                let sign = if screen % 2 == 1 { 1.0 } else { -1.0 };
+                entering.SetTranslation(offset(sign * PUSH_WIDTH))?;
+                children.Append(&entering)?;
+                entering.SetTranslationTransition(&transition()?)?;
+                entering.SetTranslation(offset(0.0))?;
+                old.SetTranslationTransition(&transition()?)?;
+                old.SetTranslation(offset(-sign * PUSH_WIDTH))?;
+                slide.leaving.push((old, now + PUSH_REMOVE_AFTER));
+            }
+        }
+        slide.current = Some(entering);
+        slide.shown = Some(screen);
+    }
+    let count = children.Size()?;
+    if count != slide.count {
+        eprintln!("push grid children: {count}");
+        slide.count = count;
+    }
+    Ok(())
+}
+
+fn offset(x: f32) -> windows_numerics::Vector3 {
+    windows_numerics::Vector3 { x, y: 0.0, z: 0.0 }
+}
+
+fn transition() -> Result<Vector3Transition> {
+    let transition = Vector3Transition::new()?;
+    transition.SetDuration(
+        windows_time::TimeSpan::try_from(PUSH_DURATION).expect("250 ms fits a TimeSpan"),
+    )?;
+    Ok(transition)
 }
 
 impl App for Spike {
@@ -79,6 +165,7 @@ impl App for Spike {
         let mut keyed_panel = None;
         let mut entrance_panel = None;
         let mut presented = self.presented;
+        let mut slide = self.slide.take();
         ui.window("main", "transition spike", |ui| {
             ui.stack("columns", Orientation::Horizontal, 48.0, |ui| {
                 let keyed = ui.stack("keyed", Orientation::Vertical, 0.0, |ui| {
@@ -135,12 +222,40 @@ impl App for Spike {
                     Ok(())
                 })?;
                 entrance_panel = Some(entrance.element());
+
+                ui.native(
+                    "push",
+                    || {
+                        let grid = Grid::new()?;
+                        let frame = grid.cast::<FrameworkElement>()?;
+                        frame.SetWidth(PUSH_WIDTH as f64)?;
+                        frame.SetHeight(60.0)?;
+                        let clip = RectangleGeometry::new()?;
+                        clip.SetRect(Rect {
+                            x: 0.0,
+                            y: 0.0,
+                            width: PUSH_WIDTH,
+                            height: 60.0,
+                        })?;
+                        grid.cast::<UIElement>()?.SetClip(&clip)?;
+                        grid.cast()
+                    },
+                    |element| {
+                        push(
+                            element,
+                            slide.as_mut().expect("set before the pass"),
+                            screen,
+                            name,
+                        )
+                    },
+                )?;
                 Ok(())
             })?;
             Ok(())
         })?;
         self.configured = true;
         self.presented = presented;
+        self.slide = slide;
         let counts = (
             visual_children(keyed_panel.as_ref())?,
             visual_children(entrance_panel.as_ref())?,
