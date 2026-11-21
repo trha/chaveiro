@@ -29,7 +29,7 @@ impl Ui {
     /// shows current state. `row` must declare exactly one control, whose
     /// constraints give the row its height. A row that scrolls out of view
     /// keeps its controls for the next row that scrolls in, so UI state for
-    /// an item belongs in [`Ui::table_view_state`], not in `Ui::state`
+    /// an item belongs in [`Ui::table_view_state`], not in [`Ui::state`]
     /// inside the row.
     ///
     /// `revision` must change whenever the order or identity of the items

@@ -13,7 +13,7 @@ use objc2_app_kit::{
     NSUserInterfaceLayoutOrientation, NSView, NSVisualEffectView, NSWindow,
 };
 use objc2_foundation::NSArray;
-use std::{hash::Hash, rc::Rc};
+use std::{any::Any, hash::Hash, rc::Rc};
 
 /// Builds the UI. The app gets it in [`App::view`](crate::App::view).
 pub struct Ui {
@@ -98,6 +98,19 @@ impl Ui {
         application.setDelegate(Some(ProtocolObject::from_ref(self.events.target())));
     }
 
+    /// Adds the controls a cache emitted on its last run to the open
+    /// container, for a pass that skips the cache's body.
+    pub(crate) fn emit_cached(&mut self, node: NodeId) {
+        let Payload::Cache(cache) = &self.tree.node(node).payload else {
+            unreachable!("cache keys hold caches")
+        };
+        self.frames
+            .last_mut()
+            .expect("a cache is declared inside a container")
+            .visual
+            .extend_from_slice(&cache.emitted);
+    }
+
     /// Opens `node` as the container for the widgets declared next.
     pub(crate) fn open(&mut self, node: NodeId) {
         let key = self.tree.node(node).key();
@@ -166,6 +179,19 @@ impl Ui {
     fn apply_visual(&mut self, node: NodeId, declared: &mut Vec<NodeId>) {
         match &mut self.tree.node_mut(node).payload {
             Payload::Root => {}
+            Payload::Cache(cache) => {
+                // A cache has no view: its controls belong to the parent.
+                std::mem::swap(&mut cache.emitted, declared);
+                let Payload::Cache(cache) = &self.tree.node(node).payload else {
+                    unreachable!("matched above")
+                };
+                self.frames
+                    .last_mut()
+                    .expect("a cache is declared inside a container")
+                    .visual
+                    .extend_from_slice(&cache.emitted);
+            }
+            Payload::State(_) => unreachable!("state nodes are never opened"),
             Payload::Window(window) => {
                 assert!(
                     declared.len() <= 1,
@@ -381,6 +407,18 @@ pub(crate) enum Payload {
     Root,
     Window(WindowNode),
     Control(ControlNode),
+    Cache(CacheNode),
+    /// UI-only data from [`Ui::state`].
+    State(Box<dyn Any>),
+}
+
+pub(crate) struct CacheNode {
+    /// The dependencies of the last run, reassigned in place while their type
+    /// stays the same.
+    pub(crate) deps: Option<Box<dyn Any>>,
+    /// The controls the last run declared, in order, which a skipped run
+    /// declares again for the parent.
+    pub(crate) emitted: Vec<NodeId>,
 }
 
 /// Contract: `pinned` is the view of `content`, a subview of `container`,
@@ -561,7 +599,7 @@ struct Frame {
 /// releases the view.
 fn release(events: &Events, payload: Payload) {
     match payload {
-        Payload::Root => {}
+        Payload::Root | Payload::Cache(_) | Payload::State(_) => {}
         Payload::Window(window) => {
             events.forget(&window.window);
             window.window.setDelegate(None);

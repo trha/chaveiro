@@ -6,6 +6,8 @@
 //! the windows and resumes the panic.
 
 use appkit_immediate::{App, Handle, Orientation, Ui, run};
+use objc2_app_kit::NSTextField;
+use objc2_foundation::NSString;
 use std::thread::JoinHandle;
 
 fn main() {
@@ -81,6 +83,26 @@ impl App for Smoke {
                     if self.clicks % 2 == 1 {
                         ui.label("odd", format_args!("odd count"));
                     }
+                    // Rebuilt only when the click count's parity changes.
+                    ui.cached("parity", self.clicks % 2, |ui| {
+                        let parity = if self.clicks % 2 == 0 { "even" } else { "odd" };
+                        ui.label("parity", format_args!("cached {parity}"));
+                    });
+                    let clicks = self.clicks;
+                    ui.native(
+                        "native",
+                        |mtm| {
+                            NSTextField::labelWithString(&NSString::new(), mtm)
+                                .into_super()
+                                .into_super()
+                        },
+                        |view| {
+                            let label = view
+                                .downcast_ref::<NSTextField>()
+                                .expect("the native view is a text field");
+                            label.setStringValue(&NSString::from_str(&format!("native {clicks}")));
+                        },
+                    );
                 });
             });
             if main.should_close() {

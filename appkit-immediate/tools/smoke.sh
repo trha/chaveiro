@@ -33,6 +33,8 @@ check "a click adds the odd label" "labels | grep -q 'odd count'"
 osascript -e "$process to click button \"Click me\" of $main" >/dev/null
 sleep 0.4
 check "a second click removes it" "labels | grep -q '^2 clicks' && ! labels | grep -q 'odd count'"
+check "a cached body reruns when its deps change" "labels | grep -q 'cached even'"
+check "a native view is updated every pass" "labels | grep -q 'native 2'"
 osascript -e "$process to click (first button of window \"second window\" whose subrole is \"AXCloseButton\")" >/dev/null
 sleep 0.4
 windows() { osascript -e "$process to get name of windows"; }

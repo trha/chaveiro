@@ -151,6 +151,11 @@ impl<P> Tree<P> {
         self.by_key.get(&key).copied()
     }
 
+    /// Whether an event targeted `id` or a node under it this pass.
+    pub(crate) fn has_event(&self, id: NodeId) -> bool {
+        self.node(id).event_stamp == self.pass
+    }
+
     /// Marks `id` and its ancestors as having an event this pass.
     pub(crate) fn mark_event(&mut self, id: NodeId) {
         let pass = self.pass;
@@ -350,11 +355,6 @@ impl NodeId {
 
 #[cfg(test)]
 impl<P> Tree<P> {
-    /// Whether an event targeted `id` or a node under it this pass.
-    pub(crate) fn has_event(&self, id: NodeId) -> bool {
-        self.node(id).event_stamp == self.pass
-    }
-
     /// Ids of every live node.
     pub(crate) fn live(&self) -> Vec<NodeId> {
         self.slots

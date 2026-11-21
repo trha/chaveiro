@@ -565,7 +565,13 @@ The main agent owns every step, one at a time, because all steps edit
    recycled after it. A panic in a row function, which runs inside AppKit's
    layout, closes every window like a pass panic. Not covered by a check:
    reloading after `len` or `revision` changes.
-8. `native`, `cached`, `state`. Runs test 2.
+8. `native`, `cached`, `state`. Runs test 2. Done (2026-11-21): the 4 WinUI cache tests
+   ported; the failed-build test now panics inside two open caches and
+   checks `close_all` leaves only the root. A cache that ignores events
+   fails the model test. The tests make their `Ui` with
+   `MainThreadMarker::new_unchecked`, because the test harness runs off
+   the main thread and the tests create no AppKit object. `tools/smoke.sh`
+   adds a cached label and a native view: 36 checks pass.
 9. `cargo +nightly fmt`, clippy, and `cargo doc --no-deps
    --document-private-items` with no broken links. Update the memory notes.
 

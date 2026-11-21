@@ -14,10 +14,12 @@ use objc2_app_kit::{
 use objc2_foundation::{NSDictionary, NSEdgeInsets};
 
 mod button;
+mod cache;
 mod combo_box;
 mod field;
 mod grid;
 mod label;
+mod native;
 mod pop_up_button;
 mod secure_text_field;
 mod stack_view;
@@ -251,6 +253,8 @@ pub(crate) enum Control {
     },
     /// The box itself is the node's view.
     BoxView { stack: Retained<NSStackView> },
+    /// From [`Ui::native`]: only the view is known.
+    Native,
     /// The node's view is the scroll view around `table`.
     TableView {
         table: Retained<NSTableView>,
@@ -287,7 +291,8 @@ impl Control {
             | Control::Grid { .. }
             | Control::BoxView { .. }
             | Control::TableView { .. }
-            | Control::Row { .. } => return None,
+            | Control::Row { .. }
+            | Control::Native => return None,
         })
     }
 
