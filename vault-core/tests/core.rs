@@ -38,6 +38,7 @@ use zeroize::Zeroizing;
 fn plain_login_unlocks_and_syncs() {
     let mut harness = Harness::logged_out();
     let effects = harness.user(UserAction::Login {
+        server: server(),
         email: EMAIL.into(),
         password: secret(PASSWORD),
     });
@@ -220,6 +221,7 @@ fn stale_remembered_token_falls_back_to_the_code() {
 fn remembered_token_is_only_sent_for_its_email() {
     let mut harness = logged_out_remembering(remembered_slot());
     let effects = harness.user(UserAction::Login {
+        server: server(),
         email: "someone-else@example.com".into(),
         password: secret(PASSWORD),
     });
@@ -229,6 +231,123 @@ fn remembered_token_is_only_sent_for_its_email() {
     let effects = harness.derived(derive, PASSWORD);
     let (_, request) = one_http(&effects);
     assert!(!form(request).contains_key("twoFactorToken"));
+}
+
+#[test]
+fn remembered_token_is_only_sent_to_its_server() {
+    let mut harness = logged_out_remembering(remembered_slot());
+    let effects = harness.user(UserAction::Login {
+        server: Url::parse("https://other.test").unwrap(),
+        email: EMAIL.into(),
+        password: secret(PASSWORD),
+    });
+    let (prelogin, request) = one_http(&effects);
+    assert_eq!(
+        request.url.as_str(),
+        "https://other.test/identity/accounts/prelogin"
+    );
+    let effects = harness.answer_fixture(prelogin, "prelogin.json");
+    let (derive, ..) = one_derive(&effects);
+    let effects = harness.derived(derive, PASSWORD);
+    let (_, request) = one_http(&effects);
+    assert_eq!(
+        request.url.as_str(),
+        "https://other.test/identity/connect/token"
+    );
+    assert!(!form(request).contains_key("twoFactorToken"));
+}
+
+#[test]
+fn login_goes_to_the_cloud_hosts_of_the_picked_server() {
+    let mut harness = Harness::logged_out();
+    let effects = harness.user(UserAction::Login {
+        server: Url::parse("https://vault.bitwarden.eu").unwrap(),
+        email: EMAIL.into(),
+        password: secret(PASSWORD),
+    });
+    let (_, request) = one_http(&effects);
+    assert_eq!(
+        request.url.as_str(),
+        "https://identity.bitwarden.eu/accounts/prelogin"
+    );
+    let Screen::Login { server, busy, .. } = harness.core.screen() else {
+        panic!("a login in flight shows the login screen");
+    };
+    assert_eq!(server.map(Url::as_str), Some("https://vault.bitwarden.eu/"));
+    assert!(busy);
+}
+
+#[test]
+fn a_server_that_is_not_http_refuses_the_login() {
+    let mut harness = Harness::logged_out();
+    for action in [
+        UserAction::Login {
+            server: Url::parse("ftp://vault.test").unwrap(),
+            email: EMAIL.into(),
+            password: secret(PASSWORD),
+        },
+        UserAction::LoginApiKey {
+            server: Url::parse("mailto:someone@example.com").unwrap(),
+            email: EMAIL.into(),
+            client_id: "user.fixture".into(),
+            client_secret: secret("api-secret"),
+        },
+    ] {
+        let effects = harness.user(action);
+        assert!(http(&effects).is_empty());
+        let Screen::Login {
+            email, error, busy, ..
+        } = harness.core.screen()
+        else {
+            panic!("a refused login stays on the login screen");
+        };
+        assert_eq!(
+            (email, error, busy),
+            (EMAIL, Some(&LoginError::ServerUrl), false)
+        );
+    }
+}
+
+#[test]
+fn an_account_record_without_a_server_boots_logged_out_with_its_email() {
+    let mut harness = Harness::new();
+    let account = serde_json::json!({
+        "email": EMAIL,
+        "user_id": USER_ID,
+        "kdf": { "type": "Pbkdf2", "iterations": 600_000 },
+    });
+    harness.send(Input::Started {
+        stored: StoredAccount {
+            account: Some(serde_json::to_vec(&account).unwrap()),
+            refresh_token: Some(STORED_REFRESH.as_bytes().to_vec()),
+            ..StoredAccount::default()
+        },
+    });
+    let Screen::Login {
+        server,
+        email,
+        busy,
+        ..
+    } = harness.core.screen()
+    else {
+        panic!("an account without a server cannot be unlocked");
+    };
+    assert_eq!((server, email, busy), (None, EMAIL, false));
+}
+
+#[test]
+fn a_stored_account_shows_its_server_after_logout() {
+    let mut harness = Harness::stored(REVISION);
+    harness.user(UserAction::Logout);
+    let Screen::Login {
+        server: shown,
+        email,
+        ..
+    } = harness.core.screen()
+    else {
+        panic!("logout shows the login screen");
+    };
+    assert_eq!((shown, email), (Some(&server()), EMAIL));
 }
 
 #[test]
@@ -364,6 +483,7 @@ fn wrong_password_bitwarden() {
 fn api_key_then_unlock() {
     let mut harness = Harness::logged_out();
     let effects = harness.user(UserAction::LoginApiKey {
+        server: server(),
         email: EMAIL.into(),
         client_id: "user.fixture".into(),
         client_secret: secret("api-secret"),
@@ -2346,6 +2466,7 @@ impl Harness {
     fn stored_with(revision: u64, device_wrap: Option<Vec<u8>>) -> Self {
         let mut harness = Self::new();
         let account = serde_json::json!({
+            "server": server(),
             "email": EMAIL,
             "user_id": USER_ID,
             "kdf": { "type": "Pbkdf2", "iterations": 600_000 },
@@ -2382,8 +2503,6 @@ impl Harness {
     fn new() -> Self {
         Self {
             core: Core::new(Config {
-                identity_url: Url::parse("https://vault.test/identity").unwrap(),
-                api_url: Url::parse("https://vault.test/api").unwrap(),
                 client_id: "desktop".into(),
                 client_name: "desktop".into(),
                 client_version: "2026.11.0".into(),
@@ -2447,6 +2566,7 @@ impl Harness {
     /// Logs in up to the token request and returns its id.
     fn login_until_token(&mut self) -> RequestId {
         let effects = self.user(UserAction::Login {
+            server: server(),
             email: EMAIL.into(),
             password: secret(PASSWORD),
         });
@@ -2461,6 +2581,7 @@ impl Harness {
     /// request's form.
     fn login_until_token_form(&mut self) -> (RequestId, HashMap<&'static str, String>) {
         let effects = self.user(UserAction::Login {
+            server: server(),
             email: EMAIL.into(),
             password: secret(PASSWORD),
         });
@@ -2626,7 +2747,9 @@ fn cache_event() -> impl Strategy<Value = CacheEvent> {
 fn digest(core: &Core) -> String {
     match core.screen() {
         Screen::Starting => "starting".into(),
-        Screen::Login { email, error, busy } => format!("login {email} {error:?} {busy}"),
+        Screen::Login {
+            email, error, busy, ..
+        } => format!("login {email} {error:?} {busy}"),
         Screen::SecondFactor {
             email,
             challenge,
@@ -2673,6 +2796,7 @@ fn assert_logged_in(harness: &mut Harness, effects: &[Effect]) {
         serde_json::from_slice(&stored_bytes(effects, StoreSlot::Account)).unwrap();
     assert_eq!(account["email"], EMAIL);
     assert_eq!(account["user_id"], USER_ID.to_string());
+    assert_eq!(account["server"], server().as_str());
     let (_, request) = one_http(effects);
     expect![[r#"
         GET https://vault.test/api/accounts/revision-date
@@ -2713,6 +2837,7 @@ fn assert_wrong_password(name: &str) {
         email,
         error: Some(LoginError::Rejected(message)),
         busy: false,
+        ..
     } = harness.core.screen()
     else {
         panic!("not a rejected login");
@@ -3352,4 +3477,10 @@ fn owned_http(effects: &[Effect]) -> Vec<(RequestId, HttpRequest)> {
             _ => unreachable!("copy_http copies only requests"),
         })
         .collect()
+}
+
+/// The fixture server, whose identity and API bases are
+/// `https://vault.test/identity` and `https://vault.test/api`.
+fn server() -> Url {
+    Url::parse("https://vault.test").unwrap()
 }

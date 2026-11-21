@@ -216,7 +216,7 @@ impl Core {
                 | State::LoggedOut { .. }
                 | State::Prelogin { .. }
                 | State::Deriving {
-                    purpose: DerivePurpose::Login,
+                    purpose: DerivePurpose::Login(_),
                     ..
                 }
                 | State::TokenRequest { .. }
@@ -309,7 +309,7 @@ impl Core {
                 | State::LoggedOut { .. }
                 | State::Prelogin { .. }
                 | State::Deriving {
-                    purpose: DerivePurpose::Login,
+                    purpose: DerivePurpose::Login(_),
                     ..
                 }
                 | State::TokenRequest { .. }
@@ -340,12 +340,25 @@ impl Core {
                     .account
                     .as_deref()
                     .and_then(|bytes| serde_json::from_slice::<AccountRecord>(bytes).ok());
-                match record {
-                    None => State::LoggedOut {
+                // An account without a usable server boots logged out, with
+                // its email kept.
+                let server = record
+                    .as_ref()
+                    .and_then(|record| record.server.clone())
+                    .and_then(|url| Server::new(url).ok());
+                match (record, server) {
+                    (None, _) => State::LoggedOut {
                         form: LoginForm::default(),
                         error: None,
                     },
-                    Some(record) => {
+                    (Some(record), None) => State::LoggedOut {
+                        form: LoginForm {
+                            server: None,
+                            email: record.email,
+                        },
+                        error: None,
+                    },
+                    (Some(record), Some(server)) => {
                         let refresh = stored
                             .refresh_token
                             .and_then(|bytes| String::from_utf8(bytes).ok())
@@ -359,6 +372,7 @@ impl Core {
                         match (refresh, cache) {
                             (Some(refresh), Some(cache)) => State::Locked {
                                 account: Account {
+                                    server,
                                     email: record.email,
                                     user_id: record.user_id,
                                     kdf: record.kdf.into(),
@@ -383,6 +397,7 @@ impl Core {
                             },
                             _ => State::LoggedOut {
                                 form: LoginForm {
+                                    server: Some(server.url),
                                     email: record.email,
                                 },
                                 error: None,
@@ -391,33 +406,71 @@ impl Core {
                     }
                 }
             }
-            (State::LoggedOut { .. }, Input::User(UserAction::Login { email, password }), None) => {
-                let id = requests.start(Purpose::Prelogin);
-                effects.push(Effect::Http {
-                    id,
-                    request: HttpRequest {
-                        method: Method::Post,
-                        url: endpoint(&config.identity_url, &["accounts", "prelogin"], &[]),
-                        headers: client_headers(config),
-                        body: Body::Json(prelogin_body(&email)),
-                    },
-                });
-                effects.push(Effect::Rerender);
-                State::Prelogin {
+            (
+                State::LoggedOut { .. },
+                Input::User(UserAction::Login {
+                    server: url,
                     email,
                     password,
-                    request: id,
+                }),
+                None,
+            ) => {
+                effects.push(Effect::Rerender);
+                match Server::new(url.clone()) {
+                    Err(ServerUrlError) => State::LoggedOut {
+                        form: LoginForm {
+                            server: Some(url),
+                            email,
+                        },
+                        error: Some(LoginError::ServerUrl),
+                    },
+                    Ok(server) => {
+                        let id = requests.start(Purpose::Prelogin);
+                        effects.push(Effect::Http {
+                            id,
+                            request: HttpRequest {
+                                method: Method::Post,
+                                url: endpoint(
+                                    &server.urls.identity,
+                                    &["accounts", "prelogin"],
+                                    &[],
+                                ),
+                                headers: client_headers(config),
+                                body: Body::Json(prelogin_body(&email)),
+                            },
+                        });
+                        State::Prelogin {
+                            server,
+                            email,
+                            password,
+                            request: id,
+                        }
+                    }
                 }
             }
             (
                 State::LoggedOut { .. },
                 Input::User(UserAction::LoginApiKey {
+                    server: url,
                     email,
                     client_id,
                     client_secret,
                 }),
                 None,
-            ) => {
+            ) => 'login: {
+                effects.push(Effect::Rerender);
+                let server = match Server::new(url.clone()) {
+                    Ok(server) => server,
+                    Err(ServerUrlError) => {
+                        break 'login State::LoggedOut {
+                            form: LoginForm {
+                                server: Some(url),
+                                email,
+                            },
+                            error: Some(LoginError::ServerUrl),
+                        };
+                    }
+                };
                 let id = requests.start(Purpose::Token);
                 let mut form = device_form(config);
                 form.extend([
@@ -428,10 +481,10 @@ impl Core {
                 ]);
                 effects.push(Effect::Http {
                     id,
-                    request: token_request(config, form),
+                    request: token_request(&server.urls.identity, config, form),
                 });
-                effects.push(Effect::Rerender);
                 State::TokenRequest {
+                    server,
                     email,
                     kdf: None,
                     credentials: Credentials::ApiKey,
@@ -440,6 +493,7 @@ impl Core {
             }
             (
                 State::Prelogin {
+                    server,
                     email,
                     password,
                     request,
@@ -459,7 +513,10 @@ impl Core {
                 effects.push(Effect::Rerender);
                 match kdf {
                     Err(error) => State::LoggedOut {
-                        form: LoginForm { email },
+                        form: LoginForm {
+                            server: Some(server.url),
+                            email,
+                        },
                         error: Some(error),
                     },
                     Ok(kdf) => {
@@ -474,7 +531,7 @@ impl Core {
                             email,
                             password,
                             kdf,
-                            purpose: DerivePurpose::Login,
+                            purpose: DerivePurpose::Login(server),
                             request: id,
                         }
                     }
@@ -487,7 +544,7 @@ impl Core {
                     email,
                     password,
                     kdf,
-                    purpose: DerivePurpose::Login,
+                    purpose: DerivePurpose::Login(server),
                     request,
                 },
                 Input::Derived { id, result },
@@ -496,15 +553,19 @@ impl Core {
                 effects.push(Effect::Rerender);
                 match result {
                     Err(error) => State::LoggedOut {
-                        form: LoginForm { email },
+                        form: LoginForm {
+                            server: Some(server.url),
+                            email,
+                        },
                         error: Some(LoginError::Kdf(error)),
                     },
                     Ok(master) => {
                         let master = Box::new(master);
                         let password_hash = Zeroizing::new(master.password_hash(&password));
+                        // The token goes only to the server that issued it.
                         let answer = remembered
                             .as_ref()
-                            .filter(|login| login.email.eq_ignore_ascii_case(&email))
+                            .filter(|login| login.fits(&server.url, &email))
                             .map(|login| Answer::Remembered {
                                 token: login.token.clone(),
                             });
@@ -512,6 +573,7 @@ impl Core {
                         effects.push(Effect::Http {
                             id,
                             request: password_token(
+                                &server.urls.identity,
                                 config,
                                 &email,
                                 &password_hash,
@@ -519,6 +581,7 @@ impl Core {
                             ),
                         });
                         State::TokenRequest {
+                            server,
                             email,
                             kdf: Some(kdf),
                             credentials: Credentials::Password {
@@ -534,7 +597,7 @@ impl Core {
             // An answer to an older derive.
             (
                 state @ State::Deriving {
-                    purpose: DerivePurpose::Login,
+                    purpose: DerivePurpose::Login(_),
                     ..
                 },
                 Input::Derived { .. },
@@ -738,6 +801,7 @@ impl Core {
             }
             (
                 State::TokenRequest {
+                    server,
                     email,
                     kdf,
                     credentials,
@@ -760,6 +824,7 @@ impl Core {
                         match (token, kdf, user_id) {
                             (Some(token), Some(kdf), Some(user_id)) => {
                                 let record = AccountRecord {
+                                    server: Some(server.url.clone()),
                                     email: email.clone(),
                                     user_id,
                                     kdf: kdf.into(),
@@ -781,6 +846,7 @@ impl Core {
                                 // remembered.
                                 if let Some(token) = &token.two_factor_token {
                                     let login = RememberedLogin {
+                                        server: server.url.clone(),
                                         email: email.clone(),
                                         token: secret(token),
                                     };
@@ -792,6 +858,7 @@ impl Core {
                                     *remembered = Some(login);
                                 }
                                 let mut account = Account {
+                                    server,
                                     email,
                                     user_id,
                                     kdf,
@@ -839,6 +906,7 @@ impl Core {
                                         match user_key {
                                             Err(error) => State::LoggedOut {
                                                 form: LoginForm {
+                                                    server: Some(account.server.url),
                                                     email: account.email,
                                                 },
                                                 error: Some(error),
@@ -883,7 +951,10 @@ impl Core {
                                 }
                             }
                             _ => State::LoggedOut {
-                                form: LoginForm { email },
+                                form: LoginForm {
+                                    server: Some(server.url),
+                                    email,
+                                },
                                 error: Some(LoginError::BadResponse),
                             },
                         }
@@ -930,6 +1001,7 @@ impl Core {
                                     answer,
                                 },
                             ) => State::SecondFactor {
+                                server,
                                 email,
                                 master,
                                 password_hash,
@@ -945,6 +1017,7 @@ impl Core {
                                     answer,
                                 },
                             ) => State::SecondFactor {
+                                server,
                                 email,
                                 master,
                                 password_hash,
@@ -960,7 +1033,10 @@ impl Core {
                                 TokenFailure::SecondFactor { .. } | TokenFailure::NewDeviceOtp,
                                 Credentials::ApiKey,
                             ) => State::LoggedOut {
-                                form: LoginForm { email },
+                                form: LoginForm {
+                                    server: Some(server.url),
+                                    email,
+                                },
                                 error: Some(login_error(&response)),
                             },
                         }
@@ -971,6 +1047,7 @@ impl Core {
             (state @ State::TokenRequest { .. }, Input::Http { .. }, Some(Purpose::Token)) => state,
             (
                 State::SecondFactor {
+                    server,
                     email,
                     master,
                     password_hash,
@@ -1006,6 +1083,7 @@ impl Core {
                 };
                 match answer {
                     None => State::SecondFactor {
+                        server,
                         email,
                         master,
                         password_hash,
@@ -1017,10 +1095,17 @@ impl Core {
                         let id = requests.start(Purpose::Token);
                         effects.push(Effect::Http {
                             id,
-                            request: password_token(config, &email, &password_hash, Some(&answer)),
+                            request: password_token(
+                                &server.urls.identity,
+                                config,
+                                &email,
+                                &password_hash,
+                                Some(&answer),
+                            ),
                         });
                         effects.push(Effect::Rerender);
                         State::TokenRequest {
+                            server,
                             email,
                             kdf,
                             credentials: Credentials::Password {
@@ -1035,6 +1120,7 @@ impl Core {
             }
             (
                 State::SecondFactor {
+                    server,
                     email,
                     master,
                     password_hash,
@@ -1050,7 +1136,7 @@ impl Core {
                     id,
                     request: HttpRequest {
                         method: Method::Post,
-                        url: endpoint(&config.api_url, &["two-factor", "send-email-login"], &[]),
+                        url: endpoint(&server.urls.api, &["two-factor", "send-email-login"], &[]),
                         headers: client_headers(config),
                         body: Body::Json(serde_json::json!({
                             "email": email,
@@ -1060,6 +1146,7 @@ impl Core {
                 });
                 effects.push(Effect::Rerender);
                 State::SecondFactor {
+                    server,
                     email,
                     master,
                     password_hash,
@@ -1070,6 +1157,7 @@ impl Core {
             }
             (
                 State::SecondFactor {
+                    server,
                     email,
                     master,
                     password_hash,
@@ -1086,6 +1174,7 @@ impl Core {
                     effects.push(Effect::Rerender);
                 }
                 State::SecondFactor {
+                    server,
                     email,
                     master,
                     password_hash,
@@ -1099,21 +1188,24 @@ impl Core {
                 }
             }
             (
-                State::Prelogin { email, .. }
+                State::Prelogin { server, email, .. }
                 | State::Deriving {
                     email,
-                    purpose: DerivePurpose::Login,
+                    purpose: DerivePurpose::Login(server),
                     ..
                 }
-                | State::TokenRequest { email, .. }
-                | State::SecondFactor { email, .. },
+                | State::TokenRequest { server, email, .. }
+                | State::SecondFactor { server, email, .. },
                 Input::User(UserAction::Cancel),
                 None,
             ) => {
                 requests.clear();
                 effects.push(Effect::Rerender);
                 State::LoggedOut {
-                    form: LoginForm { email },
+                    form: LoginForm {
+                        server: Some(server.url),
+                        email,
+                    },
                     error: None,
                 }
             }
@@ -2074,7 +2166,7 @@ impl Core {
             ) => state,
             (
                 state @ State::Deriving {
-                    purpose: DerivePurpose::Login | DerivePurpose::Unlock(_),
+                    purpose: DerivePurpose::Login(_) | DerivePurpose::Unlock(_),
                     ..
                 },
                 Input::User(
@@ -2323,17 +2415,19 @@ impl Core {
         match &self.state {
             State::Starting => Screen::Starting,
             State::LoggedOut { form, error } => Screen::Login {
+                server: form.server.as_ref(),
                 email: &form.email,
                 error: error.as_ref(),
                 busy: false,
             },
-            State::Prelogin { email, .. }
-            | State::TokenRequest { email, .. }
+            State::Prelogin { server, email, .. }
+            | State::TokenRequest { server, email, .. }
             | State::Deriving {
                 email,
-                purpose: DerivePurpose::Login,
+                purpose: DerivePurpose::Login(server),
                 ..
             } => Screen::Login {
+                server: Some(&server.url),
                 email,
                 error: None,
                 busy: true,
@@ -2405,13 +2499,6 @@ impl Core {
 /// What the shell sets up once, before [`Input::Started`].
 #[derive(Clone, Debug)]
 pub struct Config {
-    /// The identity server base, such as `https://vault.example.com/identity`.
-    /// Must be an `http` or `https` URL; build it with
-    /// [`server_urls`](Self::server_urls).
-    pub identity_url: Url,
-    /// The API server base, such as `https://vault.example.com/api`. Must be
-    /// an `http` or `https` URL.
-    pub api_url: Url,
     /// The OAuth `client_id` of this app, such as `desktop`.
     pub client_id: String,
     /// Sent as `Bitwarden-Client-Name`.
@@ -2465,8 +2552,8 @@ impl Config {
     }
 }
 
-/// The two base URLs of one server, for [`Config::identity_url`] and
-/// [`Config::api_url`].
+/// The identity and API base URLs of one server, from
+/// [`Config::server_urls`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ServerUrls {
     pub identity: Url,
@@ -2566,13 +2653,18 @@ pub struct StoredAccount {
 }
 
 pub enum UserAction {
+    /// `server` is the URL the user typed or picked, such as
+    /// `https://vault.bitwarden.com`; see [`Config::server_urls`]. A URL that
+    /// is not `http` or `https` gives [`LoginError::ServerUrl`].
     Login {
+        server: Url,
         email: String,
         password: SecretString,
     },
     /// Log in with the account's personal API key. The vault then waits
     /// locked for the master password.
     LoginApiKey {
+        server: Url,
         email: String,
         client_id: String,
         client_secret: SecretString,
@@ -2765,6 +2857,9 @@ pub enum Screen<'a> {
     /// Waiting for [`Input::Started`].
     Starting,
     Login {
+        /// The server of the last account, to fill in the form; [`None`]
+        /// before any login.
+        server: Option<&'a Url>,
         email: &'a str,
         error: Option<&'a LoginError>,
         /// A login is in flight.
@@ -2865,6 +2960,8 @@ pub enum LoginError {
     Key(VaultError),
     /// The session ended: the refresh token was refused or cleared.
     SessionExpired,
+    /// The server URL is not an `http` or `https` URL.
+    ServerUrl,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -2898,6 +2995,7 @@ enum State {
         error: Option<LoginError>,
     },
     Prelogin {
+        server: Server,
         email: String,
         password: SecretString,
         request: RequestId,
@@ -2910,6 +3008,7 @@ enum State {
         request: RequestId,
     },
     TokenRequest {
+        server: Server,
         email: String,
         /// From prelogin; [`None`] for an API key, whose token response
         /// carries it.
@@ -2918,6 +3017,7 @@ enum State {
         request: RequestId,
     },
     SecondFactor {
+        server: Server,
         email: String,
         kdf: Option<Kdf>,
         master: Box<MasterKey>,
@@ -2934,11 +3034,32 @@ enum State {
 
 #[derive(Default)]
 struct LoginForm {
+    server: Option<Url>,
     email: String,
 }
 
+/// One server: the URL the user gave, and the bases requests go to.
+#[derive(Clone, Debug)]
+struct Server {
+    url: Url,
+    urls: ServerUrls,
+}
+
+impl Server {
+    fn new(url: Url) -> Result<Self, ServerUrlError> {
+        Ok(Server {
+            urls: Config::server_urls(&url)?,
+            url,
+        })
+    }
+}
+
+#[expect(
+    clippy::large_enum_variant,
+    reason = "the other login states hold a Server inline too, so boxing it here saves nothing"
+)]
 enum DerivePurpose {
-    Login,
+    Login(Server),
     Unlock(Box<Account>),
 }
 
@@ -2969,23 +3090,27 @@ enum Answer {
 }
 
 /// The record in [`StoreSlot::TwoFactorToken`]. The server accepts `token`
-/// only for `email`.
+/// only for `email`, and only `server` may see it.
 struct RememberedLogin {
+    server: Url,
     email: String,
     token: SecretString,
 }
 
 #[derive(Serialize, Deserialize)]
 struct RememberedRecord<'a> {
+    server: Url,
     email: &'a str,
     token: &'a str,
 }
 
 impl RememberedLogin {
-    /// [`None`] for a malformed record.
+    /// [`None`] for a malformed record, or one written before records named
+    /// their server.
     fn parse(bytes: &[u8]) -> Option<Self> {
         let record = serde_json::from_slice::<RememberedRecord<'_>>(bytes).ok()?;
         Some(Self {
+            server: record.server,
             email: record.email.to_owned(),
             token: secret(record.token),
         })
@@ -2993,16 +3118,24 @@ impl RememberedLogin {
 
     fn to_bytes(&self) -> Vec<u8> {
         serde_json::to_vec(&RememberedRecord {
+            server: self.server.clone(),
             email: &self.email,
             token: &self.token,
         })
         .expect("a remembered login always serializes")
+    }
+
+    /// Whether this token may go with a login of `email` (in any ASCII
+    /// case) to `server`.
+    fn fits(&self, server: &Url, email: &str) -> bool {
+        self.server == *server && self.email.eq_ignore_ascii_case(email)
     }
 }
 
 /// The signed-in account. `cache` is still encrypted, so it stays while
 /// locked.
 struct Account {
+    server: Server,
     email: String,
     user_id: Uuid,
     kdf: Kdf,
@@ -3204,6 +3337,10 @@ impl Cache {
 /// The `Account` slot.
 #[derive(Serialize, Deserialize)]
 struct AccountRecord {
+    /// Absent in records written before the core took the server per
+    /// login; such an account boots logged out.
+    #[serde(default)]
+    server: Option<Url>,
     email: String,
     user_id: Uuid,
     kdf: KdfRecord,
@@ -3433,7 +3570,7 @@ fn send_api(
                 ]);
                 effects.push(Effect::Http {
                     id: requests.start(Purpose::Refresh),
-                    request: token_request(config, form),
+                    request: token_request(&account.server.urls.identity, config, form),
                 });
             }
         }
@@ -3445,7 +3582,7 @@ fn send_api(
             }
             let request = HttpRequest {
                 method: call.method,
-                url: endpoint(&config.api_url, &call.path, call.query),
+                url: endpoint(&account.server.urls.api, &call.path, call.query),
                 headers,
                 body: call.body.clone(),
             };
@@ -3662,7 +3799,10 @@ fn logout(
         Effect::Rerender,
     ]);
     State::LoggedOut {
-        form: LoginForm { email },
+        form: LoginForm {
+            server: Some(account.server.url),
+            email,
+        },
         error,
     }
 }
@@ -4076,7 +4216,9 @@ fn abandon_writes(requests: &mut Table, account: &mut Account, effects: &mut Vec
 
 /// The `grant_type=password` token request, with the second factor or
 /// new-device code when the user gave one.
+/// A token request with the password hash, to the `identity` base.
 fn password_token(
+    identity: &Url,
     config: &Config,
     email: &str,
     password_hash: &SecretString,
@@ -4111,16 +4253,21 @@ fn password_token(
         ]),
         Some(Answer::NewDevice { code }) => form.push(("newDeviceOtp", code.clone())),
     }
-    token_request(config, form)
+    token_request(identity, config, form)
 }
 
 /// The `twoFactorProvider` number for a remembered token.
 const REMEMBER_PROVIDER: u8 = 5;
 
-fn token_request(config: &Config, form: Vec<(&'static str, SecretString)>) -> HttpRequest {
+/// A request to the token endpoint under the `identity` base.
+fn token_request(
+    identity: &Url,
+    config: &Config,
+    form: Vec<(&'static str, SecretString)>,
+) -> HttpRequest {
     HttpRequest {
         method: Method::Post,
-        url: endpoint(&config.identity_url, &["connect", "token"], &[]),
+        url: endpoint(identity, &["connect", "token"], &[]),
         headers: client_headers(config),
         body: Body::Form(form),
     }
