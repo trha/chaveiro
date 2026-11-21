@@ -184,3 +184,18 @@ Microsoft.UI.Xaml.TextTrimming
 Microsoft.UI.Xaml.Controls.IconElement::{get_ForegroundProperty}
 Microsoft.UI.Xaml.Controls.IIconElementStatics::get_ForegroundProperty
 Microsoft.UI.Xaml.Window::{get_ExtendsContentIntoTitleBar}
+Microsoft.UI.Xaml.Controls.Grid::{put_ColumnSpacing}
+Microsoft.UI.Xaml.Controls.Control::{put_Background, get_BackgroundProperty}
+Microsoft.UI.Xaml.Controls.IControlStatics::get_BackgroundProperty
+Microsoft.UI.Xaml.Controls.TextBlock::{put_FontFamily, put_FontStyle, get_ForegroundProperty, get_FontFamilyProperty}
+Microsoft.UI.Xaml.Controls.ITextBlockStatics::{get_ForegroundProperty, get_FontFamilyProperty}
+Microsoft.UI.Xaml.Media.FontFamily::{CreateInstanceWithName}
+Microsoft.UI.Xaml.Media.IFontFamilyFactory::CreateInstanceWithName
+Windows.UI.Text.FontStyle
+Microsoft.UI.Xaml.Controls.CommandBar::{get_PrimaryCommands, put_DefaultLabelPosition}
+Microsoft.UI.Xaml.Controls.ICommandBarFactory::CreateInstance
+Microsoft.UI.Xaml.Controls.CommandBarDefaultLabelPosition
+Microsoft.UI.Xaml.Controls.ICommandBarElement
+Microsoft.UI.Xaml.Controls.AppBarButton::{put_Label, put_Icon}
+Microsoft.UI.Xaml.Controls.Control::{put_BorderThickness}
+Microsoft.UI.Xaml.Controls.IAppBarButtonFactory::CreateInstance

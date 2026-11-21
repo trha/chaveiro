@@ -6,17 +6,17 @@
 
 use crate::{
     bindings::{
-        Application, AutomationProperties, Brush, Button, ComboBox, ContentControl,
-        Control as XamlControl, DependencyObject, FocusState, FontIcon, FrameworkElement,
-        HorizontalAlignment, IPanel, IconElement, InfoBar, ItemsRepeater, PasswordBox,
-        ProgressRing, RowDefinitionCollection, StackPanel, Style, TextBlock, TextBox, TextWrapping,
-        Thickness, TitleBar, UIElement, UIElementCollection, Visibility,
+        AppBarButton, Application, AutomationProperties, Brush, Button, ComboBox,
+        Control as XamlControl, DependencyObject, FocusState, FontIcon, FrameworkElement, Grid,
+        HorizontalAlignment, ICommandBarElement, IPanel, IconElement, InfoBar, ItemsRepeater,
+        PasswordBox, ProgressRing, StackPanel, Style, TextBlock, TextBox, TextWrapping, Thickness,
+        TitleBar, UIElement, UIElementCollection, Visibility,
     },
     events::EventKind,
     pass::Ui,
     tree::NodeId,
 };
-use windows_collections::IMap;
+use windows_collections::{IMap, IVector};
 use windows_core::{HSTRING, IInspectable, Interface, Result};
 use windows_reference::IReference;
 
@@ -25,8 +25,10 @@ mod cache;
 mod check_box;
 mod code_boxes;
 mod combo_box;
+mod command_bar;
 mod font_icon;
 mod grid;
+mod icon_button;
 mod info_bar;
 mod label;
 mod link;
@@ -35,6 +37,8 @@ mod native;
 mod navigation_view;
 mod navigator;
 mod password_box;
+mod pressable;
+mod scroll;
 mod settings_card;
 mod stack;
 mod text_box;
@@ -45,9 +49,12 @@ pub use button::ButtonResponse;
 pub use check_box::CheckBoxResponse;
 pub use code_boxes::{CODE_LENGTH, CodeBoxes, CodeDigits};
 pub use combo_box::ComboBoxResponse;
+pub use command_bar::AppBarButtonResponse;
 pub use font_icon::FontIconResponse;
 pub use grid::Length;
+pub use icon_button::IconButtonResponse;
 pub use info_bar::Severity;
+pub use label::{LabelResponse, Overflow};
 pub use link::LinkResponse;
 pub(crate) use list::index_source;
 pub use list::{ListId, RowFn};
@@ -55,6 +62,7 @@ pub use navigation_view::{NavigationEntry, NavigationSelection, NavigationViewRe
 pub(crate) use navigator::Navigator;
 pub use navigator::{SLIDE_DURATION, Slide};
 pub use password_box::{PasswordField, PasswordHandle};
+pub use pressable::PressableResponse;
 pub use settings_card::{ContentAlignment, SettingsCard, SettingsCardResponse};
 pub use stack::Orientation;
 pub use text_box::TextBoxResponse;
@@ -98,6 +106,7 @@ impl Response<'_> {
         control.width = f64::NAN;
         control.padding = None;
         control.margin = None;
+        control.dividers = None;
     }
 
     /// Sets whether the user can interact with the control. Fails when the
@@ -194,6 +203,54 @@ impl Response<'_> {
             })?;
             control.padding = Some(padding);
         }
+        Ok(self)
+    }
+
+    /// Draws a 1px divider line on the control's edges where `edges` is
+    /// true: left, top, right, bottom. The line takes space inside the
+    /// control, like padding. Its color is the theme's when first drawn.
+    ///
+    /// It replaces the control's own border, so on a card, a settings card,
+    /// or a field that shows an error, the two fight. A label, icon, or list
+    /// has no border; wrap it in a grid or stack. Panics on those.
+    pub fn dividers(&mut self, edges: [bool; 4]) -> Result<&mut Self> {
+        let control = self.ui.control_mut(self.node);
+        if control.dividers == Some(edges) {
+            return Ok(self);
+        }
+        // Grid, StackPanel and Control each declare their own border
+        // properties, with no shared interface.
+        let brush = match control.dividers {
+            None => Some(resource::<Brush>("DividerStrokeColorDefaultBrush")?),
+            Some(_) => None,
+        };
+        let [left, top, right, bottom] = edges.map(|on| if on { 1.0 } else { 0.0 });
+        let thickness = Thickness {
+            left,
+            top,
+            right,
+            bottom,
+        };
+        let element = &control.element;
+        if let Ok(grid) = element.cast::<Grid>() {
+            if let Some(brush) = &brush {
+                grid.SetBorderBrush(brush)?;
+            }
+            grid.SetBorderThickness(thickness)?;
+        } else if let Ok(panel) = element.cast::<StackPanel>() {
+            if let Some(brush) = &brush {
+                panel.SetBorderBrush(brush)?;
+            }
+            panel.SetBorderThickness(thickness)?;
+        } else if let Ok(xaml) = element.cast::<XamlControl>() {
+            if let Some(brush) = &brush {
+                xaml.SetBorderBrush(brush)?;
+            }
+            xaml.SetBorderThickness(thickness)?;
+        } else {
+            panic!("this control has no border to draw dividers on");
+        }
+        control.dividers = Some(edges);
         Ok(self)
     }
 
@@ -486,17 +543,51 @@ pub(crate) enum Control {
         orientation: Option<Orientation>,
         /// `NaN` until first written.
         spacing: f64,
-        /// `NaN` until first written; only cards write it.
+        /// `NaN` until first written; only cards write it. A card group
+        /// writes infinity, because its width is its container's.
         width: f64,
     },
+    /// From [`Ui::grid`], or from [`Ui::columns`] when `across`.
     Grid {
+        grid: Grid,
         children: UIElementCollection,
-        definitions: RowDefinitionCollection,
-        rows: Vec<Length>,
+        /// The children fill columns, not rows. Fixed at creation.
+        across: bool,
+        /// The row heights, or column widths when `across`, as last written.
+        lengths: Vec<Length>,
+        /// `NaN` until first written; only grids of columns write it.
+        spacing: f64,
     },
     Label {
         block: TextBlock,
         text: String,
+        look: label::Look,
+    },
+    /// From [`Ui::pressable`].
+    Pressable(Box<pressable::Parts>),
+    /// From [`Ui::scroll`].
+    Scroll {
+        content: Option<NodeId>,
+    },
+    /// From [`Ui::icon_button`].
+    IconButton {
+        button: Button,
+        icon: FontIcon,
+        /// [`None`] until first written.
+        glyph: Option<char>,
+        label: String,
+    },
+    /// From [`Ui::command_bar`].
+    CommandBar {
+        commands: IVector<ICommandBarElement>,
+    },
+    /// From [`Ui::app_bar_button`].
+    AppBarButton {
+        button: AppBarButton,
+        icon: FontIcon,
+        /// [`None`] until first written.
+        glyph: Option<char>,
+        label: String,
     },
     Button {
         button: Button,
@@ -541,10 +632,9 @@ pub(crate) enum Control {
         repeater: ItemsRepeater,
         data: Box<list::ListData>,
     },
-    /// The shell WinUI gets for one list row; the row's control is its
-    /// content.
+    /// The `ContentControl` shell WinUI gets for one list row; the row's
+    /// control is its content.
     Row {
-        shell: ContentControl,
         content: Option<NodeId>,
     },
     CheckBox {
@@ -590,6 +680,73 @@ impl Control {
             _ => None,
         }
     }
+
+    /// The one content control of a `ContentControl` this layer fills with
+    /// the control its body declares, or [`None`] for other controls.
+    pub(crate) fn content_slot(&mut self) -> Option<&mut Option<NodeId>> {
+        match self {
+            Control::Row { content, .. } | Control::Scroll { content } => Some(content),
+            Control::NavigationView(parts) => Some(&mut parts.content),
+            _ => None,
+        }
+    }
+}
+
+impl Response<'_> {
+    /// Whether the control, a `ButtonBase`, was clicked since the last
+    /// pass. The first call subscribes it.
+    pub(crate) fn button_clicked(&mut self) -> Result<bool> {
+        let control = self.ui.control_mut(self.node);
+        let element = control.element.clone();
+        let mut subscribed = control.subscribed;
+        self.ui
+            .events
+            .subscribe(self.node, &mut subscribed, &element, EventKind::Click)?;
+        self.ui.control_mut(self.node).subscribed = subscribed;
+        Ok(self.ui.events.happened(self.node, EventKind::Click))
+    }
+}
+
+/// Restyles `button` through its lightweight resources to the subtle look:
+/// no fill or border until the pointer is over it, as for a toolbar button
+/// or a list row.
+pub(crate) fn make_subtle(button: &Button) -> Result<()> {
+    let resources = button
+        .cast::<FrameworkElement>()?
+        .Resources()?
+        .cast::<IMap<IInspectable, IInspectable>>()?;
+    for (key, brush) in [
+        ("ButtonBackground", "SubtleFillColorTransparentBrush"),
+        (
+            "ButtonBackgroundPointerOver",
+            "SubtleFillColorSecondaryBrush",
+        ),
+        ("ButtonBackgroundPressed", "SubtleFillColorTertiaryBrush"),
+        (
+            "ButtonBackgroundDisabled",
+            "SubtleFillColorTransparentBrush",
+        ),
+        ("ButtonForeground", "TextFillColorPrimaryBrush"),
+        ("ButtonForegroundPointerOver", "TextFillColorPrimaryBrush"),
+        ("ButtonForegroundPressed", "TextFillColorSecondaryBrush"),
+        ("ButtonForegroundDisabled", "TextFillColorDisabledBrush"),
+        ("ButtonBorderBrush", "SubtleFillColorTransparentBrush"),
+        (
+            "ButtonBorderBrushPointerOver",
+            "SubtleFillColorTransparentBrush",
+        ),
+        (
+            "ButtonBorderBrushPressed",
+            "SubtleFillColorTransparentBrush",
+        ),
+        (
+            "ButtonBorderBrushDisabled",
+            "SubtleFillColorTransparentBrush",
+        ),
+    ] {
+        resources.Insert(&boxed(key), &resource::<IInspectable>(brush)?)?;
+    }
+    Ok(())
 }
 
 /// Whether a managed value must be written: the control is stale, or the

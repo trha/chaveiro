@@ -25,6 +25,8 @@ pub struct Ui {
     /// Item sources to set after the pass, with no borrow held, because
     /// WinUI may ask for rows inside `SetItemsSource`.
     pub(crate) sources: Vec<(ItemsRepeater, usize)>,
+    /// Set by [`request_pass`](Self::request_pass) during a pass.
+    pass_requested: bool,
 }
 
 impl Ui {
@@ -36,7 +38,21 @@ impl Ui {
             scratch: String::new(),
             lists: Vec::new(),
             sources: Vec::new(),
+            pass_requested: false,
         }
+    }
+
+    /// Asks for another pass soon after this one, for app state that
+    /// changed after the widgets that show it were declared, such as an
+    /// action a list row found that the next view applies. Without it, the
+    /// window shows the old state until the next event or message.
+    pub fn request_pass(&mut self) {
+        self.pass_requested = true;
+    }
+
+    /// Whether this pass asked for another one, and forgets it.
+    pub(crate) fn take_pass_request(&mut self) -> bool {
+        std::mem::take(&mut self.pass_requested)
     }
 
     /// Starts a pass. Returns whether events arrived since the last one.
@@ -217,37 +233,22 @@ impl Ui {
                 }
             }
             Payload::Control(ControlNode {
-                control: Control::Row { shell, content },
-                ..
-            }) => {
-                assert!(declared.len() <= 1, "a list row declares one control");
-                let declared_content = declared.first().copied();
-                if *content == declared_content {
-                    return Ok(());
-                }
-                *content = declared_content;
-                let shell = shell.clone();
-                match declared_content {
-                    Some(declared_content) => {
-                        shell.SetContent(&self.control(declared_content).element)
-                    }
-                    None => shell.SetContent(None::<&IInspectable>),
-                }
-            }
-            Payload::Control(ControlNode {
-                control: Control::NavigationView(parts),
+                control:
+                    control
+                    @ (Control::Row { .. } | Control::NavigationView(_) | Control::Scroll { .. }),
                 element,
                 ..
             }) => {
                 assert!(
                     declared.len() <= 1,
-                    "a navigation view declares one content control"
+                    "a list row, navigation view or scroll area declares one control"
                 );
+                let content = control.content_slot().expect("matched above");
                 let declared_content = declared.first().copied();
-                if parts.content == declared_content {
+                if *content == declared_content {
                     return Ok(());
                 }
-                parts.content = declared_content;
+                *content = declared_content;
                 let view = element.cast::<ContentControl>()?;
                 match declared_content {
                     Some(declared_content) => {
@@ -255,6 +256,50 @@ impl Ui {
                     }
                     None => view.SetContent(None::<&IInspectable>),
                 }
+            }
+            Payload::Control(ControlNode {
+                control: Control::Pressable(parts),
+                ..
+            }) => {
+                assert!(declared.len() <= 1, "a pressable declares one control");
+                let declared_content = declared.first().copied();
+                if parts.content == declared_content {
+                    return Ok(());
+                }
+                let old = std::mem::replace(&mut parts.content, declared_content);
+                let children = parts.children.clone();
+                // The pill is child 0, so the content is child 1.
+                if old.is_some() {
+                    children.RemoveAt(1)?;
+                }
+                if let Some(declared_content) = declared_content {
+                    let element = &self.control(declared_content).element;
+                    Grid::SetColumn(&element.cast::<FrameworkElement>()?, 1)?;
+                    children.Append(element)?;
+                }
+                Ok(())
+            }
+            Payload::Control(ControlNode {
+                control: Control::CommandBar { commands },
+                visual,
+                ..
+            }) => {
+                let commands = commands.clone();
+                // Afterwards `declared` holds the old list.
+                std::mem::swap(visual, declared);
+                let Payload::Control(control) = &self.tree.node(node).payload else {
+                    unreachable!("matched above")
+                };
+                for edit in edits(declared, &control.visual) {
+                    match edit {
+                        Edit::RemoveAt(index) => commands.RemoveAt(index)?,
+                        Edit::InsertAt(index, child) => commands.InsertAt(
+                            index,
+                            &self.control(child).element.cast::<ICommandBarElement>()?,
+                        )?,
+                    }
+                }
+                Ok(())
             }
             Payload::Control(ControlNode {
                 control: Control::Navigator(navigator),
@@ -329,15 +374,28 @@ impl Ui {
             .extend_from_slice(&cache.emitted);
     }
 
-    /// Puts each child of the grid `node` in the row of its position.
+    /// Puts each child of the grid `node` in the row, or for a grid of
+    /// columns the column, of its position.
     fn place_in_rows(&mut self, node: NodeId) -> Result<()> {
+        let across = matches!(
+            self.control(node).control,
+            Control::Grid { across: true, .. }
+        );
         for position in 0..self.control(node).visual.len() {
             let child = self.control(node).visual[position];
-            let row = i32::try_from(position).expect("a grid has fewer than 2^31 children");
+            let cell = i32::try_from(position).expect("a grid has fewer than 2^31 children");
             let child = self.control_mut(child);
-            if child.grid_row != row {
-                Grid::SetRow(&child.element.cast::<FrameworkElement>()?, row)?;
-                child.grid_row = row;
+            let written = match across {
+                true => &mut child.grid_column,
+                false => &mut child.grid_row,
+            };
+            if *written != cell {
+                let frame = child.element.cast::<FrameworkElement>()?;
+                match across {
+                    true => Grid::SetColumn(&frame, cell)?,
+                    false => Grid::SetRow(&frame, cell)?,
+                }
+                *written = cell;
             }
         }
         Ok(())
@@ -418,6 +476,9 @@ pub(crate) struct ControlNode {
     pub(crate) stale: bool,
     /// The `Grid.Row` last written; -1 until the control is placed in a grid.
     pub(crate) grid_row: i32,
+    /// The `Grid.Column` last written; -1 until the control is placed in a
+    /// grid of columns.
+    pub(crate) grid_column: i32,
     /// `Control.IsEnabled` as last written; [`None`] until first written.
     pub(crate) enabled: Option<bool>,
     /// The header text last written, without the required mark; empty
@@ -437,6 +498,9 @@ pub(crate) struct ControlNode {
     pub(crate) padding: Option<[f64; 4]>,
     /// The margin last written.
     pub(crate) margin: Option<[f64; 4]>,
+    /// The edges that show a divider line, as last written by
+    /// [`Response::dividers`](crate::Response::dividers).
+    pub(crate) dividers: Option<[bool; 4]>,
     /// The line under a field for its error, made by the first
     /// [`error`](crate::Response) call, and the message it shows.
     pub(crate) error: Option<crate::widget::ErrorLine>,
@@ -451,6 +515,7 @@ impl ControlNode {
             subscribed: EventSet::default(),
             stale: false,
             grid_row: -1,
+            grid_column: -1,
             enabled: None,
             header: String::new(),
             required: false,
@@ -460,6 +525,7 @@ impl ControlNode {
             width: f64::NAN,
             padding: None,
             margin: None,
+            dividers: None,
             error: None,
         })
     }

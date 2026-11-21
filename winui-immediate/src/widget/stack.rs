@@ -1,4 +1,4 @@
-use super::{Control, Response, must_write, resource};
+use super::{Control, Length, Response, must_write, resource};
 use crate::{
     bindings::{
         Brush, CornerRadius, FrameworkElement, HorizontalAlignment, IPanel, Panel, StackPanel,
@@ -88,17 +88,7 @@ impl Ui {
         };
         if written.is_nan() {
             // The first pass: a stack becomes a card once.
-            panel
-                .cast::<IPanel>()?
-                .SetBackground(&resource::<Brush>("CardBackgroundFillColorDefaultBrush")?)?;
-            panel.SetBorderBrush(&resource::<Brush>("CardStrokeColorDefaultBrush")?)?;
-            panel.SetBorderThickness(uniform(1.0))?;
-            panel.SetCornerRadius(CornerRadius {
-                top_left: 8.0,
-                top_right: 8.0,
-                bottom_right: 8.0,
-                bottom_left: 8.0,
-            })?;
+            card_look(panel)?;
             panel.SetPadding(uniform(24.0))?;
             let frame = panel.cast::<FrameworkElement>()?;
             frame.SetHorizontalAlignment(HorizontalAlignment::Center)?;
@@ -110,6 +100,87 @@ impl Ui {
         }
         Ok(Response { ui: self, node })
     }
+
+    /// A Fluent card that groups rows, such as the fields of an item: a
+    /// vertical stack of the controls `body` declares, with no gap or
+    /// padding, stretched across its container, with the fill, stroke and
+    /// corners of [`Ui::card`]. Fill it with [`Ui::card_row`].
+    ///
+    /// The fill and stroke are the theme's at creation, as for
+    /// [`Ui::card`].
+    pub fn card_group(
+        &mut self,
+        id: impl Hash,
+        body: impl FnOnce(&mut Ui) -> Result<()>,
+    ) -> Result<Response<'_>> {
+        let node = self.stack(id, Orientation::Vertical, 0.0, body)?.node;
+        let control = self.control_mut(node);
+        let Control::Stack {
+            panel,
+            width: written,
+            ..
+        } = &mut control.control
+        else {
+            unreachable!("card keys hold stacks")
+        };
+        if written.is_nan() {
+            // The first pass: a stack becomes a card once.
+            card_look(panel)?;
+            *written = f64::INFINITY;
+        }
+        Ok(Response { ui: self, node })
+    }
+
+    /// One row of a [`Ui::card_group`]: a grid of one row with one column
+    /// per entry of `columns`, 8px apart, filled in order like
+    /// [`Ui::columns`]. It is at least 60px tall, the height of a caption
+    /// over a value, with 16px of padding on the left and 8px elsewhere.
+    ///
+    /// `divider` draws a 1px line at its top; pass false for the first row
+    /// shown in its group, and true for the rest.
+    pub fn card_row(
+        &mut self,
+        id: impl Hash,
+        divider: bool,
+        columns: &[Length],
+        body: impl FnOnce(&mut Ui) -> Result<()>,
+    ) -> Result<Response<'_>> {
+        let node = self.grid_node(
+            id,
+            true,
+            columns,
+            |grid| {
+                grid.SetColumnSpacing(8.0)?;
+                grid.SetPadding(Thickness {
+                    left: 16.0,
+                    top: 8.0,
+                    right: 8.0,
+                    bottom: 8.0,
+                })?;
+                let frame = grid.cast::<FrameworkElement>()?;
+                frame.SetMinHeight(60.0)
+            },
+            body,
+        )?;
+        let mut response = Response { ui: self, node };
+        response.dividers([false, divider, false, false])?;
+        Ok(response)
+    }
+}
+
+/// Gives `panel` the fill, stroke and 8px corners of a Fluent card.
+fn card_look(panel: &StackPanel) -> Result<()> {
+    panel
+        .cast::<IPanel>()?
+        .SetBackground(&resource::<Brush>("CardBackgroundFillColorDefaultBrush")?)?;
+    panel.SetBorderBrush(&resource::<Brush>("CardStrokeColorDefaultBrush")?)?;
+    panel.SetBorderThickness(uniform(1.0))?;
+    panel.SetCornerRadius(CornerRadius {
+        top_left: 8.0,
+        top_right: 8.0,
+        bottom_right: 8.0,
+        bottom_left: 8.0,
+    })
 }
 
 fn uniform(length: f64) -> Thickness {

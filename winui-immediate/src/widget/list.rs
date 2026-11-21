@@ -2,8 +2,9 @@ use super::Control;
 use crate::{
     App,
     bindings::{
-        ContentControl, ElementFactoryGetArgs, ElementFactoryRecycleArgs, IElementFactory,
-        IElementFactory_Impl, ItemsRepeater, ScrollViewer, UIElement,
+        ContentControl, Control as XamlControl, ElementFactoryGetArgs, ElementFactoryRecycleArgs,
+        HorizontalAlignment, IElementFactory, IElementFactory_Impl, ItemsRepeater, ScrollViewer,
+        UIElement,
     },
     pass::{ChildKind, ControlNode, Payload, Ui},
     runner,
@@ -161,14 +162,12 @@ impl Ui {
                 let slot = data.next_slot;
                 data.next_slot += 1;
                 let shell = ContentControl::new()?;
+                // A row's control spans the row, as in a WinUI list.
+                shell
+                    .cast::<XamlControl>()?
+                    .SetHorizontalContentAlignment(HorizontalAlignment::Stretch)?;
                 let key = Key::child(self.tree.node(list).key(), ("row", slot));
-                let payload = ControlNode::new(
-                    shell.cast()?,
-                    Control::Row {
-                        shell,
-                        content: None,
-                    },
-                );
+                let payload = ControlNode::new(shell.cast()?, Control::Row { content: None });
                 (self.tree.adopt(list, key, payload), slot)
             }
         };

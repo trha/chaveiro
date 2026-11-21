@@ -20,7 +20,10 @@ mod second_factor;
 mod vault;
 mod wipe;
 
-use chaveiro_core::core::{Config, Core, Input, LoginError, Screen, UserAction};
+use chaveiro_core::{
+    core::{Config, Core, Input, LoginError, Screen, UserAction},
+    vault::VaultIndex,
+};
 use io::{Answer, Io, Settings, SettingsError, TaskId};
 use login::{LoginForm, LoginState, Submit};
 use rand_core::OsRng;
@@ -28,7 +31,7 @@ use route::Route;
 use screen::{form, title};
 use second_factor::{SecondFactorForm, SecondFactorState};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use vault::{VaultAction, VaultForm};
+use vault::{VaultAction, VaultApp, VaultForm};
 use windows_core::Result;
 use winui_immediate::{App, Handle, Orientation, Slide, Ui, run};
 
@@ -144,7 +147,8 @@ impl App for Chaveiro {
                 let Some(Screen::Vault(screen)) = self.core.as_ref().map(Core::screen) else {
                     unreachable!("Route::Vault comes from Screen::Vault")
                 };
-                let pass = vault::view(ui, &mut self.vault, &screen)?;
+                let open = screen.open.map(|item| &item.view);
+                let pass = vault::view::<Self>(ui, &mut self.vault, &screen, open)?;
                 self.io.set_window(pass.window);
                 pass.action.map(|action| match action {
                     VaultAction::Close => Next::Close,
@@ -205,6 +209,15 @@ impl App for Chaveiro {
             }
         }
         Ok(())
+    }
+}
+
+impl VaultApp for Chaveiro {
+    fn vault(&mut self) -> Option<(&mut VaultForm, &VaultIndex)> {
+        match self.core.as_ref().map(Core::screen) {
+            Some(Screen::Vault(screen)) => Some((&mut self.vault, screen.index)),
+            _ => None,
+        }
     }
 }
 

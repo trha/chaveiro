@@ -15,6 +15,13 @@ use std::{
 };
 use windows_core::{Error, IInspectable, Interface, Result};
 
+/// The most passes one turn runs. Three covers the longest chain in use: a
+/// list row reads a click, the next pass's view turns it into an action,
+/// and a third draws the action's result. Raise it only for a new chain
+/// that needs it, because each pass rebuilds the whole view, and a higher
+/// cap hides an app that asks for a pass on every pass.
+const MAX_PASSES: u32 = 3;
+
 /// An app: state that the UI thread updates from messages and shows through
 /// [`view`](Self::view).
 pub trait App: 'static {
@@ -124,9 +131,12 @@ impl<A: App> Runner<A> {
         }
     }
 
-    /// Applies queued messages, then runs a pass, and a second one when the
-    /// first consumed events: widgets declared before the one that read an
-    /// event still show the old state.
+    /// Applies queued messages, then runs passes while the last one consumed
+    /// events or asked for another, up to [`MAX_PASSES`]: widgets declared
+    /// before the one that read an event still show the old state.
+    ///
+    /// Panics when the last allowed pass still consumed events or asked for
+    /// another, because that is a bug in the app.
     fn run_turn(&self) {
         self.scheduled.set(false);
         if self.failure.borrow().is_some() {
@@ -142,12 +152,15 @@ impl<A: App> Runner<A> {
         }
         *self.messages.borrow_mut() = messages;
         let result = tracing::debug_span!("turn").in_scope(|| {
-            self.pass()
-                .and_then(|consumed| match consumed {
-                    true => self.pass().map(drop),
-                    false => Ok(()),
-                })
-                .and_then(|()| self.set_sources())
+            let mut passes = 0;
+            while self.pass()? {
+                passes += 1;
+                assert!(
+                    passes < MAX_PASSES,
+                    "pass {MAX_PASSES} of one turn asked for another; the app loops or needs a longer chain"
+                );
+            }
+            self.set_sources()
         });
         if let Err(error) = result {
             *self.failure.borrow_mut() = Some(error);
@@ -157,21 +170,22 @@ impl<A: App> Runner<A> {
     }
 
     /// Runs one pass: the view, then every realized list row. Returns whether
-    /// it consumed events.
+    /// it consumed events or asked for another pass.
     fn pass(&self) -> Result<bool> {
-        let consumed = {
+        {
             let mut ui = self.ui.borrow_mut();
             let mut app = self.app.borrow_mut();
             let consumed = ui.begin();
             app.view(&mut ui)?;
             ui.build_rows(&mut *app)?;
+            let again = consumed || ui.take_pass_request();
             if ui.end()? > 0 {
-                return Ok(consumed);
+                return Ok(again);
             }
-            consumed
-        };
+        }
+        // No window is left, so no pass is wanted either.
         self.finish();
-        Ok(consumed)
+        Ok(false)
     }
 
     /// Gives each list whose rows changed its new item source. Runs with no
