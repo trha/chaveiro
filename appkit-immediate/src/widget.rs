@@ -9,8 +9,8 @@ use objc2::{rc::Retained, runtime::AnyObject};
 use objc2_app_kit::{
     NSButton, NSColor, NSComboBox, NSControl, NSFont, NSFontDescriptorSymbolicTraits,
     NSFontTextStyleBody, NSFontTextStyleCaption1, NSFontTextStyleTitle1, NSFontTextStyleTitle2,
-    NSLayoutConstraint, NSPopUpButton, NSProgressIndicator, NSSecureTextField, NSStackView,
-    NSTableView, NSTextField, NSView,
+    NSLayoutConstraint, NSPopUpButton, NSProgressIndicator, NSSecureTextField,
+    NSSplitViewController, NSSplitViewItem, NSStackView, NSTableView, NSTextField, NSView,
 };
 use objc2_foundation::{NSDictionary, NSEdgeInsets};
 
@@ -26,6 +26,8 @@ mod label;
 mod native;
 mod pop_up_button;
 mod secure_text_field;
+mod source_list;
+mod split_view;
 mod stack_view;
 mod table_view;
 mod text_field;
@@ -41,6 +43,9 @@ pub use grid::Length;
 pub(crate) use grid::{Rule as GridRule, constraints as grid_constraints, rules as grid_rules};
 pub use pop_up_button::PopUpButtonResponse;
 pub use secure_text_field::{SecureTextFieldHandle, SecureTextFieldResponse};
+pub(crate) use source_list::Source;
+pub use source_list::{SourceListEntries, SourceListResponse};
+pub(crate) use split_view::pane_item;
 pub use stack_view::Orientation;
 pub(crate) use table_view::TableData;
 pub use table_view::{RowFn, TableViewId};
@@ -356,6 +361,22 @@ pub(crate) enum Control {
         table: Retained<NSTableView>,
         data: Box<TableData>,
     },
+    /// The node's view is the scroll view around `table`, whose rows show
+    /// the entries `source` holds.
+    SourceList {
+        table: Retained<NSTableView>,
+        source: Retained<Source>,
+        /// The revision whose entries `source` holds.
+        revision: Option<u64>,
+        /// The selectable position last written or read back.
+        selected: Option<usize>,
+    },
+    /// Contract: `panes` holds one item per visual child, in order, each
+    /// an item of `controller` with the child pinned inside its view.
+    SplitView {
+        controller: Retained<NSSplitViewController>,
+        panes: Vec<Pane>,
+    },
     /// The cell view AppKit gets for one table row; the row's control is
     /// pinned inside it by `pins`.
     Row {
@@ -363,6 +384,14 @@ pub(crate) enum Control {
         content: Option<NodeId>,
         pins: Vec<Retained<NSLayoutConstraint>>,
     },
+}
+
+/// One pane of a split view.
+pub(crate) struct Pane {
+    pub(crate) item: Retained<NSSplitViewItem>,
+    pub(crate) child: NodeId,
+    /// The active constraints that pin the child inside `container`.
+    pub(crate) pins: Vec<Retained<NSLayoutConstraint>>,
 }
 
 impl Control {
@@ -391,6 +420,8 @@ impl Control {
             | Control::Grid { .. }
             | Control::BoxView { .. }
             | Control::TableView { .. }
+            | Control::SourceList { .. }
+            | Control::SplitView { .. }
             | Control::Row { .. }
             | Control::Native => return None,
         })
@@ -414,6 +445,8 @@ impl Control {
             Control::Native => "native",
             Control::TableView { .. } => "table_view",
             Control::Row { .. } => "row",
+            Control::SourceList { .. } => "source_list",
+            Control::SplitView { .. } => "split_view",
         }
     }
 
@@ -429,7 +462,9 @@ impl Control {
             Control::SecureTextField { field, .. } => (Some(field), &[]),
             Control::PopUpButton { button, .. } => (Some(button), &[]),
             Control::ComboBox { combo_box, .. } => (Some(combo_box), &[]),
-            Control::TableView { table, .. } => (Some(table), &[]),
+            Control::TableView { table, .. } | Control::SourceList { table, .. } => {
+                (Some(table), &[])
+            }
             Control::CodeBoxes { boxes, .. } => (None, boxes),
             Control::Stack { .. }
             | Control::Grid { .. }
@@ -437,6 +472,7 @@ impl Control {
             | Control::AlertLine { .. }
             | Control::BoxView { .. }
             | Control::Native
+            | Control::SplitView { .. }
             | Control::Row { .. } => (None, &[]),
         };
         one.into_iter()

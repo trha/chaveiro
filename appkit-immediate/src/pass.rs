@@ -6,7 +6,8 @@ use crate::{
     events::{EventKind, Events},
     tree::{Key, NodeId, Tree, Visit},
     widget::{
-        Align, Control, Field, GridRule as Rule, Style, TextColor, grid_constraints, grid_rules,
+        Align, Control, Field, GridRule as Rule, Pane, Style, TextColor, grid_constraints,
+        grid_rules, pane_item,
     },
 };
 use objc2::{MainThreadMarker, rc::Retained, runtime::ProtocolObject};
@@ -318,6 +319,49 @@ impl Ui {
                 *pins = built;
             }
             Payload::Control(ControlNode {
+                control: Control::SplitView { controller, panes },
+                ..
+            }) => {
+                if panes
+                    .iter()
+                    .map(|pane| pane.child)
+                    .eq(declared.iter().copied())
+                {
+                    return;
+                }
+                crate::write_check::record(node);
+                let controller = controller.clone();
+                // Panes change rarely, so all of them are built again.
+                for pane in std::mem::take(panes) {
+                    NSLayoutConstraint::deactivateConstraints(&NSArray::from_retained_slice(
+                        &pane.pins,
+                    ));
+                    controller.removeSplitViewItem(&pane.item);
+                    if let Some(Payload::Control(old)) =
+                        self.tree.get(pane.child).map(|old| &old.payload)
+                    {
+                        old.view.removeFromSuperview();
+                    }
+                }
+                let mut built = Vec::with_capacity(declared.len());
+                for (position, &child) in declared.iter().enumerate() {
+                    let (item, container) = pane_item(self.mtm, position);
+                    let view = &self.control(child).view;
+                    // The sidebar item insets its own content below a
+                    // full-size title bar; the other panes start below it.
+                    let pins = match position {
+                        0 => pin_to_edges(&container, view),
+                        _ => pin_below_title_bar(&container, view),
+                    };
+                    controller.addSplitViewItem(&item);
+                    built.push(Pane { item, child, pins });
+                }
+                let Control::SplitView { panes, .. } = &mut self.control_mut(node).control else {
+                    unreachable!("matched above")
+                };
+                *panes = built;
+            }
+            Payload::Control(ControlNode {
                 control:
                     Control::Grid {
                         container,
@@ -481,9 +525,12 @@ pub(crate) struct WindowNode {
     /// The visual effect view behind the content, made on first use.
     pub(crate) effect: Option<Retained<NSVisualEffectView>>,
     pub(crate) compact: bool,
+    pub(crate) full_size: bool,
     /// The fitting size [`size_to_fit`](crate::WindowResponse::size_to_fit)
     /// last applied, in points.
     pub(crate) fitted: Option<(f64, f64)>,
+    /// [`initial_size`](crate::WindowResponse::initial_size) sized it.
+    pub(crate) sized: bool,
     /// The title last written.
     pub(crate) title: String,
 }
@@ -565,6 +612,25 @@ fn pin_to_edges(container: &NSView, view: &NSView) -> Vec<Retained<NSLayoutConst
             .constraintEqualToAnchor(&container.trailingAnchor()),
         view.topAnchor()
             .constraintEqualToAnchor(&container.topAnchor()),
+        view.bottomAnchor()
+            .constraintEqualToAnchor(&container.bottomAnchor()),
+    ];
+    NSLayoutConstraint::activateConstraints(&NSArray::from_retained_slice(&pins));
+    pins
+}
+
+/// Adds `view` to `container` and pins it to the edges, with its top at
+/// the top of the container's safe area, which a full-size title bar
+/// covers. Returns the active constraints.
+fn pin_below_title_bar(container: &NSView, view: &NSView) -> Vec<Retained<NSLayoutConstraint>> {
+    container.addSubview(view);
+    let pins = vec![
+        view.leadingAnchor()
+            .constraintEqualToAnchor(&container.leadingAnchor()),
+        view.trailingAnchor()
+            .constraintEqualToAnchor(&container.trailingAnchor()),
+        view.topAnchor()
+            .constraintEqualToAnchor(&container.safeAreaLayoutGuide().topAnchor()),
         view.bottomAnchor()
             .constraintEqualToAnchor(&container.bottomAnchor()),
     ];

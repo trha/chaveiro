@@ -25,3 +25,6 @@ uuid = { version = "1", features = ["v4", "serde"] }
 chaveiro-core = { path = "../chaveiro-core" }
 zeroize = "1"
 zeroizing-alloc = "0.1.1"
+
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+objc2-app-kit = "0.3"

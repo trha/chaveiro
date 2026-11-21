@@ -126,6 +126,8 @@ pub(crate) enum EventKind {
     /// A text field's editor took a command, such as an arrow key. Only
     /// the commands of [`Command`] are reported.
     Command(Command),
+    /// The user changed a source list's selection.
+    SelectionDidChange,
     ShouldClose,
     ShouldTerminate,
 }
@@ -304,7 +306,7 @@ impl Target {
     /// Queues `kind` for the node of `sender` and wakes the runner. Ignores a
     /// sender with no node, such as a control dropped while its event was in
     /// flight.
-    fn push(&self, sender: &AnyObject, kind: EventKind) {
+    pub(crate) fn push(&self, sender: &AnyObject, kind: EventKind) {
         let ivars = self.ivars();
         let Some(node) = ivars.senders.borrow().get(&address(sender)).copied() else {
             return;

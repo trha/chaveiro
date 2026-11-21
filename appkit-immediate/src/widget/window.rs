@@ -49,7 +49,9 @@ impl Ui {
                 pins: Vec::new(),
                 effect: None,
                 compact: false,
+                full_size: false,
                 fitted: None,
+                sized: false,
                 title: String::new(),
             })
         });
@@ -90,7 +92,7 @@ impl Ui {
             else {
                 continue;
             };
-            if window.fitted.is_none() {
+            if window.fitted.is_none() && !window.sized {
                 let fitting = window.container.fittingSize();
                 window.window.setContentSize(NSSize::new(
                     fitting.width.max(MINIMUM.width),
@@ -182,6 +184,44 @@ impl WindowResponse<'_> {
                 }
             }
             window.compact = true;
+        }
+        self
+    }
+
+    /// Opens the window with content `width`×`height` points, or its
+    /// content's fitting size where that is larger, in place of the
+    /// 360×200 minimum. Later passes leave the size to the user.
+    pub fn initial_size(&mut self, width: f64, height: f64) -> &mut Self {
+        let window = self.ui.window_mut(self.node);
+        if !window.sized {
+            let fitting = crate::write_check::paused(|| {
+                window.container.layoutSubtreeIfNeeded();
+                window.container.fittingSize()
+            });
+            crate::write_check::record(self.node);
+            window.window.setContentSize(NSSize::new(
+                width.max(fitting.width),
+                height.max(fitting.height),
+            ));
+            window.sized = true;
+        }
+        self
+    }
+
+    /// Draws the content up under a transparent title bar with no title,
+    /// keeping all three window buttons, so a
+    /// [`split_view`](Ui::split_view)'s sidebar reaches the window's top
+    /// edge. Its other panes start below the title bar.
+    pub fn full_size_content(&mut self) -> &mut Self {
+        let window = self.ui.window_mut(self.node);
+        if !window.full_size {
+            crate::write_check::record(self.node);
+            let window_view = &window.window;
+            window_view
+                .setStyleMask(window_view.styleMask() | NSWindowStyleMask::FullSizeContentView);
+            window_view.setTitlebarAppearsTransparent(true);
+            window_view.setTitleVisibility(NSWindowTitleVisibility::Hidden);
+            window.full_size = true;
         }
         self
     }

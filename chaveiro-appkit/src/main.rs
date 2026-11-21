@@ -1,8 +1,9 @@
 //! Chaveiro for macOS: an appkit-immediate [`App`] over the chaveiro-core
 //! [`Core`], with [`Io`] running the core's effects.
 //!
-//! The login and two-step login screens are built. The other screens show a placeholder
-//! with the one action that leads back to login.
+//! The login and two-step login screens are built, and the vault window has
+//! its sidebar. The unlock screen shows a placeholder with the one action
+//! that leads back to login.
 
 // The program is macOS only. On other targets it is empty, so it checks but
 // does not link.
@@ -12,6 +13,7 @@
 mod io;
 mod login;
 mod second_factor;
+mod vault;
 mod wipe;
 
 use appkit_immediate::{App, Handle, Orientation, Style, Ui, run};
@@ -21,6 +23,7 @@ use login::{LoginAction, LoginForm, LoginState};
 use rand_core::OsRng;
 use second_factor::{SecondFactorAction, SecondFactorForm, SecondFactorState};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use vault::{VaultAction, VaultForm};
 
 /// Logs go to stderr, filtered by `CHAVEIRO_LOG` (such as `debug`),
 /// warnings and up by default.
@@ -54,6 +57,9 @@ struct Chaveiro {
     /// The two-step form while its screen shows; a new challenge starts a
     /// new one.
     second_factor: Option<SecondFactorForm>,
+    vault: VaultForm,
+    /// The last pass showed the vault, so its form is current.
+    showed_vault: bool,
 }
 
 /// Lock after this long with no user action.
@@ -127,6 +133,8 @@ impl Chaveiro {
             login: LoginForm::new(),
             showed_login: false,
             second_factor: None,
+            vault: VaultForm::default(),
+            showed_vault: false,
         };
         // The store keeps nothing yet, so every start is a first one.
         app.handle_input(Input::Started {
@@ -142,9 +150,7 @@ impl Chaveiro {
 
     /// Feeds one input to the core and starts its effects.
     fn handle_input(&mut self, input: Input) {
-        let now_ms = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_or(0, |since| since.as_millis() as u64);
+        let now_ms = now_ms();
         for effect in self.core.handle(now_ms, &mut OsRng, input) {
             self.io.run(effect);
         }
@@ -156,6 +162,19 @@ impl Chaveiro {
     /// The window for the current screen.
     fn body(&mut self, ui: &mut Ui) -> Option<Next> {
         let screen = self.core.screen();
+        if let Screen::Vault(vault) = &screen {
+            // The vault starts on All Items each time it opens.
+            if !std::mem::replace(&mut self.showed_vault, true) {
+                self.vault.reset();
+            }
+            self.showed_login = false;
+            self.second_factor = None;
+            return match vault::view(ui, &mut self.vault, vault, now_ms())? {
+                VaultAction::User(action) => Some(Next::User(action)),
+                VaultAction::Close => Some(Next::Quit),
+            };
+        }
+        self.showed_vault = false;
         if let Screen::SecondFactor {
             email,
             challenge,
@@ -224,12 +243,19 @@ impl Chaveiro {
     }
 }
 
+/// Our clock, in ms since the epoch; 0 for a clock set before 1970.
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |since| since.as_millis() as u64)
+}
+
 /// A screen this app does not draw yet, with the action that leads back to
 /// login.
 fn placeholder(ui: &mut Ui, screen: &Screen<'_>) -> Option<Next> {
     let (name, button, action) = match screen {
         Screen::Locked { .. } => ("Unlock", "Log Out", UserAction::Logout),
-        _ => ("The vault", "Lock", UserAction::Lock),
+        _ => ("This screen", "Lock", UserAction::Lock),
     };
     let mut next = None;
     let mut window = ui.window("main", "Chaveiro", |ui| {
