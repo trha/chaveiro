@@ -51,6 +51,27 @@ Option C is:
 6. **Reduce exposure:** Windows Hello unlock, so the master password is typed
    rarely; `VirtualLock` key material; keep our process out of crash dumps.
 
+**Stack copies (measured in WP-06, 2026-11-20).** Moving a key struct
+leaves copies in dead stack frames that no destructor zeroes. A scan after
+lock found 2 copies of the user key on the UI thread's stack. `app` now
+calls `wipe_stack` (192 KiB of zeros) after each input that leaves the vault
+hidden, and the scan then found none. Scanner: ReadProcessMemory over
+committed pages, searching each 32-byte half of the user key.
+
+**Remembered second factor (2026-11-21).** The token from
+`twoFactorRemember=1` lives in the protected `TwoFactorToken` slot and in
+`Core`, and it survives lock and logout on purpose, as in Bitwarden's
+clients. It only skips the second factor, so the master password is still
+needed. The core sends it only for the server and email it was issued to
+(the record names its server since 2026-11-21), and clears it when the
+server refuses it.
+
+WinRT strings bypass the wiping allocator. `take_password` in
+winui-immediate zeroes the `HSTRING` that `PasswordBox.Password` returns and
+hands back a `Zeroizing<String>`. The request body buffer in
+chaveiro-winui's `http.rs` (which holds the password hash at login) is still
+an unwiped WinRT copy.
+
 **Why:** the user decided that memory hygiene matters only for what outlives
 the unlocked session, since a live same-user attacker gets the password
 anyway.
