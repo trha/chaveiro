@@ -3,7 +3,7 @@
 # Accessibility access for the terminal that runs it.
 set -euo pipefail
 root=$(cd "$(dirname "$0")/../.." && pwd)
-cargo build -q -p appkit-immediate --example smoke --manifest-path "$root/Cargo.toml"
+cargo build -q -p appkit-immediate --example smoke --example grid --manifest-path "$root/Cargo.toml"
 binary="$root/target/debug/examples/smoke"
 log=$(mktemp -t smoke.XXXXXX)
 failures=0
@@ -50,6 +50,32 @@ wait "$pid" || status=$?
 check "a panicking pass ends the process with the panic" "[ $status -ne 0 ] && grep -q 'planned panic' '$log'"
 check "the app is dropped after a panic" "grep -q 'app dropped' '$log'"
 check "no abort after a panic" "! grep -qi 'abort' '$log'"
+
+# Run 3: grid rows. Heights come back as "label: height" lines.
+"$root/target/debug/examples/grid" >"$log" 2>&1 &
+pid=$!
+sleep 1.5
+grid='tell application "System Events" to tell (first process whose name is "grid")'
+heights() {
+    for label in auto pixels "one star" "two stars"; do
+        osascript -e "$grid to get item 2 of (get size of (first static text of window \"grid\" whose value is \"$label\"))"
+    done | paste -sd' ' -
+}
+grid_ok() { # pixels is 40, two is twice one, auto keeps the label's own height
+    read -r auto pixels one two <<<"$(heights)"
+    # Accessibility reports frames, 2pt taller than the alignment rects the
+    # constraints size.
+    pixels=$((pixels - 2)) one=$((one - 2)) two=$((two - 2))
+    [ "$pixels" -eq 40 ] && [ "$two" -ge $((2 * one - 1)) ] && [ "$two" -le $((2 * one + 1)) ] && [ "$auto" -lt 30 ]
+}
+grid_height() { osascript -e "$grid to get item 2 of (get size of window \"grid\")"; }
+check "grid rows at the first size" grid_ok
+check "the grid window opens at least 200 tall" "[ \$(grid_height) -ge 200 ]"
+osascript -e "$grid to set size of window \"grid\" to {500, 600}" >/dev/null
+sleep 0.4
+check "grid rows after a resize" grid_ok
+check "star rows grow with the window" "[ \$(heights | awk '{ print \$4 }') -gt 300 ]"
+kill "$pid"
 
 rm -f "$log"
 exit "$failures"

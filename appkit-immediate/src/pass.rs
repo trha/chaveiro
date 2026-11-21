@@ -5,10 +5,12 @@ use crate::{
     children::{Edit, edits},
     events::{EventKind, Events},
     tree::{Key, NodeId, Tree, Visit},
-    widget::Control,
+    widget::{Control, GridRule as Rule, grid_constraints, grid_rules},
 };
 use objc2::{MainThreadMarker, rc::Retained, runtime::ProtocolObject};
-use objc2_app_kit::{NSApplication, NSLayoutConstraint, NSView, NSWindow};
+use objc2_app_kit::{
+    NSApplication, NSLayoutConstraint, NSLayoutConstraintOrientation, NSView, NSWindow,
+};
 use objc2_foundation::NSArray;
 use std::{hash::Hash, rc::Rc};
 
@@ -192,9 +194,92 @@ impl Ui {
                 window.pins = pins;
                 window.pinned = Some(view);
             }
+            Payload::Control(ControlNode {
+                control:
+                    Control::Grid {
+                        container,
+                        rows,
+                        constraints,
+                        placed,
+                        stretched,
+                    },
+                visual,
+                ..
+            }) => {
+                // Afterwards `declared` holds the old list.
+                std::mem::swap(visual, declared);
+                if *placed && declared == visual {
+                    return;
+                }
+                let container = container.clone();
+                let rules = grid_rules(rows, visual.len());
+                NSLayoutConstraint::deactivateConstraints(&NSArray::from_retained_slice(
+                    &std::mem::take(constraints),
+                ));
+                *placed = true;
+                let mut lowered = std::mem::take(stretched);
+                let new = visual.clone();
+                for (child, priority) in lowered.drain(..) {
+                    if let Some(child) = self.tree.get(child) {
+                        let Payload::Control(child) = &child.payload else {
+                            unreachable!("visual children are controls")
+                        };
+                        child.view.setContentHuggingPriority_forOrientation(
+                            priority,
+                            NSLayoutConstraintOrientation::Vertical,
+                        );
+                    }
+                }
+                for rule in &rules {
+                    if let Rule::Stretch { row } = *rule {
+                        let view = &self.control(new[row]).view;
+                        lowered.push((
+                            new[row],
+                            view.contentHuggingPriorityForOrientation(
+                                NSLayoutConstraintOrientation::Vertical,
+                            ),
+                        ));
+                        view.setContentHuggingPriority_forOrientation(
+                            1.0,
+                            NSLayoutConstraintOrientation::Vertical,
+                        );
+                    }
+                }
+                // Order among subviews does not matter: constraints place
+                // them.
+                for old in declared.iter().filter(|old| !new.contains(old)) {
+                    if let Some(old) = self.tree.get(*old) {
+                        let Payload::Control(old) = &old.payload else {
+                            unreachable!("visual children are controls")
+                        };
+                        old.view.removeFromSuperview();
+                    }
+                }
+                let children: Vec<Retained<NSView>> = new
+                    .iter()
+                    .map(|child| self.control(*child).view.clone())
+                    .collect();
+                for (child, view) in new.iter().zip(&children) {
+                    if !declared.contains(child) {
+                        container.addSubview(view);
+                    }
+                }
+                let built = grid_constraints(&container, &children, &rules);
+                NSLayoutConstraint::activateConstraints(&NSArray::from_retained_slice(&built));
+                let Control::Grid {
+                    constraints,
+                    stretched,
+                    ..
+                } = &mut self.control_mut(node).control
+                else {
+                    unreachable!("matched above")
+                };
+                *constraints = built;
+                *stretched = lowered;
+            }
             Payload::Control(control) => {
                 let Control::Stack { stack, .. } = &control.control else {
-                    assert!(declared.is_empty(), "only stacks have children");
+                    assert!(declared.is_empty(), "only stacks and grids have children");
                     return;
                 };
                 let stack = stack.clone();

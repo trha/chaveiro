@@ -274,13 +274,17 @@ pub(crate) enum Rule {
     /// The child's top edge sits on the container's top edge (row 0) or on
     /// the bottom edge of the row above.
     Top { row: usize },
-    /// The last child's bottom edge sits on the container's bottom edge.
-    /// Left out when no row is `Star`, so the grid hugs its content.
-    Bottom { row: usize },
+    /// The last child's bottom edge sits on the container's bottom edge when
+    /// `exact` (some row is `Star`). Otherwise it stays at or above it, with
+    /// an equal constraint at priority 1, so the grid hugs its content.
+    Bottom { row: usize, exact: bool },
     Height { row: usize, points: f64 },
     /// `height(row) = ratio * height(unit)`, where `unit` is the first
     /// `Star` row.
     Share { row: usize, unit: usize, ratio: f64 },
+    /// The child of a `Star` row gives up its vertical hugging (set to 1,
+    /// restored when it leaves the row), so it fills the row.
+    Stretch { row: usize },
 }
 pub(crate) fn rules(rows: &[Length], children: usize) -> Vec<Rule>;
 ```
@@ -453,7 +457,10 @@ test-only impl. The differences are no `Result` and no WinUI types.
    they drive only the tree.
 3. `grid::rules` property tests, each a separate check:
    - every child gets exactly one `Top`;
-   - `Bottom` appears exactly when some row is `Star`;
+   - only the last child gets a `Bottom`, and it is `exact` exactly when
+     some row is `Star`;
+   - exactly the `Star` rows get a `Stretch`;
+   - `Pixels` rows get their height;
    - for any two `Star` rows, the ratios they imply equal the ratio of their
      weights;
    - `Auto` rows get no height rule.
@@ -503,7 +510,15 @@ The main agent owns every step, one at a time, because all steps edit
    `invalidate` has no UI check yet; step 5's text field tests use it.
 4. Grid: `rules` with its property tests, the `Control::Grid` arm in
    `apply_visual`. Runs test 3 and a smoke grid with Auto, Pixels and Star
-   rows.
+   rows. Done (2026-11-21): 6 property tests pass, and two deliberate bugs
+   (an inverted star ratio, an inverted `exact`) each fail them. Two
+   changes from the design came out of the smoke run. A grid with no star
+   row keeps a weak bottom constraint, because an unpinned bottom leaves
+   its height ambiguous. And star-row children need `Stretch`: labels hug
+   at 750, above the window's 500, so without it the window shrank to
+   108pt and the star rows came out 10 and 18pt. With it the grid window
+   opens at 228pt with rows 18, 40, 48 and 96, and after a resize to 600
+   the star rows are 172 and 344. `tools/smoke.sh` passes 17 checks.
 5. Text field, then secure text field. Runs test 4 (typing, caret, composition with
    a Japanese input source by hand).
 6. Form widgets and options: field stack with `ErrorLine`, `FieldHandle`,

@@ -14,4 +14,4 @@ mod widget;
 pub use mailbox::Handle;
 pub use pass::Ui;
 pub use runner::{App, run};
-pub use widget::{ButtonResponse, Orientation, Response, WindowResponse};
+pub use widget::{ButtonResponse, Length, Orientation, Response, WindowResponse};

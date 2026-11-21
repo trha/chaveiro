@@ -6,14 +6,17 @@
 
 use crate::{pass::Ui, tree::NodeId};
 use objc2::rc::Retained;
-use objc2_app_kit::{NSButton, NSStackView, NSTextField, NSView};
+use objc2_app_kit::{NSButton, NSLayoutConstraint, NSStackView, NSTextField, NSView};
 
 mod button;
+mod grid;
 mod label;
 mod stack_view;
 mod window;
 
 pub use button::ButtonResponse;
+pub use grid::Length;
+pub(crate) use grid::{Rule as GridRule, constraints as grid_constraints, rules as grid_rules};
 pub use stack_view::Orientation;
 pub use window::WindowResponse;
 
@@ -54,6 +57,19 @@ pub(crate) enum Control {
         orientation: Option<Orientation>,
         /// `NaN` until first written.
         spacing: f64,
+    },
+    /// Contract: `constraints` are active and place the grid's children by
+    /// `rows` while `placed` is true, and `stretched` lists exactly the
+    /// children of star rows. Writing `rows` clears `placed`, and the grid's
+    /// close rebuilds both.
+    Grid {
+        container: Retained<NSView>,
+        rows: Vec<Length>,
+        constraints: Vec<Retained<NSLayoutConstraint>>,
+        placed: bool,
+        /// Children whose vertical hugging the grid lowered, with the
+        /// priority each had before, restored when the grid places again.
+        stretched: Vec<(NodeId, f32)>,
     },
     Label {
         field: Retained<NSTextField>,
