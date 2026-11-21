@@ -31,6 +31,8 @@ impl Ui {
                 activated: false,
                 mica: false,
                 compact: false,
+                extends: false,
+                sized: false,
                 fitted: (0, 0),
                 fitted_content: None,
                 fit: false,
@@ -124,6 +126,45 @@ impl WindowResponse<'_> {
             presenter.SetIsMinimizable(false)?;
             presenter.SetIsResizable(false)?;
             window.compact = true;
+        }
+        Ok(self)
+    }
+
+    /// Lets the content extend into the title bar, so a [`Ui::title_bar`]
+    /// draws it, while the window stays resizable with all its caption
+    /// buttons. Leave the top 48px of the content to the title bar.
+    pub fn extends_into_title_bar(&mut self) -> Result<&mut Self> {
+        let window = self.ui.window_mut(self.node);
+        if !window.extends {
+            window.window.SetExtendsContentIntoTitleBar(true)?;
+            window.extends = true;
+        }
+        Ok(self)
+    }
+
+    /// Sizes the window to `width` by `height` view pixels, scaled for its
+    /// monitor, on the first pass that calls it. Later calls do nothing, so
+    /// the user's resizes stay.
+    pub fn initial_size(&mut self, width: f64, height: f64) -> Result<&mut Self> {
+        let window = self.ui.window_mut(self.node);
+        if !window.sized {
+            let native: IWindowNative = window.window.cast()?;
+            let mut hwnd = std::ptr::null_mut();
+            // SAFETY: `hwnd` is written by the call.
+            let dpi = unsafe {
+                native.window_handle(&mut hwnd).ok()?;
+                GetDpiForWindow(hwnd)
+            };
+            // 0 means the handle was not a window; 96 is 100% scale.
+            let scale = match dpi {
+                0 => 1.0,
+                dpi => f64::from(dpi) / 96.0,
+            };
+            window.app_window.Resize(SizeInt32 {
+                width: (width * scale).round() as i32,
+                height: (height * scale).round() as i32,
+            })?;
+            window.sized = true;
         }
         Ok(self)
     }
@@ -246,4 +287,5 @@ const DWMWA_CLOAK: u32 = 13;
 /// How many resizes a window's first fit may take before it shows anyway.
 const FIT_TRIES: u32 = 3;
 
+windows_core::link!("user32.dll" "system" fn GetDpiForWindow(hwnd: *mut core::ffi::c_void) -> u32);
 windows_core::link!("dwmapi.dll" "system" fn DwmSetWindowAttribute(hwnd: *mut core::ffi::c_void, attribute: u32, value: *const core::ffi::c_void, size: u32) -> HRESULT);

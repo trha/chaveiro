@@ -25,12 +25,14 @@ mod cache;
 mod check_box;
 mod code_boxes;
 mod combo_box;
+mod font_icon;
 mod grid;
 mod info_bar;
 mod label;
 mod link;
 mod list;
 mod native;
+mod navigation_view;
 mod navigator;
 mod password_box;
 mod settings_card;
@@ -43,11 +45,13 @@ pub use button::ButtonResponse;
 pub use check_box::CheckBoxResponse;
 pub use code_boxes::{CODE_LENGTH, CodeBoxes, CodeDigits};
 pub use combo_box::ComboBoxResponse;
+pub use font_icon::FontIconResponse;
 pub use grid::Length;
 pub use info_bar::Severity;
 pub use link::LinkResponse;
 pub(crate) use list::index_source;
 pub use list::{ListId, RowFn};
+pub use navigation_view::{NavigationEntry, NavigationSelection, NavigationViewResponse};
 pub(crate) use navigator::Navigator;
 pub use navigator::{SLIDE_DURATION, Slide};
 pub use password_box::{PasswordField, PasswordHandle};
@@ -564,6 +568,17 @@ pub(crate) enum Control {
         /// Whether the back button shows, as last written.
         back: Option<bool>,
     },
+    FontIcon {
+        icon: FontIcon,
+        /// [`None`] until first written.
+        glyph: Option<char>,
+        /// `NaN` until first written.
+        size: f64,
+        secondary: bool,
+    },
+    /// From [`Ui::navigation_view`]: the pane's items, and one content
+    /// control.
+    NavigationView(Box<navigation_view::Parts>),
 }
 
 impl Control {

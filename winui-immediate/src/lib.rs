@@ -21,9 +21,10 @@ pub use pass::Ui;
 pub use runner::{App, run};
 pub use widget::{
     Align, ButtonResponse, CODE_LENGTH, CheckBoxResponse, CodeBoxes, CodeDigits, ComboBoxResponse,
-    ContentAlignment, FieldHandle, Length, LinkResponse, ListId, Orientation, PasswordField,
-    PasswordHandle, Response, RowFn, SLIDE_DURATION, SettingsCard, SettingsCardResponse, Severity,
-    Slide, TextBoxResponse, TitleBarResponse, WindowResponse,
+    ContentAlignment, FieldHandle, FontIconResponse, Length, LinkResponse, ListId, NavigationEntry,
+    NavigationSelection, NavigationViewResponse, Orientation, PasswordField, PasswordHandle,
+    Response, RowFn, SLIDE_DURATION, SettingsCard, SettingsCardResponse, Severity, Slide,
+    TextBoxResponse, TitleBarResponse, WindowResponse,
 };
 /// The type [Ui::take_password] returns.
 pub use zeroize::Zeroizing;

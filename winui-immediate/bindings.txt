@@ -166,3 +166,21 @@ Microsoft.UI.Xaml.ResourceDictionary
 Microsoft.UI.Xaml.Controls.FontIcon::{put_MirroredWhenRightToLeft}
 Microsoft.UI.Xaml.Automation.AutomationProperties::{SetHelpText}
 Microsoft.UI.Xaml.Automation.IAutomationPropertiesStatics::{SetHelpText}
+Microsoft.UI.Xaml.Controls.NavigationView::{get_MenuItems, get_SelectedItem, put_SelectedItem, get_SettingsItem, put_IsSettingsVisible, put_IsBackButtonVisible, put_OpenPaneLength, put_CompactModeThresholdWidth, put_ExpandedModeThresholdWidth, put_PaneDisplayMode, add_SelectionChanged, remove_SelectionChanged}
+Microsoft.UI.Xaml.Controls.INavigationViewFactory::CreateInstance
+Microsoft.UI.Xaml.Controls.NavigationViewSelectionChangedEventArgs::{}
+Microsoft.UI.Xaml.Controls.NavigationViewBackButtonVisible
+Microsoft.UI.Xaml.Controls.NavigationViewPaneDisplayMode
+Microsoft.UI.Xaml.Controls.NavigationViewItem::{put_Icon}
+Microsoft.UI.Xaml.Controls.INavigationViewItemFactory::CreateInstance
+Microsoft.UI.Xaml.Controls.NavigationViewItemHeader::{}
+Microsoft.UI.Xaml.Controls.INavigationViewItemHeaderFactory::CreateInstance
+Microsoft.UI.Xaml.Controls.NavigationViewItemSeparator::{}
+Microsoft.UI.Xaml.Controls.INavigationViewItemSeparatorFactory::CreateInstance
+Microsoft.UI.Xaml.Controls.ToolTipService::{SetToolTip}
+Microsoft.UI.Xaml.Controls.IToolTipServiceStatics::SetToolTip
+Microsoft.UI.Xaml.Controls.TextBlock::{put_TextTrimming}
+Microsoft.UI.Xaml.TextTrimming
+Microsoft.UI.Xaml.Controls.IconElement::{get_ForegroundProperty}
+Microsoft.UI.Xaml.Controls.IIconElementStatics::get_ForegroundProperty
+Microsoft.UI.Xaml.Window::{get_ExtendsContentIntoTitleBar}

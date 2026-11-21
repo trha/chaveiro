@@ -155,6 +155,9 @@ impl Events {
             EventKind::BackRequested => source
                 .cast::<ITitleBar>()?
                 .add_back_requested(&self.delegates.back_requested)?,
+            EventKind::NavigationSelectionChanged => source
+                .cast::<INavigationView>()?
+                .add_selection_changed(&self.delegates.navigation_selection_changed)?,
         };
         let identity = identity(source)?;
         tracing::trace!(?kind, source = identity, "subscribe");
@@ -207,6 +210,8 @@ pub(crate) enum EventKind {
     /// A [`Key`] went down, seen before the control acts on it. The key
     /// itself is kept apart, in [`Events::keys`].
     Key,
+    /// A navigation view's selected item changed, by the user or by a write.
+    NavigationSelectionChanged,
 }
 
 /// A key a control reports through [`TextBoxResponse::keys`]. Enter is not
@@ -299,6 +304,8 @@ struct Delegates {
     drop_down_closed: EventHandler<IInspectable>,
     back_requested: TypedEventHandler<TitleBar, IInspectable>,
     key: KeyEventHandler,
+    navigation_selection_changed:
+        TypedEventHandler<NavigationView, NavigationViewSelectionChangedEventArgs>,
     /// Not an event the app sees: it selects the sender's text.
     select_all: RoutedEventHandler,
 }
@@ -442,6 +449,15 @@ impl Delegates {
                 },
             )
         };
+        let navigation_selection_changed = {
+            let inbox = Rc::clone(inbox);
+            TypedEventHandler::shared(move |sender: Ref<'_, NavigationView>, _| {
+                inbox.push(
+                    canonical(sender.ok().ok()).as_ref(),
+                    EventKind::NavigationSelectionChanged,
+                )
+            })
+        };
         let select_all = RoutedEventHandler::shared(|sender: Ref<'_, IInspectable>, _| {
             // Only text boxes register it; a failed selection leaves the
             // caret where WinUI put it, which is still usable.
@@ -450,6 +466,7 @@ impl Delegates {
             }
         });
         Delegates {
+            navigation_selection_changed,
             back_requested,
             select_all,
             key,

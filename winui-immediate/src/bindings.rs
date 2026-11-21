@@ -179,6 +179,7 @@ add_handler!(
 add_handler!(IComboBox, add_text_submitted, TextSubmitted, TypedEventHandler<ComboBox, ComboBoxTextSubmittedEventArgs>);
 add_handler!(IAppWindow, add_closing, Closing, TypedEventHandler<AppWindow, AppWindowClosingEventArgs>);
 add_handler!(ITitleBar, add_back_requested, BackRequested, TypedEventHandler<TitleBar, windows_core::IInspectable>);
+add_handler!(INavigationView, add_selection_changed, SelectionChanged, TypedEventHandler<NavigationView, NavigationViewSelectionChangedEventArgs>);
 
 impl IPasswordBox {
     /// The password as the `HSTRING` WinUI returns, unconverted, so the

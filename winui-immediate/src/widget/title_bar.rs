@@ -10,10 +10,11 @@ use windows_core::{Interface, Result};
 impl Ui {
     /// The window's title bar: `title`, and a back button while `back` is
     /// true. It becomes the window's drag area, with the back button left
-    /// clickable, so use it in a window made [`compact`] and declare at most
-    /// one per window.
+    /// clickable, so use it in a window made [`compact`] or
+    /// [`extends_into_title_bar`], and declare at most one per window.
     ///
     /// [`compact`]: crate::WindowResponse::compact
+    /// [`extends_into_title_bar`]: crate::WindowResponse::extends_into_title_bar
     pub fn title_bar(
         &mut self,
         id: impl Hash,

@@ -235,6 +235,28 @@ impl Ui {
                 }
             }
             Payload::Control(ControlNode {
+                control: Control::NavigationView(parts),
+                element,
+                ..
+            }) => {
+                assert!(
+                    declared.len() <= 1,
+                    "a navigation view declares one content control"
+                );
+                let declared_content = declared.first().copied();
+                if parts.content == declared_content {
+                    return Ok(());
+                }
+                parts.content = declared_content;
+                let view = element.cast::<ContentControl>()?;
+                match declared_content {
+                    Some(declared_content) => {
+                        view.SetContent(&self.control(declared_content).element)
+                    }
+                    None => view.SetContent(None::<&IInspectable>),
+                }
+            }
+            Payload::Control(ControlNode {
                 control: Control::Navigator(navigator),
                 ..
             }) => {
@@ -362,6 +384,10 @@ pub(crate) struct WindowNode {
     pub(crate) mica: bool,
     /// The content draws the title bar, and only the close button is left.
     pub(crate) compact: bool,
+    /// The content extends into the title bar, from `extends_into_title_bar`.
+    pub(crate) extends: bool,
+    /// `initial_size` has resized the window.
+    pub(crate) sized: bool,
     /// The client size last written by `fit_to_content`, in pixels.
     pub(crate) fitted: (i32, i32),
     /// The content node whose alignment `fit_to_content` last set.
