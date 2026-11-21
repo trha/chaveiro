@@ -16,3 +16,4 @@ windows-reference = { version = "0.100.0", features = ["std"] }
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Memory", "Win32_System_SystemInformation", "Win32_System_Threading", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_WindowsAndMessaging"] }
 windows-threading = "0.100.0"
 windows-time = "0.100.0"
+winui-immediate = { path = "../winui-immediate" }

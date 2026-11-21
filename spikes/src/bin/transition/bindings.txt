@@ -1,0 +1,12 @@
+Microsoft.UI.Xaml.UIElement::{put_Transitions}
+Microsoft.UI.Xaml.Controls.Panel::{put_ChildrenTransitions}
+Microsoft.UI.Xaml.Controls.ContentPresenter::{put_Content, put_ContentTransitions, put_FontSize}
+Microsoft.UI.Xaml.Controls.IContentPresenterFactory::CreateInstance
+Microsoft.UI.Xaml.Controls.TextBlock::{CreateInstance, put_Text, put_FontSize}
+Microsoft.UI.Xaml.Media.Animation.TransitionCollection::{CreateInstance}
+Microsoft.UI.Xaml.Media.Animation.Transition::{}
+Microsoft.UI.Xaml.Media.Animation.ContentThemeTransition::{CreateInstance, put_HorizontalOffset}
+Microsoft.UI.Xaml.Media.Animation.AddDeleteThemeTransition::{CreateInstance}
+Microsoft.UI.Xaml.Media.Animation.EntranceThemeTransition::{CreateInstance}
+Microsoft.UI.Xaml.Media.VisualTreeHelper::{GetChildrenCount}
+Microsoft.UI.Xaml.Media.IVisualTreeHelperStatics::GetChildrenCount
