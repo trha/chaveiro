@@ -182,6 +182,11 @@ impl Response<'_> {
     pub fn required(&mut self, on: bool) -> &mut Self {
         let mtm = self.ui.mtm;
         let field = self.field_mut();
+        if field.required == on {
+            return self;
+        }
+        // `set_header` reads the text from an argument, so the field's own
+        // copy moves out; `set_header` writes it back.
         let text = std::mem::take(&mut field.header_text);
         field.set_header(mtm, &text, on);
         self
