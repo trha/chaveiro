@@ -5,7 +5,7 @@
 //! last wrote.
 
 use crate::{events::EventKind, pass::Ui, tree::NodeId};
-use objc2::rc::Retained;
+use objc2::{rc::Retained, runtime::AnyObject};
 use objc2_app_kit::{
     NSButton, NSColor, NSComboBox, NSControl, NSFont, NSFontDescriptorSymbolicTraits,
     NSFontTextStyleBody, NSFontTextStyleCaption1, NSFontTextStyleTitle1, NSFontTextStyleTitle2,
@@ -383,6 +383,26 @@ impl Control {
             Control::TableView { .. } => "table_view",
             Control::Row { .. } => "row",
         }
+    }
+
+    /// The object this control registered with [`Events`](crate::events::Events),
+    /// to forget when the node is dropped.
+    pub(crate) fn sender(&self) -> Option<&AnyObject> {
+        Some(match self {
+            Control::Button { button, .. } => button,
+            Control::TextField { field, .. } => field,
+            Control::SecureTextField { field, .. } => field,
+            Control::PopUpButton { button, .. } => button,
+            Control::ComboBox { combo_box, .. } => combo_box,
+            Control::TableView { table, .. } => table,
+            Control::Stack { .. }
+            | Control::Grid { .. }
+            | Control::Label { .. }
+            | Control::AlertLine { .. }
+            | Control::BoxView { .. }
+            | Control::Native
+            | Control::Row { .. } => return None,
+        })
     }
 
     /// The stack that arranges this control's children, for a stack view

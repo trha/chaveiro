@@ -643,6 +643,11 @@ fn release(events: &Events, payload: Payload) {
             window.window.setDelegate(None);
             window.window.close();
         }
-        Payload::Control(control) => events.forget(&control.view),
+        // A field registers its control, which is not the node's view.
+        Payload::Control(control) => {
+            if let Some(sender) = control.control.sender() {
+                events.forget(sender);
+            }
+        }
     }
 }
