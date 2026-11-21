@@ -61,6 +61,7 @@ impl Response<'_> {
     /// Makes the next pass write every managed property of this view, such
     /// as after writing one of them through [`view`](Self::view).
     pub fn invalidate(&mut self) {
+        self.ui.invalidated = true;
         let control = self.ui.control_mut(self.node);
         control.stale = true;
         control.enabled = None;
@@ -234,10 +235,13 @@ pub(crate) enum Control {
     Button {
         button: Retained<NSButton>,
         label: String,
-        default: bool,
+        /// [`None`] after an invalidate, until written again: the options
+        /// run after the body has taken `stale`, so they cannot read it.
+        default: Option<bool>,
         /// The spinner shown while busy, made on first use.
         spinner: Option<Retained<NSProgressIndicator>>,
-        busy: bool,
+        /// Like `default`.
+        busy: Option<bool>,
     },
     TextField {
         field: Retained<NSTextField>,

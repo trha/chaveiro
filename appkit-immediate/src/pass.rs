@@ -32,6 +32,9 @@ pub struct Ui {
     /// Table views to reload after the pass, with no borrow held, because
     /// AppKit asks for rows inside `reloadData`.
     pub(crate) reloads: Vec<Retained<NSTableView>>,
+    /// Whether this pass called [`Response::invalidate`](crate::Response::invalidate),
+    /// so the next pass writes by request and is no idle pass.
+    pub(crate) invalidated: bool,
 }
 
 impl Ui {
@@ -45,6 +48,7 @@ impl Ui {
             new_windows: Vec::new(),
             tables: Vec::new(),
             reloads: Vec::new(),
+            invalidated: false,
         }
     }
 
@@ -52,6 +56,7 @@ impl Ui {
     pub(crate) fn begin(&mut self) -> bool {
         debug_assert!(self.frames.is_empty(), "the last pass closed its frames");
         self.tables.clear();
+        self.invalidated = false;
         self.tree.begin_pass();
         let consumed = self.events.begin_pass(&mut self.tree);
         let root = self.tree.root();

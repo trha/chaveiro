@@ -27,9 +27,10 @@ impl Ui {
                 Control::Button {
                     button,
                     label: String::new(),
-                    default: false,
+                    // A new button has no key equivalent and no spinner.
+                    default: Some(false),
                     spinner: None,
-                    busy: false,
+                    busy: Some(false),
                 },
             )
         });
@@ -50,11 +51,19 @@ impl Ui {
         let Control::Button {
             button,
             label: written,
+            default,
+            busy,
             ..
         } = &mut control.control
         else {
             unreachable!("button keys hold buttons")
         };
+        // The options read no `stale`, so an invalidate forgets what they
+        // wrote, and their next call writes again.
+        if stale {
+            *default = None;
+            *busy = None;
+        }
         if must_write(node, stale, written.as_str(), label) {
             button.setTitle(&NSString::from_str(label));
             written.clear();
@@ -77,16 +86,15 @@ impl ButtonResponse<'_> {
     /// accent color, and Return presses it.
     pub fn default_button(&mut self, on: bool) -> &mut Self {
         let control = self.0.ui.control_mut(self.0.node);
-        let stale = control.stale;
         let Control::Button {
             button, default, ..
         } = &mut control.control
         else {
             unreachable!("button keys hold buttons")
         };
-        if must_write(self.0.node, stale, default, &on) {
+        if must_write(self.0.node, false, default, &Some(on)) {
             button.setKeyEquivalent(&NSString::from_str(if on { "\r" } else { "" }));
-            *default = on;
+            *default = Some(on);
         }
         self
     }
@@ -97,7 +105,6 @@ impl ButtonResponse<'_> {
     pub fn busy(&mut self, on: bool) -> &mut Self {
         let mtm = self.0.ui.mtm;
         let control = self.0.ui.control_mut(self.0.node);
-        let stale = control.stale;
         let Control::Button {
             button,
             spinner,
@@ -107,10 +114,10 @@ impl ButtonResponse<'_> {
         else {
             unreachable!("button keys hold buttons")
         };
-        if !must_write(self.0.node, stale, busy, &on) {
+        if !must_write(self.0.node, false, busy, &Some(on)) {
             return self;
         }
-        *busy = on;
+        *busy = Some(on);
         let spinner = spinner.get_or_insert_with(|| {
             let spinner = NSProgressIndicator::new(mtm);
             spinner.setStyle(NSProgressIndicatorStyle::Spinning);

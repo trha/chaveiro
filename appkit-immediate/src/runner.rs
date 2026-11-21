@@ -190,9 +190,10 @@ impl<A: App> Runner<A> {
             drained
         };
         let (consumed, windows) = self.view();
-        // A pass that took nothing new in has caught up, so the same view
-        // again must write nothing.
-        if cfg!(debug_assertions) && !consumed && !drained && windows > 0 {
+        // A pass that took nothing new in and asked for no rewrite has
+        // caught up, so the same view again must write nothing.
+        let invalidated = self.ui.borrow().invalidated;
+        if cfg!(debug_assertions) && !consumed && !drained && !invalidated && windows > 0 {
             write_check::begin();
             let (consumed, windows) = self.view();
             let writes = write_check::end();
