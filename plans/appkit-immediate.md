@@ -1,6 +1,6 @@
 # appkit-immediate widgets
 
-Status: Plan
+Status: Done
 
 Parent plans: `plans/winui-immediate.md` (the widget set and the pass model).
 This plan copies that design to AppKit. The two crates share no code and may
@@ -573,7 +573,10 @@ The main agent owns every step, one at a time, because all steps edit
    the main thread and the tests create no AppKit object. `tools/smoke.sh`
    adds a cached label and a native view: 36 checks pass.
 9. `cargo +nightly fmt`, clippy, and `cargo doc --no-deps
-   --document-private-items` with no broken links. Update the memory notes.
+   --document-private-items` with no broken links. Update the memory notes. Done (2026-11-21):
+   no clippy or rustdoc warnings, 24 unit tests and 1 doc test pass,
+   `tools/smoke.sh` passes 36 checks. Memory note
+   `.claude/memory/appkit-immediate.md` records the measured AppKit facts.
 
 ## Decisions to confirm
 

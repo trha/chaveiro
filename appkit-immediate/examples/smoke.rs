@@ -85,7 +85,11 @@ impl App for Smoke {
                     }
                     // Rebuilt only when the click count's parity changes.
                     ui.cached("parity", self.clicks % 2, |ui| {
-                        let parity = if self.clicks % 2 == 0 { "even" } else { "odd" };
+                        let parity = if self.clicks.is_multiple_of(2) {
+                            "even"
+                        } else {
+                            "odd"
+                        };
                         ui.label("parity", format_args!("cached {parity}"));
                     });
                     let clicks = self.clicks;

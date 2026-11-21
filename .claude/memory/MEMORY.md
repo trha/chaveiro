@@ -12,3 +12,4 @@
 - [Immediate-mode spike](immediate-mode-spike.md) — RAD-style spike over WinUI, superseded by the winui-immediate crate: bindgen recipe, measured costs, one-build lag, row pool vs ItemsRepeater
 - [Theme transitions](theme-transitions.md) — measured: transitions play only on new identity; removed children stay drawn up to ~450 ms; two-way push works via Translation + Vector3Transition
 - [Widgets in winui-immediate](widgets-in-winui-immediate.md) — new WinUI controls go in winui-immediate; Ui::native is a last resort
+- [appkit-immediate](appkit-immediate.md) — measured AppKit facts behind the crate: pools, caret, stack alignment, table reuse, hugging; smoke script notes
