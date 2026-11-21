@@ -116,7 +116,7 @@ impl App for Login {
                 );
             });
         });
-        window.compact().visual_effect().size_to_fit();
+        window.compact().glass().size_to_fit();
         if window.should_close() {
             self.open = false;
         }

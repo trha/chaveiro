@@ -269,7 +269,7 @@ fn placeholder(ui: &mut Ui, screen: &Screen<'_>) -> Option<Next> {
         })
         .padding([20.0, 36.0, 20.0, 20.0]);
     });
-    window.compact().size_to_fit();
+    window.compact().glass().size_to_fit();
     if window.should_close() {
         next = Some(Next::Quit);
     }

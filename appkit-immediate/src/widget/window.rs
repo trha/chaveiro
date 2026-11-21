@@ -5,9 +5,9 @@ use crate::{
 };
 use objc2::{MainThreadOnly, runtime::ProtocolObject};
 use objc2_app_kit::{
-    NSBackingStoreType, NSView, NSVisualEffectBlendingMode, NSVisualEffectMaterial,
-    NSVisualEffectState, NSVisualEffectView, NSWindow, NSWindowButton, NSWindowOrderingMode,
-    NSWindowStyleMask, NSWindowTitleVisibility,
+    NSBackingStoreType, NSGlassEffectView, NSView, NSVisualEffectBlendingMode,
+    NSVisualEffectMaterial, NSVisualEffectState, NSVisualEffectView, NSWindow, NSWindowButton,
+    NSWindowOrderingMode, NSWindowStyleMask, NSWindowTitleVisibility,
 };
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
 use std::hash::Hash;
@@ -48,6 +48,7 @@ impl Ui {
                 pinned: None,
                 pins: Vec::new(),
                 effect: None,
+                glass: None,
                 compact: false,
                 full_size: false,
                 fitted: None,
@@ -163,8 +164,9 @@ impl WindowResponse<'_> {
         self
     }
 
-    /// Draws the content under a transparent title bar with only the close
-    /// button, and fixes the window's size.
+    /// Hides the title bar and all three window buttons, fixes the
+    /// window's size, and lets the user drag the window by any point of
+    /// its background. The user closes it only through the menu or a key.
     pub fn compact(&mut self) -> &mut Self {
         let window = self.ui.window_mut(self.node);
         if !window.compact {
@@ -175,7 +177,9 @@ impl WindowResponse<'_> {
             );
             window_view.setTitlebarAppearsTransparent(true);
             window_view.setTitleVisibility(NSWindowTitleVisibility::Hidden);
+            window_view.setMovableByWindowBackground(true);
             for button in [
+                NSWindowButton::CloseButton,
                 NSWindowButton::MiniaturizeButton,
                 NSWindowButton::ZoomButton,
             ] {
@@ -184,6 +188,25 @@ impl WindowResponse<'_> {
                 }
             }
             window.compact = true;
+        }
+        self
+    }
+
+    /// Fills the whole window with Liquid Glass, so the desktop shows
+    /// through it. Glass draws only when the binary is linked against
+    /// SDK 26 or later.
+    pub fn glass(&mut self) -> &mut Self {
+        let mtm = self.ui.mtm;
+        let window = self.ui.window_mut(self.node);
+        if window.glass.is_none() {
+            // The glass becomes the window's content view and holds the
+            // container, as in the system's About This Mac window. A glass
+            // view behind the container, with the window made clear, draws
+            // only a pale blur.
+            let glass = NSGlassEffectView::new(mtm);
+            window.window.setContentView(Some(&glass));
+            glass.setContentView(Some(&window.container));
+            window.glass = Some(glass);
         }
         self
     }

@@ -21,9 +21,9 @@ use objc2::{
     sel,
 };
 use objc2_app_kit::{
-    NSBox, NSButton, NSComboBox, NSControl, NSImageView, NSLayoutConstraint, NSPopUpButton,
-    NSProgressIndicator, NSScrollView, NSSecureTextField, NSStackView, NSTableView, NSTextField,
-    NSView, NSVisualEffectView, NSWindow,
+    NSBox, NSButton, NSComboBox, NSControl, NSGlassEffectView, NSImageView, NSLayoutConstraint,
+    NSPopUpButton, NSProgressIndicator, NSScrollView, NSSecureTextField, NSStackView, NSTableView,
+    NSTextField, NSView, NSVisualEffectView, NSWindow,
 };
 use objc2_foundation::{NSEdgeInsets, NSInteger, NSSize, NSUInteger};
 use std::{
@@ -447,6 +447,7 @@ fn ours(class: &AnyClass) -> bool {
         NSTableView::class(),
         NSTextField::class(),
         NSView::class(),
+        NSGlassEffectView::class(),
         NSVisualEffectView::class(),
         NSWindow::class(),
     ];

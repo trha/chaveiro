@@ -264,7 +264,7 @@ pub fn view(ui: &mut Ui, form: &mut LoginForm, state: LoginState<'_>) -> Option<
     });
     // The plain window background, which the system tints with the
     // wallpaper, as the design's card does.
-    window.compact().size_to_fit();
+    window.compact().glass().size_to_fit();
     if window.should_close() {
         action = Some(LoginAction::Quit);
     }

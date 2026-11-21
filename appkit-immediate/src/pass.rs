@@ -12,8 +12,9 @@ use crate::{
 };
 use objc2::{MainThreadMarker, rc::Retained, runtime::ProtocolObject};
 use objc2_app_kit::{
-    NSApplication, NSLayoutConstraint, NSLayoutConstraintOrientation, NSStackView, NSTableView,
-    NSUserInterfaceLayoutOrientation, NSView, NSVisualEffectView, NSWindow,
+    NSApplication, NSGlassEffectView, NSLayoutConstraint, NSLayoutConstraintOrientation,
+    NSStackView, NSTableView, NSUserInterfaceLayoutOrientation, NSView, NSVisualEffectView,
+    NSWindow,
 };
 use objc2_foundation::NSArray;
 use std::{any::Any, hash::Hash, rc::Rc};
@@ -515,8 +516,8 @@ pub(crate) struct CacheNode {
 /// edges; all three are empty together.
 pub(crate) struct WindowNode {
     pub(crate) window: Retained<NSWindow>,
-    /// The window's content view, which keeps its autoresizing mask so the
-    /// window sizes it.
+    /// The window's content view, or the content view of `glass` when that
+    /// is set. It keeps its autoresizing mask so its parent sizes it.
     pub(crate) container: Retained<NSView>,
     /// The control declared as the window's body.
     pub(crate) content: Option<NodeId>,
@@ -524,6 +525,8 @@ pub(crate) struct WindowNode {
     pub(crate) pins: Vec<Retained<NSLayoutConstraint>>,
     /// The visual effect view behind the content, made on first use.
     pub(crate) effect: Option<Retained<NSVisualEffectView>>,
+    /// The Liquid Glass view behind the content, made on first use.
+    pub(crate) glass: Option<Retained<NSGlassEffectView>>,
     pub(crate) compact: bool,
     pub(crate) full_size: bool,
     /// The fitting size [`size_to_fit`](crate::WindowResponse::size_to_fit)

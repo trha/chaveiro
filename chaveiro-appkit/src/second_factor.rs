@@ -261,7 +261,7 @@ pub fn view(
         .padding([20.0, 36.0, 20.0, 20.0])
         .width(WIDTH);
     });
-    window.compact().size_to_fit();
+    window.compact().glass().size_to_fit();
     if window.should_close() {
         action = Some(SecondFactorAction::Back);
     }
