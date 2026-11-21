@@ -209,7 +209,13 @@ define_class!(
         #[unsafe(method(drawingRectForBounds:))]
         fn drawing_rect(&self, bounds: NSRect) -> NSRect {
             let rect: NSRect = unsafe { msg_send![super(self), drawingRectForBounds: bounds] };
-            let height: f64 = self.cellSizeForBounds(rect).height;
+            // One line of the font. `cellSizeForBounds:` counts the bezel
+            // too when linked against the macOS 26 SDK or later, so it
+            // centers the text a few points high.
+            let Some(font) = self.font() else {
+                return rect;
+            };
+            let height = (font.ascender() - font.descender() + font.leading()).ceil();
             if height >= rect.size.height {
                 return rect;
             }
