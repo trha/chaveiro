@@ -39,7 +39,9 @@ osascript -e "$process to click (first button of window \"second window\" whose 
 sleep 0.4
 windows() { osascript -e "$process to get name of windows"; }
 check "closing the second window drops it" "[ \"\$(windows)\" = 'appkit-immediate smoke' ]"
-osascript -e "$process to click menu item \"Quit\" of menu 1 of menu bar item 2 of menu bar 1" >/dev/null
+# AppKit ignores a menu click on an app in the background.
+osascript -e "$process to set frontmost to true" -e 'delay 0.3' \
+    -e "$process to click menu item \"Quit\" of menu 1 of menu bar item 2 of menu bar 1" >/dev/null
 check "Quit ends the app" "wait_exit $pid"
 check "Quit reaches should_terminate" "grep -q 'should terminate' '$log'"
 check "run returns and drops the app" "grep -q 'app dropped' '$log' && grep -q 'run returned' '$log'"
