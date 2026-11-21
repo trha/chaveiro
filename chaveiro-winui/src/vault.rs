@@ -11,16 +11,20 @@ use chaveiro_core::{
     core::{ItemError, UserAction, VaultScreen},
     crypto::SecretString,
     filter::{Counts, Filter, KINDS},
+    search::{Query, Tier},
     vault::{
         CardView, CipherContent, CipherKind, CipherSummary, CipherView, FolderSummary,
         IdentityView, LoginView, SshKeyView, VaultIndex,
     },
 };
+use std::fmt::Write as _;
 use uuid::Uuid;
 use windows_core::Result;
 use winui_immediate::{
-    App, Length, ListId, NavigationEntry, NavigationSelection, Orientation, Overflow, Severity, Ui,
+    App, Key, Length, ListId, NavigationEntry, NavigationSelection, Orientation, Overflow,
+    Severity, Ui,
 };
+use zeroize::{Zeroize, Zeroizing};
 
 /// An app that shows the vault window. The real app and the vault example
 /// are different types, so the list rows reach the vault through this trait
@@ -39,6 +43,7 @@ pub struct VaultForm {
     /// Settings is selected in the pane, over `filter`.
     pub settings: bool,
     sidebar: Sidebar,
+    search: Search,
     list: ItemList,
     /// The item the list shows as selected, whose details show. It
     /// follows the core's open item, and a click on a row.
@@ -59,6 +64,7 @@ impl Default for VaultForm {
             filter: Filter::All,
             settings: false,
             sidebar: Sidebar::default(),
+            search: Search::default(),
             list: ItemList::default(),
             selected: None,
             opened: None,
@@ -79,8 +85,12 @@ impl VaultForm {
         sidebar.revision = None;
         sidebar.counts.clear();
         sidebar.filters.clear();
+        self.search.text.zeroize();
+        self.search.query.set("");
+        self.search.revision += 1;
         self.list.shows = None;
         self.list.rows.clear();
+        self.list.ranked.clear();
         self.selected = None;
         self.opened = None;
         self.clicked = None;
@@ -109,37 +119,59 @@ struct Sidebar {
     filters: Vec<Option<Filter>>,
 }
 
+/// The search box in the title bar.
+///
+/// Contract: `query` is `text` parsed, and `revision` changes whenever
+/// `query` does.
+#[derive(Default)]
+struct Search {
+    text: Zeroizing<String>,
+    query: Query,
+    revision: u64,
+    /// The box's placeholder: "Search" and the filter's name.
+    placeholder: String,
+}
+
 /// The rows of the item list.
 ///
 /// Contract: `rows` holds the position in [`VaultIndex::ciphers`] of each
-/// item the filter of `shows` matches, in index order, for the index of
-/// the revision in `shows`; `revision` changes whenever `rows` does.
+/// item that the filter of `shows` and the search match, best [`Tier`]
+/// first and in index order inside a tier, for the index and search of
+/// the revisions in `shows`; `revision` changes whenever `rows` does.
 #[derive(Default)]
 struct ItemList {
-    /// The index revision and filter `rows` were built for; [`None`]
-    /// until the first build and after [`VaultForm::reset`].
-    shows: Option<(u64, Filter)>,
+    /// The index revision, filter and search revision `rows` were built
+    /// for; [`None`] until the first build and after [`VaultForm::reset`].
+    shows: Option<(u64, Filter, u64)>,
     rows: Vec<usize>,
+    /// Scratch for sorting the rows, kept for its capacity.
+    ranked: Vec<(Tier, usize)>,
     revision: u64,
 }
 
 impl ItemList {
-    /// Builds the rows for `filter` over `index`, unless they are built
-    /// for that revision and filter already.
-    fn refresh(&mut self, index: &VaultIndex, revision: u64, filter: Filter) {
-        if self.shows == Some((revision, filter)) {
+    /// Builds the rows for `filter` and `search` over `index`, unless they
+    /// are built for those revisions and filter already.
+    fn refresh(&mut self, index: &VaultIndex, revision: u64, filter: Filter, search: &mut Search) {
+        let shows = Some((revision, filter, search.revision));
+        if self.shows == shows {
             return;
         }
+        self.ranked.clear();
+        for (position, cipher) in index.ciphers.iter().enumerate() {
+            if filter.matches(cipher, &index.folders)
+                && let Some(tier) = search.query.rank(cipher)
+            {
+                self.ranked.push((tier, position));
+            }
+        }
+        // The keys are unique, so an unstable sort keeps index order
+        // inside a tier, and it does not allocate.
+        self.ranked.sort_unstable();
         self.rows.clear();
-        self.rows.extend(
-            index
-                .ciphers
-                .iter()
-                .enumerate()
-                .filter(|(_, cipher)| filter.matches(cipher, &index.folders))
-                .map(|(position, _)| position),
-        );
-        self.shows = Some((revision, filter));
+        self.rows
+            .extend(self.ranked.iter().map(|(_, position)| *position));
+        self.shows = shows;
         self.revision += 1;
     }
 }
@@ -182,9 +214,19 @@ pub fn view<A: VaultApp>(
         });
         sidebar.revision = Some(revision);
     }
+    // The core opened another item, such as a reopen after a sync. A row
+    // clicked since wins, so this comes first.
+    let opened = open.and_then(|view| view.id);
+    if opened != form.opened {
+        form.opened = opened;
+        if opened.is_some() {
+            form.select(opened);
+        }
+    }
     let mut action = None;
-    // A row clicked last pass: open it, or for an item that cannot be
-    // read, close the open one, because its details come from the list.
+    // A row clicked or moved to last pass: open it, or for an item that
+    // cannot be read, close the open one, because its details come from
+    // the list.
     if let Some(id) = form.clicked.take() {
         form.select(Some(id));
         let readable = index
@@ -197,14 +239,6 @@ pub fn view<A: VaultApp>(
             (false, Some(_)) => Some(VaultAction::User(UserAction::Close)),
             _ => None,
         };
-    }
-    // The core opened another item, such as a reopen after a sync.
-    let opened = open.and_then(|view| view.id);
-    if opened != form.opened {
-        form.opened = opened;
-        if opened.is_some() {
-            form.select(opened);
-        }
     }
 
     let sidebar = &form.sidebar;
@@ -222,12 +256,44 @@ pub fn view<A: VaultApp>(
         false => position(form.filter).map(NavigationSelection::Entry),
     };
 
+    let search = &mut form.search;
+    search.placeholder.clear();
+    match form.filter {
+        Filter::Folder(_) => {
+            let name = label(form.filter, index);
+            write!(search.placeholder, "Search {name}")
+        }
+        filter => search.placeholder.write_str(search_label(filter)),
+    }
+    .expect("writing to a String does not fail");
+    search.placeholder.push_str(" (Ctrl+F)");
     let list = &mut form.list;
+    let clicked = &mut form.clicked;
     let revealed = &mut form.revealed;
     let selected_item = form.selected;
     let mut window = ui.window("vault", "Chaveiro", |ui| {
         ui.grid("window", &[Length::Auto, Length::Star(1.0)], |ui| {
-            ui.title_bar("title bar", "Chaveiro", false)?;
+            // Rows that Up and Down in the search box move the selection by.
+            let mut step = 0isize;
+            ui.title_bar("title bar", "Chaveiro", false, |ui| {
+                let mut field = ui.search_box("search", &search.placeholder, &mut search.text)?;
+                let changed = field.changed();
+                for key in field.keys()? {
+                    match key {
+                        Key::Down => step += 1,
+                        Key::Up => step -= 1,
+                        _ => {}
+                    }
+                }
+                // The title bar sizes its middle to the content, so the
+                // box gets the design's widest as its width.
+                field.shortcut('F')?.width(SEARCH_WIDTH)?;
+                if changed {
+                    search.query.set(&search.text);
+                    search.revision += 1;
+                }
+                Ok(())
+            })?;
             let push = |entries: &mut Vec<_>| {
                 pane(index, &sidebar.counts, |_, entry| entries.push(entry));
             };
@@ -247,7 +313,15 @@ pub fn view<A: VaultApp>(
                     .padding([24.0, 16.0, 24.0, 24.0])?;
                     return Ok(());
                 };
-                list.refresh(index, revision, filter);
+                list.refresh(index, revision, filter, search);
+                let searching = !search.query.is_empty();
+                // The next pass opens the row the keys moved to, as a click
+                // would.
+                let reveal = moved(&list.rows, index, selected_item, step);
+                if let Some(position) = reveal {
+                    *clicked = Some(index.ciphers[list.rows[position]].id);
+                    ui.request_pass();
+                }
                 ui.columns(
                     "panes",
                     &[Length::Pixels(LIST_WIDTH), Length::Star(1.0)],
@@ -255,13 +329,17 @@ pub fn view<A: VaultApp>(
                     |ui| {
                         let heading = ListHeading {
                             title: label(filter, index),
-                            count: sidebar.counts.get(filter),
+                            count: match searching {
+                                true => list.rows.len(),
+                                false => sidebar.counts.get(filter),
+                            },
                             empty: match filter {
+                                _ if searching => "No items match your search.",
                                 Filter::Trash => "Trash is empty.",
                                 _ => "No items here yet.",
                             },
                         };
-                        if list_pane::<A>(ui, list, heading)? {
+                        if list_pane::<A>(ui, list, heading, reveal)? {
                             action = Some(VaultAction::User(UserAction::Lock));
                         }
                         let details = Details {
@@ -300,6 +378,11 @@ pub fn view<A: VaultApp>(
         Some(NavigationSelection::Settings) => form.settings = true,
         Some(NavigationSelection::Entry(entry)) => {
             if let Some(filter) = sidebar.filters[entry] {
+                if filter != form.filter {
+                    // The search box came before the pane in this pass, so
+                    // its placeholder names the old filter until the next.
+                    ui.request_pass();
+                }
                 form.filter = filter;
                 form.settings = false;
             }
@@ -317,9 +400,32 @@ struct ListHeading<'a> {
     empty: &'a str,
 }
 
-/// Draws the list pane: the filter's name and count over its items.
-/// Returns whether Lock was clicked.
-fn list_pane<A: VaultApp>(ui: &mut Ui, list: &ItemList, heading: ListHeading<'_>) -> Result<bool> {
+/// The row of `rows` that `step` rows of Up (negative) or Down (positive)
+/// move to from the row of `selected`, stopping at the ends; from no
+/// selected row, Down moves to the first and Up to the last. [`None`] when
+/// nothing moves.
+fn moved(rows: &[usize], index: &VaultIndex, selected: Option<Uuid>, step: isize) -> Option<usize> {
+    let last = rows.len().checked_sub(1)?;
+    let current = rows
+        .iter()
+        .position(|&row| Some(index.ciphers[row].id) == selected);
+    let target = match (current, step.signum()) {
+        (_, 0) => return None,
+        (Some(current), _) => current.saturating_add_signed(step).min(last),
+        (None, 1) => 0,
+        (None, _) => last,
+    };
+    (current != Some(target)).then_some(target)
+}
+
+/// Draws the list pane: the filter's name and count over its items, with
+/// row `reveal` scrolled into view. Returns whether Lock was clicked.
+fn list_pane<A: VaultApp>(
+    ui: &mut Ui,
+    list: &ItemList,
+    heading: ListHeading<'_>,
+    reveal: Option<usize>,
+) -> Result<bool> {
     let mut lock = false;
     ui.grid("list pane", &[Length::Auto, Length::Star(1.0)], |ui| {
         ui.columns("header", &[Length::Star(1.0), Length::Auto], 8.0, |ui| {
@@ -344,7 +450,10 @@ fn list_pane<A: VaultApp>(ui: &mut Ui, list: &ItemList, heading: ListHeading<'_>
                     .margin([16.0, 24.0, 16.0, 0.0])?;
             }
             false => {
-                ui.list("items", list.rows.len(), list.revision, row::<A>)?;
+                let items = ui.list("items", list.rows.len(), list.revision, row::<A>)?;
+                if let Some(position) = reveal {
+                    ui.bring_into_view(items, position);
+                }
             }
         }
         Ok(())
@@ -1088,6 +1197,23 @@ fn label(filter: Filter, index: &VaultIndex) -> &str {
     }
 }
 
+/// The search box placeholder for a filter other than a folder.
+fn search_label(filter: Filter) -> &'static str {
+    match filter {
+        Filter::All => "Search all items",
+        Filter::Favorites => "Search favorites",
+        Filter::Kind(CipherKind::Login) => "Search logins",
+        Filter::Kind(CipherKind::Card) => "Search cards",
+        Filter::Kind(CipherKind::Identity) => "Search identities",
+        Filter::Kind(CipherKind::SecureNote) => "Search notes",
+        Filter::Kind(CipherKind::SshKey) => "Search SSH keys",
+        Filter::Kind(CipherKind::Unknown(_)) => unreachable!("the pane lists only KINDS"),
+        Filter::Folder(_) => unreachable!("a folder's placeholder has its name"),
+        Filter::NoFolder => "Search items with no folder",
+        Filter::Trash => "Search trash",
+    }
+}
+
 fn folder_label(folder: &FolderSummary) -> &str {
     match folder.readable {
         true => folder.name.as_str(),
@@ -1138,6 +1264,8 @@ const CUSTOM_HIDDEN: u8 = 1;
 const CUSTOM_BOOLEAN: u8 = 2;
 const CUSTOM_LINKED: u8 = 3;
 
+/// The search box's widest, from the design.
+const SEARCH_WIDTH: f64 = 480.0;
 /// The list pane's width, from the design.
 const LIST_WIDTH: f64 = 320.0;
 

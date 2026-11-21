@@ -75,6 +75,48 @@ Pick "Trash"
 Invoke "Alex Lima"
 Invoke "Restore"
 "trash after Restore: count '$(Count)' (expect '2 items')"
+function Search-Box { Find-All ([System.Windows.Automation.ControlType]::Edit) | Select-Object -First 1 }
+function Search([string]$text) {
+    (Search-Box).GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue($text)
+    Start-Sleep -Milliseconds 500
+}
+# The list's row names, in order.
+function Rows { (Find-All ([System.Windows.Automation.ControlType]::Button) | ForEach-Object { $_.Current.Name } | Where-Object { $_ -and $_ -notmatch '^(Lock|Show|Hide|Favorite|Unfavorite|Move to trash|Restore|Close|Minimize|Maximize|Back)$' }) -join ", " }
+"search box in trash: name '$((Search-Box).Current.Name)' help '$((Search-Box).Current.HelpText)' (expect Search trash somewhere)"
+Pick "All items"
+"search box in All items: name '$((Search-Box).Current.Name)' help '$((Search-Box).Current.HelpText)'"
+Search "a"
+"search 'a': $(Count) rows: $(Rows)"
+"  (expect Alex Lima, Amazon first as prefixes)"
+Search "github.com"
+"search 'github.com': rows: $(Rows) (expect GitHub, by its address)"
+Search "srv"
+"search 'srv': rows: $(Rows) (expect Mail server, fuzzy)"
+Search "zzz"
+"search 'zzz': $(Texts | Where-Object { $_ -match 'match your search' }) (expect No items match your search.)"
+Pick "Work"
+Search "e"
+"search 'e' in Work: rows: $(Rows) (expect only Work items: Deploy key, Mail server by name, then GitHub by its username)"
+Search ""
+"cleared: $(Count) (expect '3 items')"
+# Keys go to the focused control, so these use SendKeys on the window.
+Add-Type -AssemblyName System.Windows.Forms
+function Send([string]$keys) { [System.Windows.Forms.SendKeys]::SendWait($keys); Start-Sleep -Milliseconds 500 }
+Pick "All items"
+(Button "Amazon").SetFocus()
+Send "^f"
+"Ctrl+F: search box focused $((Search-Box).Current.HasKeyboardFocus) (expect True), placeholder '$((Search-Box).Current.Name)' (expect Search all items (Ctrl+F))"
+Send "{DOWN}"
+"Down from Alex Lima, selected since Restore: $(Details) (expect Amazon: Folder: Personal)"
+Send "{DOWN}{DOWN}"
+"Down twice more: $(Details) (expect GitHub's fields)"
+Send "{UP}"
+"Up: $(Details) (expect Deploy key: dots, Folder: Work)"
+Send "{UP}{UP}{UP}"
+"Up past the top: $(Details) (expect This item didn't decrypt.)"
+Send "{END}"
+for ($step = 0; $step -lt 12; $step++) { Send "{DOWN}" }
+"Down past the end: last row 'Shared drive' shown $([bool](Button 'Shared drive')), details $(Details) (expect True, Chaveiro can't show this type...)"
 if ($Shot) {
     Pick "All items"
     Invoke "GitHub"
@@ -90,5 +132,6 @@ Pick "Settings"
 Pick "All items"
 Invoke "Lock"
 if (-not $process.WaitForExit(5000)) { Stop-Process $process -Confirm:$false; "did not exit after Lock" }
-"stderr (expect open 11, save 11 favorite=false, open 12, close, open 15, open 14, trash 14, restore 14, lock):"
+"stderr (expect open 11, save 11 favorite=false, open 12, close, open 15, open 14, trash 14, restore 14,"
+"  then the keys: open 10 16 11 16 10 14, close, open 14 10 16 11 15 12 18 13 17, lock):"
 Get-Content $log

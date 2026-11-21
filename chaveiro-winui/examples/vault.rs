@@ -44,8 +44,18 @@ fn main() -> Result<()> {
                 }
             });
         }
-        let index = sample();
-        let views = index.ciphers.iter().map(view_of).collect();
+        let mut index = sample();
+        let views: Vec<CipherView> = index.ciphers.iter().map(view_of).collect();
+        // The index holds a login's addresses for search, as the core's does.
+        for (summary, view) in index.ciphers.iter_mut().zip(&views) {
+            if let CipherContent::Login(login) = &view.content {
+                summary.uris = login
+                    .uris
+                    .iter()
+                    .filter_map(|uri| uri.uri.clone())
+                    .collect();
+            }
+        }
         Ok(Preview {
             index,
             views,
@@ -184,6 +194,7 @@ fn sample() -> VaultIndex {
             kind,
             name: secret(name),
             subtitle: secret(subtitle),
+            uris: Vec::new(),
             folder_id: (folder != 0).then(|| Uuid::from_u128(folder)),
             organization_id: None,
             favorite,
