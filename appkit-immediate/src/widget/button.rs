@@ -4,9 +4,12 @@ use crate::{
     pass::{ChildKind, ControlNode, Ui},
     tree::Visit,
 };
-use objc2::{rc::Retained, sel};
-use objc2_app_kit::NSButton;
-use objc2_foundation::NSString;
+use objc2::{AnyThread, rc::Retained, sel};
+use objc2_app_kit::{
+    NSButton, NSCellImagePosition, NSControlSize, NSImage, NSProgressIndicator,
+    NSProgressIndicatorStyle,
+};
+use objc2_foundation::{NSSize, NSString};
 use std::{
     hash::Hash,
     ops::{Deref, DerefMut},
@@ -24,6 +27,9 @@ impl Ui {
                 Control::Button {
                     button,
                     label: String::new(),
+                    default: false,
+                    spinner: None,
+                    busy: false,
                 },
             )
         });
@@ -44,6 +50,7 @@ impl Ui {
         let Control::Button {
             button,
             label: written,
+            ..
         } = &mut control.control
         else {
             unreachable!("button keys hold buttons")
@@ -65,6 +72,80 @@ impl ButtonResponse<'_> {
     pub fn clicked(&self) -> bool {
         self.0.ui.events.happened(self.0.node, EventKind::Action)
     }
+
+    /// Makes the button the window's default button: AppKit draws it in the
+    /// accent color, and Return presses it.
+    pub fn default_button(&mut self, on: bool) -> &mut Self {
+        let control = self.0.ui.control_mut(self.0.node);
+        let stale = control.stale;
+        let Control::Button {
+            button, default, ..
+        } = &mut control.control
+        else {
+            unreachable!("button keys hold buttons")
+        };
+        if must_write(stale, default, &on) {
+            button.setKeyEquivalent(&NSString::from_str(if on { "\r" } else { "" }));
+            *default = on;
+        }
+        self
+    }
+
+    /// Shows a small spinner before the title while `on`, for work the
+    /// click started. The button stays clickable; disable it with
+    /// [`Response::enabled`] if a second click must wait.
+    pub fn busy(&mut self, on: bool) -> &mut Self {
+        let mtm = self.0.ui.mtm;
+        let control = self.0.ui.control_mut(self.0.node);
+        let stale = control.stale;
+        let Control::Button {
+            button,
+            spinner,
+            busy,
+            ..
+        } = &mut control.control
+        else {
+            unreachable!("button keys hold buttons")
+        };
+        if !must_write(stale, busy, &on) {
+            return self;
+        }
+        *busy = on;
+        let spinner = spinner.get_or_insert_with(|| {
+            let spinner = NSProgressIndicator::new(mtm);
+            spinner.setStyle(NSProgressIndicatorStyle::Spinning);
+            spinner.setControlSize(NSControlSize::Small);
+            spinner.setDisplayedWhenStopped(false);
+            spinner.setTranslatesAutoresizingMaskIntoConstraints(false);
+            button.addSubview(&spinner);
+            spinner
+                .leadingAnchor()
+                .constraintEqualToAnchor_constant(&button.leadingAnchor(), 8.0)
+                .setActive(true);
+            spinner
+                .centerYAnchor()
+                .constraintEqualToAnchor(&button.centerYAnchor())
+                .setActive(true);
+            spinner
+        });
+        // A blank leading image reserves the spinner's place before the title.
+        button.setImage(on.then(|| blank_image(NSSize::new(16.0, 16.0))).as_deref());
+        button.setImagePosition(NSCellImagePosition::ImageLeading);
+        // Animating needs no sender.
+        unsafe {
+            if on {
+                spinner.startAnimation(None);
+            } else {
+                spinner.stopAnimation(None);
+            }
+        }
+        self
+    }
+}
+
+/// A transparent image of `size`.
+fn blank_image(size: NSSize) -> Retained<NSImage> {
+    NSImage::initWithSize(NSImage::alloc(), size)
 }
 
 impl<'u> Deref for ButtonResponse<'u> {

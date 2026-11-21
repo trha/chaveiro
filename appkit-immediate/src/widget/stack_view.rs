@@ -1,8 +1,11 @@
 use super::{Control, Response, must_write};
 use crate::pass::{ChildKind, ControlNode, Ui};
 use objc2::rc::Retained;
-use objc2_app_kit::{NSStackView, NSUserInterfaceLayoutOrientation};
-use objc2_foundation::NSEdgeInsets;
+use objc2_app_kit::{
+    NSBox, NSBoxType, NSColor, NSLayoutAttribute, NSStackView, NSTitlePosition,
+    NSUserInterfaceLayoutOrientation,
+};
+use objc2_foundation::{NSEdgeInsets, NSSize};
 use std::hash::Hash;
 
 impl Ui {
@@ -16,6 +19,9 @@ impl Ui {
     ) -> Response<'_> {
         let (node, _) = self.visit(id, ChildKind::Visual, |mtm| {
             let stack = NSStackView::new(mtm);
+            // Children carry their own cross-axis constraints, by their
+            // `align`, so the stack adds none.
+            stack.setAlignment(NSLayoutAttribute::NotAnAttribute);
             stack.setEdgeInsets(NSEdgeInsets {
                 top: 12.0,
                 left: 12.0,
@@ -56,6 +62,52 @@ impl Ui {
         body(self);
         self.close();
         Response { ui: self, node }
+    }
+}
+
+impl Ui {
+    /// A box `width` points wide, holding a vertical stack of the controls
+    /// `body` declares, 8 points apart: the system's control background,
+    /// a separator-colored border, 8-point corners and 24 points of
+    /// padding. Its colors follow the system appearance.
+    pub fn box_view(
+        &mut self,
+        id: impl Hash,
+        width: f64,
+        body: impl FnOnce(&mut Ui),
+    ) -> Response<'_> {
+        let (node, _) = self.visit(id, ChildKind::Visual, |mtm| {
+            let frame = NSBox::new(mtm);
+            frame.setBoxType(NSBoxType::Custom);
+            frame.setTitlePosition(NSTitlePosition::NoTitle);
+            frame.setCornerRadius(8.0);
+            frame.setBorderWidth(1.0);
+            frame.setFillColor(&NSColor::controlBackgroundColor());
+            frame.setBorderColor(&NSColor::separatorColor());
+            frame.setContentViewMargins(NSSize::new(0.0, 0.0));
+            let stack = NSStackView::new(mtm);
+            stack.setOrientation(NSUserInterfaceLayoutOrientation::Vertical);
+            stack.setAlignment(NSLayoutAttribute::NotAnAttribute);
+            stack.setSpacing(8.0);
+            stack.setEdgeInsets(NSEdgeInsets {
+                top: 24.0,
+                left: 24.0,
+                bottom: 24.0,
+                right: 24.0,
+            });
+            frame.setContentView(Some(&stack));
+            ControlNode::payload(
+                Retained::clone(&frame).into_super(),
+                Control::BoxView { stack },
+            )
+        });
+        let mut response = Response { ui: self, node };
+        response.width(width);
+        let Response { ui, node } = response;
+        ui.open(node);
+        body(ui);
+        ui.close();
+        Response { ui, node }
     }
 }
 

@@ -3,7 +3,7 @@
 # Accessibility access for the terminal that runs it.
 set -euo pipefail
 root=$(cd "$(dirname "$0")/../.." && pwd)
-cargo build -q -p appkit-immediate --example smoke --example grid --example form --manifest-path "$root/Cargo.toml"
+cargo build -q -p appkit-immediate --example smoke --example grid --example form --example login --manifest-path "$root/Cargo.toml"
 binary="$root/target/debug/examples/smoke"
 log=$(mktemp -t smoke.XXXXXX)
 failures=0
@@ -110,6 +110,43 @@ type_into 3 pw1
 osascript -e "$form to click button \"Take\" of window \"form\"" >/dev/null
 sleep 0.4
 check "take returns the password and clears the field" "texts | grep -q 'took: Some(3), empty: true'"
+kill "$pid"
+
+# Run 5: the login form. Also takes the keyboard focus.
+"$root/target/debug/examples/login" >"$log" 2>&1 &
+pid=$!
+sleep 1.5
+login='tell application "System Events" to tell (first process whose name is "login")'
+card='group 1 of window "Chaveiro"'
+status() { osascript -e "$login to get value of static texts of $card"; }
+button_y() { osascript -e "$login to get item 2 of (get position of button \"Log in\" of $card)"; }
+title_buttons() { osascript -e "$login to get subrole of buttons of window \"Chaveiro\""; }
+server_enabled() { osascript -e "$login to get enabled of pop up button 1 of $card"; }
+check "a compact window shows only the close button" '[ "$(title_buttons)" = AXCloseButton ]'
+osascript -e "$login to click pop up button 1 of $card" \
+    -e "$login to click menu item \"bitwarden.eu\" of menu 1 of pop up button 1 of $card" >/dev/null
+sleep 0.4
+check "a pop-up pick reaches the app" "status | grep -q 'server: 1'"
+osascript -e "$login to set frontmost to true" \
+    -e "$login to set focused of combo box 1 of $card to true" \
+    -e 'tell application "System Events" to keystroke "a@b.c"' \
+    -e 'tell application "System Events" to key code 36' >/dev/null
+sleep 0.4
+check "combo box text reaches the app on Return" "status | grep -q 'email: a@b.c'"
+before=$(button_y)
+osascript -e "$login to set focused of text field 1 of $card to true" \
+    -e 'tell application "System Events" to key code 36' >/dev/null
+sleep 0.4
+check "Return on an empty password shows the error" "status | grep -q 'Enter your master password'"
+check "the error line keeps its place" "[ \"\$(button_y)\" = '$before' ]"
+osascript -e "$login to set focused of text field 1 of $card to true" \
+    -e 'tell application "System Events" to keystroke "pw"' >/dev/null
+osascript -e "$login to click button \"Log in\" of $card" >/dev/null
+sleep 0.4
+check "a busy form disables its pop-up button" '[ "$(server_enabled)" = false ]'
+check "the error clears on a good submit" "! status | grep -q 'Enter your master password'"
+sleep 2
+check "the result arrives and enables the form again" 'status | grep -q "signed in with 2 characters" && [ "$(server_enabled)" = true ]'
 kill "$pid"
 
 rm -f "$log"

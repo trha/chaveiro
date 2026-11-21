@@ -535,7 +535,23 @@ The main agent owns every step, one at a time, because all steps edit
 6. Form widgets and options: field stack with `ErrorLine`, `FieldHandle`,
    `pop_up_button`, `combo_box`, `box_view`, `default_button`, `busy`, window `visual_effect`,
    `compact` and `size_to_fit`, `Response` options. Runs a login-form smoke script
-   (pick, Return, error line reserved, disabled pop-up button).
+   (pick, Return, error line reserved, disabled pop-up button). Done
+   (2026-11-21): `examples/login.rs` and 8 new checks; `tools/smoke.sh`
+   passes 30. Design changes found on the way:
+   - `align` needs per-child constraints, because `NSStackView` has one
+     alignment for all children. Stack views and box views set alignment
+     `NotAnAttribute` and give each child its own cross-axis constraints
+     (spike `examples/stack_alignment.rs`: start, center and stretch
+     children placed with no ambiguity). Buttons start at `Start`, every
+     other view at `Stretch`.
+   - The field stack uses alignment `Leading` plus a trailing constraint
+     per row: alignment `Width` left the pop-up button, headers and hint
+     at their natural widths against the trailing edge.
+   - New windows are shown at the end of the pass, after the window's
+     options, so `size_to_fit` and `compact` apply before the first frame
+     and centering uses the final size.
+   - `header`, `required`, `error`, `hint` and `field` live on `Response`
+     and panic on a view that is not a field.
 7. Table view with the slot pool, `table_view_state` and deferred `reloadData`. Runs
    test 5.
 8. `native`, `cached`, `state`. Runs test 2.

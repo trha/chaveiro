@@ -5,11 +5,12 @@ use crate::{
     children::{Edit, edits},
     events::{EventKind, Events},
     tree::{Key, NodeId, Tree, Visit},
-    widget::{Control, GridRule as Rule, grid_constraints, grid_rules},
+    widget::{Align, Control, Field, GridRule as Rule, Style, grid_constraints, grid_rules},
 };
 use objc2::{MainThreadMarker, rc::Retained, runtime::ProtocolObject};
 use objc2_app_kit::{
-    NSApplication, NSLayoutConstraint, NSLayoutConstraintOrientation, NSView, NSWindow,
+    NSApplication, NSLayoutConstraint, NSLayoutConstraintOrientation, NSStackView,
+    NSUserInterfaceLayoutOrientation, NSView, NSVisualEffectView, NSWindow,
 };
 use objc2_foundation::NSArray;
 use std::{hash::Hash, rc::Rc};
@@ -24,6 +25,8 @@ pub struct Ui {
     pub(crate) mtm: MainThreadMarker,
     /// Reused buffer for formatting labels before comparing them.
     pub(crate) scratch: String,
+    /// Windows created this pass, shown when it ends.
+    pub(crate) new_windows: Vec<NodeId>,
 }
 
 impl Ui {
@@ -34,6 +37,7 @@ impl Ui {
             events: Events::new(mtm, wake),
             mtm,
             scratch: String::new(),
+            new_windows: Vec::new(),
         }
     }
 
@@ -51,6 +55,7 @@ impl Ui {
     /// number of open windows.
     pub(crate) fn end(&mut self) -> usize {
         self.close();
+        self.show_new_windows();
         self.tree.children(self.tree.root()).len()
     }
 
@@ -278,22 +283,51 @@ impl Ui {
                 *stretched = lowered;
             }
             Payload::Control(control) => {
-                let Control::Stack { stack, .. } = &control.control else {
-                    assert!(declared.is_empty(), "only stacks and grids have children");
+                let Some(stack) = control.control.arranged() else {
+                    assert!(
+                        declared.is_empty(),
+                        "only stack views, box views and grids have children"
+                    );
                     return;
                 };
                 let stack = stack.clone();
                 // Afterwards `declared` holds the old list.
                 std::mem::swap(&mut control.visual, declared);
-                for edit in edits(declared, self.control(node).visual.as_slice()) {
+                let changes: Vec<Edit> =
+                    edits(declared, self.control(node).visual.as_slice()).collect();
+                for edit in changes {
                     match edit {
                         Edit::RemoveAt(index) => {
                             let view = stack.arrangedSubviews().objectAtIndex(index as usize);
                             stack.removeArrangedSubview(&view);
+                            // Removing the view also removes its cross-axis
+                            // constraints, which name the stack.
                             view.removeFromSuperview();
                         }
-                        Edit::InsertAt(index, child) => stack
-                            .insertArrangedSubview_atIndex(&self.control(child).view, index as _),
+                        Edit::InsertAt(index, child) => {
+                            stack.insertArrangedSubview_atIndex(
+                                &self.control(child).view,
+                                index as _,
+                            );
+                            self.control_mut(child).cross_stale = true;
+                        }
+                    }
+                }
+                // The stack places children along its axis only; each child
+                // carries its own constraints across it, by its `align`.
+                for position in 0..self.control(node).visual.len() {
+                    let child = self.control(node).visual[position];
+                    if self.control(child).cross_stale {
+                        let child = self.control_mut(child);
+                        child.cross_stale = false;
+                        NSLayoutConstraint::deactivateConstraints(&NSArray::from_retained_slice(
+                            &std::mem::take(&mut child.cross),
+                        ));
+                        let cross = cross_constraints(&stack, &child.view, child.align);
+                        NSLayoutConstraint::activateConstraints(&NSArray::from_retained_slice(
+                            &cross,
+                        ));
+                        child.cross = cross;
                     }
                 }
             }
@@ -328,6 +362,12 @@ pub(crate) struct WindowNode {
     pub(crate) content: Option<NodeId>,
     pub(crate) pinned: Option<Retained<NSView>>,
     pub(crate) pins: Vec<Retained<NSLayoutConstraint>>,
+    /// The visual effect view behind the content, made on first use.
+    pub(crate) effect: Option<Retained<NSVisualEffectView>>,
+    pub(crate) compact: bool,
+    /// The fitting size [`size_to_fit`](crate::WindowResponse::size_to_fit)
+    /// last applied, in points.
+    pub(crate) fitted: Option<(f64, f64)>,
     /// The title last written.
     pub(crate) title: String,
 }
@@ -340,6 +380,19 @@ pub(crate) struct ControlNode {
     /// Set by [`Response::invalidate`](crate::Response::invalidate): the next
     /// pass writes every managed property, then clears it.
     pub(crate) stale: bool,
+    /// Where the view sits across its stack view.
+    pub(crate) align: Align,
+    /// The active constraints that place the view across its stack view,
+    /// rebuilt by the stack's close while `cross_stale` is set.
+    pub(crate) cross: Vec<Retained<NSLayoutConstraint>>,
+    pub(crate) cross_stale: bool,
+    pub(crate) width: Option<Retained<NSLayoutConstraint>>,
+    /// The options last written; [`None`] until first written.
+    pub(crate) enabled: Option<bool>,
+    pub(crate) style: Option<Style>,
+    pub(crate) padding: Option<[f64; 4]>,
+    /// The header and error line of a form field.
+    pub(crate) field: Option<Box<Field>>,
 }
 
 impl ControlNode {
@@ -348,12 +401,97 @@ impl ControlNode {
     /// it with constraints.
     pub(crate) fn payload(view: Retained<NSView>, control: Control) -> Payload {
         view.setTranslatesAutoresizingMaskIntoConstraints(false);
+        let align = match control {
+            Control::Button { .. } => Align::Start,
+            _ => Align::Stretch,
+        };
         Payload::Control(ControlNode {
             view,
             control,
             visual: Vec::new(),
             stale: false,
+            align,
+            cross: Vec::new(),
+            cross_stale: true,
+            width: None,
+            enabled: None,
+            style: None,
+            padding: None,
+            field: None,
         })
+    }
+
+    /// A form field node: `control` wrapped in a field stack, which becomes
+    /// the node's view.
+    pub(crate) fn field(mtm: MainThreadMarker, control_view: &NSView, control: Control) -> Payload {
+        control_view.setTranslatesAutoresizingMaskIntoConstraints(false);
+        let field = Field::new(mtm, control_view);
+        let Payload::Control(mut node) =
+            ControlNode::payload(Retained::clone(&field.stack).into_super(), control)
+        else {
+            unreachable!("payload makes control payloads")
+        };
+        node.field = Some(field);
+        Payload::Control(node)
+    }
+}
+
+/// The constraints that place `view` across `stack` by `align`, inside the
+/// stack's edge insets.
+fn cross_constraints(
+    stack: &NSStackView,
+    view: &NSView,
+    align: Align,
+) -> Vec<Retained<NSLayoutConstraint>> {
+    let insets = stack.edgeInsets();
+    // The same rules for both axes; the anchors differ in type, so a macro
+    // writes them once.
+    macro_rules! place {
+        ($start:ident, $end:ident, $center:ident, $start_inset:expr, $end_inset:expr) => {{
+            let pin_start = || {
+                view.$start()
+                    .constraintEqualToAnchor_constant(&stack.$start(), $start_inset)
+            };
+            let pin_end = || {
+                view.$end()
+                    .constraintEqualToAnchor_constant(&stack.$end(), -$end_inset)
+            };
+            let within_start = || {
+                view.$start()
+                    .constraintGreaterThanOrEqualToAnchor_constant(&stack.$start(), $start_inset)
+            };
+            let within_end = || {
+                view.$end()
+                    .constraintLessThanOrEqualToAnchor_constant(&stack.$end(), -$end_inset)
+            };
+            match align {
+                Align::Stretch => vec![pin_start(), pin_end()],
+                Align::Start => vec![pin_start(), within_end()],
+                Align::End => vec![within_start(), pin_end()],
+                Align::Center => vec![
+                    view.$center().constraintEqualToAnchor(&stack.$center()),
+                    within_start(),
+                    within_end(),
+                ],
+            }
+        }};
+    }
+    if stack.orientation() == NSUserInterfaceLayoutOrientation::Vertical {
+        place!(
+            leadingAnchor,
+            trailingAnchor,
+            centerXAnchor,
+            insets.left,
+            insets.right
+        )
+    } else {
+        place!(
+            topAnchor,
+            bottomAnchor,
+            centerYAnchor,
+            insets.top,
+            insets.bottom
+        )
     }
 }
 

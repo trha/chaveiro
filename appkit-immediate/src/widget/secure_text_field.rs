@@ -7,7 +7,11 @@ use crate::{
 use objc2::{rc::Retained, runtime::ProtocolObject, sel};
 use objc2_app_kit::NSSecureTextField;
 use objc2_foundation::{NSRange, NSString};
-use std::{hash::Hash, ops::Deref, ptr::NonNull};
+use std::{
+    hash::Hash,
+    ops::{Deref, DerefMut},
+    ptr::NonNull,
+};
 use zeroize::{Zeroize, Zeroizing};
 
 impl Ui {
@@ -25,11 +29,10 @@ impl Ui {
     ) -> SecureTextFieldResponse<'_> {
         let (node, visit) = self.visit(id, ChildKind::Visual, |mtm| {
             let field = NSSecureTextField::new(mtm);
-            ControlNode::payload(
-                Retained::clone(&field)
-                    .into_super()
-                    .into_super()
-                    .into_super(),
+            let view = Retained::clone(&field);
+            ControlNode::field(
+                mtm,
+                &view,
                 Control::SecureTextField {
                     field,
                     placeholder: String::new(),
@@ -150,5 +153,11 @@ impl<'u> Deref for SecureTextFieldResponse<'u> {
 
     fn deref(&self) -> &Response<'u> {
         &self.0
+    }
+}
+
+impl<'u> DerefMut for SecureTextFieldResponse<'u> {
+    fn deref_mut(&mut self) -> &mut Response<'u> {
+        &mut self.0
     }
 }

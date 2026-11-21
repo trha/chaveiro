@@ -7,7 +7,10 @@ use crate::{
 use objc2::{msg_send, rc::Retained, runtime::ProtocolObject};
 use objc2_app_kit::{NSTextField, NSTextView};
 use objc2_foundation::NSString;
-use std::{hash::Hash, ops::Deref};
+use std::{
+    hash::Hash,
+    ops::{Deref, DerefMut},
+};
 
 impl Ui {
     /// A one-line text field bound to `value`.
@@ -26,8 +29,10 @@ impl Ui {
     ) -> TextFieldResponse<'_> {
         let (node, visit) = self.visit(id, ChildKind::Visual, |mtm| {
             let field = NSTextField::new(mtm);
-            ControlNode::payload(
-                Retained::clone(&field).into_super().into_super(),
+            let view = Retained::clone(&field);
+            ControlNode::field(
+                mtm,
+                &view,
                 Control::TextField {
                     field,
                     text: String::new(),
@@ -120,5 +125,11 @@ impl<'u> Deref for TextFieldResponse<'u> {
 
     fn deref(&self) -> &Response<'u> {
         &self.response
+    }
+}
+
+impl<'u> DerefMut for TextFieldResponse<'u> {
+    fn deref_mut(&mut self) -> &mut Response<'u> {
+        &mut self.response
     }
 }

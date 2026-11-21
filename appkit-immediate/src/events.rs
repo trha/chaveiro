@@ -6,7 +6,7 @@ use objc2::{
     runtime::AnyObject,
 };
 use objc2_app_kit::{
-    NSApplication, NSApplicationDelegate, NSApplicationTerminateReply,
+    NSApplication, NSApplicationDelegate, NSApplicationTerminateReply, NSComboBoxDelegate,
     NSControlTextEditingDelegate, NSTextFieldDelegate, NSWindowDelegate,
 };
 use objc2_foundation::{NSNotification, NSObject, NSObjectProtocol};
@@ -160,6 +160,8 @@ define_class!(
     }
 
     unsafe impl NSTextFieldDelegate for Target {}
+
+    unsafe impl NSComboBoxDelegate for Target {}
 
     unsafe impl NSApplicationDelegate for Target {
         /// Reports the request and keeps running: the app quits by declaring
