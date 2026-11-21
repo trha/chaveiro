@@ -123,6 +123,7 @@ fn token_two_factor_lists_authenticator() {
             providers: [
                 0,
             ],
+            masked_email: None,
         }
     "#]]
     .assert_debug_eq(&error.token_failure());

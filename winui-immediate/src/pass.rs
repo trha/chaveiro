@@ -103,6 +103,17 @@ impl Ui {
     /// Opens `node` as the container for the widgets declared next.
     pub(crate) fn open(&mut self, node: NodeId) {
         let key = self.tree.node(node).key();
+        self.open_with_key(node, key);
+    }
+
+    /// Opens `node` like [`open`](Self::open), but the children's keys
+    /// derive from `scope` as well, so a new `scope` makes every child new.
+    pub(crate) fn open_scoped(&mut self, node: NodeId, scope: impl Hash) {
+        let key = Key::child(self.tree.node(node).key(), scope);
+        self.open_with_key(node, key);
+    }
+
+    fn open_with_key(&mut self, node: NodeId, key: Key) {
         let logical = self.tree.take_list();
         let visual = self.tree.take_list();
         self.frames.push(Frame {
@@ -143,6 +154,16 @@ impl Ui {
             frame.visual.push(node);
         }
         Ok((node, visit))
+    }
+
+    /// The window the open containers are inside.
+    pub(crate) fn enclosing_window(&self) -> NodeId {
+        self.frames
+            .iter()
+            .rev()
+            .map(|frame| frame.node)
+            .find(|&node| matches!(self.tree.node(node).payload, Payload::Window(_)))
+            .expect("controls are declared inside a window")
     }
 
     /// Closes the innermost container: applies its WinUI children, then drops
@@ -212,6 +233,27 @@ impl Ui {
                     }
                     None => shell.SetContent(None::<&IInspectable>),
                 }
+            }
+            Payload::Control(ControlNode {
+                control: Control::Navigator(navigator),
+                ..
+            }) => {
+                assert!(declared.len() <= 1, "a navigator declares one screen");
+                let declared_content = declared.first().copied();
+                if navigator.content == declared_content {
+                    return Ok(());
+                }
+                let old = std::mem::replace(&mut navigator.content, declared_content);
+                let old = old.map(|old| self.control(old).element.clone());
+                let entering = declared_content.map(|new| self.control(new).element.clone());
+                let Payload::Control(ControlNode {
+                    control: Control::Navigator(navigator),
+                    ..
+                }) = &mut self.tree.node_mut(node).payload
+                else {
+                    unreachable!("matched above")
+                };
+                navigator.swap(old, entering)
             }
             Payload::Control(control) => {
                 let Some(children) = control.control.children() else {
@@ -332,6 +374,8 @@ pub(crate) struct WindowNode {
     pub(crate) cloaked: bool,
     /// Resizes made by `fit_to_content`.
     pub(crate) fit_tries: u32,
+    /// The control set with `Window.SetTitleBar`.
+    pub(crate) title_bar: Option<NodeId>,
     pub(crate) subscribed: EventSet,
 }
 
@@ -365,6 +409,8 @@ pub(crate) struct ControlNode {
     pub(crate) width: f64,
     /// The padding last written.
     pub(crate) padding: Option<[f64; 4]>,
+    /// The margin last written.
+    pub(crate) margin: Option<[f64; 4]>,
     /// The line under a field for its error, made by the first
     /// [`error`](crate::Response) call, and the message it shows.
     pub(crate) error: Option<crate::widget::ErrorLine>,
@@ -387,6 +433,7 @@ impl ControlNode {
             align: None,
             width: f64::NAN,
             padding: None,
+            margin: None,
             error: None,
         })
     }
@@ -415,6 +462,11 @@ fn release(events: &mut Events, payload: Payload) {
         Payload::Control(control) => {
             if control.subscribed != EventSet::default() {
                 events.forget(&control.element);
+            }
+            if let Control::Navigator(navigator) = &control.control {
+                // Stopping fails only when the dispatcher queue is shutting
+                // down, and then no timer fires anyway.
+                let _ = navigator.stop();
             }
         }
     }

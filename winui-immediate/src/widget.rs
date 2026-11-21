@@ -10,7 +10,7 @@ use crate::{
         Control as XamlControl, DependencyObject, FocusState, FontIcon, FrameworkElement,
         HorizontalAlignment, IPanel, IconElement, InfoBar, ItemsRepeater, PasswordBox,
         ProgressRing, RowDefinitionCollection, StackPanel, Style, TextBlock, TextBox, TextWrapping,
-        Thickness, UIElement, UIElementCollection, Visibility,
+        Thickness, TitleBar, UIElement, UIElementCollection, Visibility,
     },
     events::EventKind,
     pass::Ui,
@@ -22,26 +22,39 @@ use windows_reference::IReference;
 
 mod button;
 mod cache;
+mod check_box;
+mod code_boxes;
 mod combo_box;
 mod grid;
 mod info_bar;
 mod label;
+mod link;
 mod list;
 mod native;
+mod navigator;
 mod password_box;
+mod settings_card;
 mod stack;
 mod text_box;
+mod title_bar;
 mod window;
 
 pub use button::ButtonResponse;
+pub use check_box::CheckBoxResponse;
+pub use code_boxes::{CODE_LENGTH, CodeBoxes, CodeDigits};
 pub use combo_box::ComboBoxResponse;
 pub use grid::Length;
 pub use info_bar::Severity;
+pub use link::LinkResponse;
 pub(crate) use list::index_source;
 pub use list::{ListId, RowFn};
+pub(crate) use navigator::Navigator;
+pub use navigator::{SLIDE_DURATION, Slide};
 pub use password_box::{PasswordField, PasswordHandle};
+pub use settings_card::{ContentAlignment, SettingsCard, SettingsCardResponse};
 pub use stack::Orientation;
 pub use text_box::TextBoxResponse;
+pub use title_bar::TitleBarResponse;
 pub use window::WindowResponse;
 pub(crate) use window::cloak;
 
@@ -80,6 +93,7 @@ impl Response<'_> {
         control.align = None;
         control.width = f64::NAN;
         control.padding = None;
+        control.margin = None;
     }
 
     /// Sets whether the user can interact with the control. Fails when the
@@ -135,6 +149,26 @@ impl Response<'_> {
                 .cast::<FrameworkElement>()?
                 .SetWidth(width)?;
             control.width = width;
+        }
+        Ok(self)
+    }
+
+    /// Sets the space outside the control's edges, in view pixels: left,
+    /// top, right, bottom. In a stack it adds to the stack's spacing.
+    pub fn margin(&mut self, margin: [f64; 4]) -> Result<&mut Self> {
+        let control = self.ui.control_mut(self.node);
+        if control.margin != Some(margin) {
+            let [left, top, right, bottom] = margin;
+            control
+                .element
+                .cast::<FrameworkElement>()?
+                .SetMargin(Thickness {
+                    left,
+                    top,
+                    right,
+                    bottom,
+                })?;
+            control.margin = Some(margin);
         }
         Ok(self)
     }
@@ -210,14 +244,7 @@ impl Response<'_> {
         line.message = message.map(str::to_owned);
         line.render()?;
         let element = &control.element;
-        match message {
-            Some(_) => element
-                .cast::<XamlControl>()?
-                .SetBorderBrush(&resource::<Brush>("SystemFillColorCriticalBrush")?)?,
-            None => element
-                .cast::<DependencyObject>()?
-                .ClearValue(&XamlControl::BorderBrushProperty()?)?,
-        }
+        mark_critical(element, message.is_some())?;
         let target = element.cast::<DependencyObject>()?;
         AutomationProperties::SetFullDescription(&target, message.unwrap_or(""))?;
         AutomationProperties::SetIsDataValidForForm(&target, message.is_none())?;
@@ -289,6 +316,18 @@ impl Response<'_> {
     }
 }
 
+/// Gives a field the critical border, or its theme border back.
+fn mark_critical(element: &UIElement, on: bool) -> Result<()> {
+    match on {
+        true => element
+            .cast::<XamlControl>()?
+            .SetBorderBrush(&resource::<Brush>("SystemFillColorCriticalBrush")?),
+        false => element
+            .cast::<DependencyObject>()?
+            .ClearValue(&XamlControl::BorderBrushProperty()?),
+    }
+}
+
 /// Writes the header of a field from its recorded text and required mark.
 /// The accessible name stays the bare text, so the `*` is not read aloud.
 fn write_header(control: &mut crate::pass::ControlNode) -> Result<()> {
@@ -326,14 +365,13 @@ impl Ui {
         .set_error(message)
     }
 
-    /// [`Response::focus`] for the field `field` names.
-    pub fn focus(&mut self, field: FieldHandle) -> Result<()> {
-        Response {
-            ui: self,
-            node: field.0,
-        }
-        .focus()?;
-        Ok(())
+    /// [`Response::focus`] for the field `field` names. Returns whether
+    /// the field took focus; one not yet in the window cannot, so call it
+    /// again on a later pass.
+    pub fn focus(&mut self, field: FieldHandle) -> Result<bool> {
+        self.control(field.0)
+            .element
+            .Focus(FocusState::Programmatic)
     }
 }
 
@@ -505,6 +543,27 @@ pub(crate) enum Control {
         shell: ContentControl,
         content: Option<NodeId>,
     },
+    CheckBox {
+        /// The toggle base, which holds `IsChecked`.
+        check_box: crate::bindings::ToggleButton,
+        content: TextBlock,
+        label: String,
+        checked: bool,
+    },
+    Link {
+        content: TextBlock,
+        label: String,
+    },
+    /// From [`Ui::settings_card`].
+    SettingsCard(Box<settings_card::Parts>),
+    /// From [`Ui::navigator`]: one screen, and the old ones sliding out.
+    Navigator(Box<Navigator>),
+    TitleBar {
+        title_bar: TitleBar,
+        title: String,
+        /// Whether the back button shows, as last written.
+        back: Option<bool>,
+    },
 }
 
 impl Control {
@@ -512,6 +571,7 @@ impl Control {
     pub(crate) fn children(&self) -> Option<&UIElementCollection> {
         match self {
             Control::Stack { children, .. } | Control::Grid { children, .. } => Some(children),
+            Control::SettingsCard(parts) => Some(&parts.children),
             _ => None,
         }
     }

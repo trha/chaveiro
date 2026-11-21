@@ -22,8 +22,11 @@ pub(crate) struct Events {
     inbox: Rc<Inbox>,
     /// Events of the current pass, resolved to nodes.
     current: Vec<(NodeId, EventKind)>,
+    /// Keys pressed since the last pass, resolved to nodes, in order.
+    keys: Vec<(NodeId, Key)>,
     /// Swapped with the inbox at the start of each pass, to reuse capacity.
     drained: Vec<(usize, EventKind)>,
+    drained_keys: Vec<(usize, Key)>,
 }
 
 impl Events {
@@ -32,6 +35,7 @@ impl Events {
     pub(crate) fn new(wake: Rc<dyn Fn()>) -> Self {
         let inbox = Rc::new(Inbox {
             queued: RefCell::new(Vec::new()),
+            keys: RefCell::new(Vec::new()),
             wake,
         });
         tracing::debug!(count = Delegates::COUNT, "shared delegates");
@@ -40,7 +44,9 @@ impl Events {
             senders: AHashMap::new(),
             inbox,
             current: Vec::new(),
+            keys: Vec::new(),
             drained: Vec::new(),
+            drained_keys: Vec::new(),
         }
     }
 
@@ -56,7 +62,23 @@ impl Events {
                 self.current.push((node, kind));
             }
         }
-        !self.current.is_empty()
+        self.keys.clear();
+        std::mem::swap(&mut self.drained_keys, &mut *self.inbox.keys.borrow_mut());
+        for (sender, key) in self.drained_keys.drain(..) {
+            if let Some(node) = self.senders.get(&sender).copied() {
+                tree.mark_event(node);
+                self.keys.push((node, key));
+            }
+        }
+        !self.current.is_empty() || !self.keys.is_empty()
+    }
+
+    /// The keys `node` got since the last pass, in the order pressed.
+    pub(crate) fn keys(&self, node: NodeId) -> impl Iterator<Item = Key> + '_ {
+        self.keys
+            .iter()
+            .filter(move |(target, _)| *target == node)
+            .map(|(_, key)| *key)
     }
 
     /// Whether `node` got `kind` since the last pass.
@@ -127,11 +149,27 @@ impl Events {
             EventKind::SelectionChanged => source
                 .cast::<ISelector>()?
                 .add_selection_changed(&self.delegates.selection_changed)?,
+            EventKind::Key => source
+                .cast::<IUIElement>()?
+                .add_preview_key_down(&self.delegates.key)?,
+            EventKind::BackRequested => source
+                .cast::<ITitleBar>()?
+                .add_back_requested(&self.delegates.back_requested)?,
         };
         let identity = identity(source)?;
         tracing::trace!(?kind, source = identity, "subscribe");
         self.senders.insert(identity, node);
         subscribed.insert(kind);
+        Ok(())
+    }
+
+    /// Makes `text_box` select all its text whenever it takes focus, so the
+    /// next key or paste replaces it. The handler runs at once, before any
+    /// key that follows, and ends with the control.
+    pub(crate) fn select_all_on_focus(&self, text_box: &TextBox) -> Result<()> {
+        text_box
+            .cast::<IUIElement>()?
+            .add_got_focus(&self.delegates.select_all)?;
         Ok(())
     }
 
@@ -164,6 +202,46 @@ pub(crate) enum EventKind {
     TextSubmitted,
     /// A combo box's list closed.
     DropDownClosed,
+    /// A title bar's back button was pressed.
+    BackRequested,
+    /// A [`Key`] went down, seen before the control acts on it. The key
+    /// itself is kept apart, in [`Events::keys`].
+    Key,
+}
+
+/// A key a control reports through [`TextBoxResponse::keys`]. Enter is not
+/// one: it has [`TextBoxResponse::enter_pressed`], which also stops it.
+///
+/// [`TextBoxResponse::keys`]: crate::TextBoxResponse::keys
+/// [`TextBoxResponse::enter_pressed`]: crate::TextBoxResponse::enter_pressed
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Key {
+    Backspace,
+    Delete,
+    Left,
+    Right,
+    Up,
+    Down,
+    Home,
+    End,
+    Escape,
+}
+
+impl Key {
+    fn from_virtual(key: VirtualKey) -> Option<Key> {
+        Some(match key {
+            VirtualKey::Back => Key::Backspace,
+            VirtualKey::Delete => Key::Delete,
+            VirtualKey::Left => Key::Left,
+            VirtualKey::Right => Key::Right,
+            VirtualKey::Up => Key::Up,
+            VirtualKey::Down => Key::Down,
+            VirtualKey::Home => Key::Home,
+            VirtualKey::End => Key::End,
+            VirtualKey::Escape => Key::Escape,
+            _ => return None,
+        })
+    }
 }
 
 /// Event kinds a node is subscribed to, one bit per [`EventKind`].
@@ -183,10 +261,18 @@ impl EventSet {
 /// Queued events, shared with the delegates.
 struct Inbox {
     queued: RefCell<Vec<(usize, EventKind)>>,
+    keys: RefCell<Vec<(usize, Key)>>,
     wake: Rc<dyn Fn()>,
 }
 
 impl Inbox {
+    fn push_key(&self, sender: Option<&IUnknown>, key: Key) {
+        // A delegate without a sender cannot be routed to a node.
+        let Some(sender) = sender else { return };
+        self.keys.borrow_mut().push((sender.as_raw() as usize, key));
+        (self.wake)();
+    }
+
     fn push(&self, sender: Option<&IUnknown>, kind: EventKind) {
         // A delegate without a sender cannot be routed to a node.
         let Some(sender) = sender else { return };
@@ -211,6 +297,10 @@ struct Delegates {
     password_changed: RoutedEventHandler,
     text_submitted: TypedEventHandler<ComboBox, ComboBoxTextSubmittedEventArgs>,
     drop_down_closed: EventHandler<IInspectable>,
+    back_requested: TypedEventHandler<TitleBar, IInspectable>,
+    key: KeyEventHandler,
+    /// Not an event the app sees: it selects the sender's text.
+    select_all: RoutedEventHandler,
 }
 
 impl Delegates {
@@ -331,7 +421,38 @@ impl Delegates {
                 )
             })
         };
+        let back_requested = {
+            let inbox = Rc::clone(inbox);
+            TypedEventHandler::shared(move |sender: Ref<'_, TitleBar>, _| {
+                inbox.push(
+                    canonical(sender.ok().ok()).as_ref(),
+                    EventKind::BackRequested,
+                )
+            })
+        };
+        let key = {
+            let inbox = Rc::clone(inbox);
+            KeyEventHandler::shared(
+                move |sender: Ref<'_, IInspectable>, arguments: Ref<'_, KeyRoutedEventArgs>| {
+                    // Left unhandled, so the control still acts on the key.
+                    let pressed = arguments.ok().and_then(|arguments| arguments.Key());
+                    if let Some(key) = pressed.ok().and_then(Key::from_virtual) {
+                        inbox.push_key(canonical(sender.ok().ok()).as_ref(), key);
+                    }
+                },
+            )
+        };
+        let select_all = RoutedEventHandler::shared(|sender: Ref<'_, IInspectable>, _| {
+            // Only text boxes register it; a failed selection leaves the
+            // caret where WinUI put it, which is still usable.
+            if let Ok(text_box) = sender.ok().and_then(|sender| sender.cast::<TextBox>()) {
+                let _ = text_box.SelectAll();
+            }
+        });
         Delegates {
+            back_requested,
+            select_all,
+            key,
             click,
             close_requested,
             text_changed,

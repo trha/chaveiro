@@ -1,8 +1,8 @@
 use super::{Control, Response, must_write, resource};
 use crate::{
     bindings::{
-        Button, ContentControl, FrameworkElement, IPanel, Orientation, ProgressRing, StackPanel,
-        Style, TextBlock, UIElement, Visibility,
+        AutomationProperties, Button, ContentControl, DependencyObject, FrameworkElement, IPanel,
+        Orientation, ProgressRing, StackPanel, Style, TextBlock, UIElement, Visibility,
     },
     events::EventKind,
     pass::{ChildKind, ControlNode, Ui},
@@ -35,6 +35,7 @@ impl Ui {
         let control = self.control_mut(node);
         let stale = std::mem::take(&mut control.stale);
         let Control::Button {
+            button,
             content,
             label: written,
             ..
@@ -44,6 +45,9 @@ impl Ui {
         };
         if must_write(stale, written.as_str(), label) {
             content.SetText(label)?;
+            // A busy button's content is a row, which gives it no name of its
+            // own, so screen readers get the label here.
+            AutomationProperties::SetName(&button.cast::<DependencyObject>()?, label)?;
             written.clear();
             written.push_str(label);
         }

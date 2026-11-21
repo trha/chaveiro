@@ -18,10 +18,10 @@ use url::Url;
 use uuid::Uuid;
 use vault_core::{
     core::{
-        AgentRequestId, Body, Challenge, Config, Core, DeviceKeyError, Effect, HttpRequest,
-        HttpResponse, Input, LoginError, Method, PasskeyCatalogEntry, PasskeyError, PasskeyReply,
-        PasskeyRequest, RequestId, Screen, Settings, SshAsk, StoreSlot, StoredAccount, UnlockError,
-        UserAction, VaultScreen,
+        AgentRequestId, Body, CODE_PROVIDERS, Challenge, Config, Core, DeviceKeyError, Effect,
+        HttpRequest, HttpResponse, Input, LoginError, Method, PasskeyCatalogEntry, PasskeyError,
+        PasskeyReply, PasskeyRequest, RequestId, Screen, Settings, SshAsk, StoreSlot,
+        StoredAccount, UnlockError, UserAction, VaultScreen,
         ssh_agent::{AgentRequest, parse_request},
     },
     crypto::{EncString, Kdf, MasterKey, SecretString, SymmetricKey, derive_master_key},
@@ -90,7 +90,7 @@ fn two_factor_by_authenticator() {
     harness.answer_fixture(token, "token_two_factor_required.json");
     assert!(matches!(
         harness.core.screen(),
-        Screen::SecondFactor { challenge: Challenge::TwoFactor { providers }, error: None, .. }
+        Screen::SecondFactor { challenge: Challenge::TwoFactor { providers, .. }, error: None, .. }
             if providers == &[0]
     ));
     let effects = harness.user(UserAction::SubmitCode {
@@ -382,7 +382,7 @@ fn two_factor_by_email() {
     harness.answer(token, 400, &body);
     assert!(matches!(
         harness.core.screen(),
-        Screen::SecondFactor { challenge: Challenge::TwoFactor { providers }, .. } if providers == &[1]
+        Screen::SecondFactor { challenge: Challenge::TwoFactor { providers, .. }, .. } if providers == &[1]
     ));
     let effects = harness.user(UserAction::SendEmailCode);
     let (send, request) = one_http(&effects);
@@ -430,6 +430,202 @@ fn two_factor_by_email() {
     .assert_eq(&render(request, &["twoFactorToken"]));
     let effects = harness.answer_fixture(token, "token_success.json");
     assert_logged_in(&mut harness, &effects);
+}
+
+/// The token answer that asks for a second factor from `providers`.
+fn two_factor_required(providers: &[u8]) -> Value {
+    let mut body = fixture("token_two_factor_required.json").1;
+    body["TwoFactorProviders2"] = providers
+        .iter()
+        .map(|provider| (provider.to_string(), Value::Null))
+        .collect::<Map<_, _>>()
+        .into();
+    body
+}
+
+/// The URLs of the HTTP requests among `effects`.
+fn urls(effects: &[Effect]) -> Vec<String> {
+    http(effects)
+        .into_iter()
+        .map(|(_, request)| request.url.to_string())
+        .collect()
+}
+
+const SEND_EMAIL: &str = "https://vault.test/api/two-factor/send-email-login";
+
+#[test]
+fn a_code_in_flight_keeps_the_second_factor_screen_busy() {
+    let mut harness = Harness::logged_out();
+    let token = harness.login_until_token();
+    harness.answer_fixture(token, "token_two_factor_required.json");
+    let effects = harness.user(UserAction::SubmitCode {
+        provider: 0,
+        code: secret("123456"),
+        remember: false,
+    });
+    let (token, _) = one_http(&effects);
+    let Screen::SecondFactor {
+        challenge,
+        busy,
+        error,
+        ..
+    } = harness.core.screen()
+    else {
+        panic!("a code in flight stays on the second-factor screen");
+    };
+    assert_eq!(
+        (challenge, busy, error),
+        (
+            &Challenge::TwoFactor {
+                providers: vec![0],
+                masked_email: None
+            },
+            true,
+            None
+        )
+    );
+    // A wrong code ends the wait and says so.
+    harness.answer_fixture(token, "token_two_factor_required.json");
+    let Screen::SecondFactor { busy, error, .. } = harness.core.screen() else {
+        panic!("a wrong code asks again");
+    };
+    assert_eq!((busy, error), (false, Some(&LoginError::InvalidCode)));
+}
+
+#[test]
+fn a_new_device_code_in_flight_keeps_the_screen_busy() {
+    let mut harness = Harness::logged_out();
+    let token = harness.login_until_token();
+    harness.answer_fixture(token, "token_new_device_otp_required.json");
+    harness.user(UserAction::SubmitNewDeviceOtp {
+        code: secret("99887766"),
+    });
+    assert!(matches!(
+        harness.core.screen(),
+        Screen::SecondFactor {
+            challenge: Challenge::NewDevice,
+            busy: true,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn email_as_the_default_method_sends_the_code_at_once() {
+    let mut harness = Harness::logged_out();
+    let token = harness.login_until_token();
+    let effects = harness.answer(token, 400, &two_factor_required(&[1, 3]));
+    let (send, _) = one_http(&effects);
+    assert_eq!(urls(&effects), [SEND_EMAIL]);
+    assert!(matches!(
+        harness.core.screen(),
+        Screen::SecondFactor {
+            sending: true,
+            busy: false,
+            ..
+        }
+    ));
+    let effects = harness.answer(send, 200, &Value::Null);
+    assert!(
+        effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::Rerender))
+    );
+    assert!(matches!(
+        harness.core.screen(),
+        Screen::SecondFactor {
+            sending: false,
+            error: None,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn the_challenge_names_the_masked_email_address() {
+    let mut harness = Harness::logged_out();
+    let token = harness.login_until_token();
+    let mut body = two_factor_required(&[0, 1]);
+    body["TwoFactorProviders2"]["1"] = serde_json::json!({ "Email": "f***@example.com" });
+    harness.answer(token, 400, &body);
+    let Screen::SecondFactor {
+        challenge: Challenge::TwoFactor { masked_email, .. },
+        ..
+    } = harness.core.screen()
+    else {
+        panic!("the server asked for a second factor");
+    };
+    assert_eq!(masked_email.as_deref(), Some("f***@example.com"));
+}
+
+#[test]
+fn a_wrong_email_code_does_not_send_another() {
+    let mut harness = Harness::logged_out();
+    let token = harness.login_until_token();
+    harness.answer(token, 400, &two_factor_required(&[1]));
+    let effects = harness.user(UserAction::SubmitCode {
+        provider: 1,
+        code: secret("654321"),
+        remember: false,
+    });
+    let (token, _) = one_http(&effects);
+    let effects = harness.answer(token, 400, &two_factor_required(&[1]));
+    assert!(urls(&effects).is_empty());
+}
+
+#[test]
+fn a_failed_email_send_shows_its_error_and_stops_sending() {
+    let mut harness = Harness::logged_out();
+    let token = harness.login_until_token();
+    let effects = harness.answer(token, 400, &two_factor_required(&[1]));
+    let (send, _) = one_http(&effects);
+    harness.answer(send, 500, &Value::Null);
+    let Screen::SecondFactor { sending, error, .. } = harness.core.screen() else {
+        panic!("a failed send stays on the second-factor screen");
+    };
+    assert_eq!(
+        (sending, error),
+        (false, Some(&LoginError::Server { status: 500 }))
+    );
+}
+
+proptest! {
+    /// Email is sent at once exactly when it is the default method: offered,
+    /// with no authenticator, which the screen prefers.
+    #[test]
+    fn the_code_is_emailed_at_once_only_when_email_is_the_default(
+        providers in prop::collection::btree_set(0u8..8, 1..5)
+    ) {
+        let providers: Vec<u8> = providers.into_iter().collect();
+        let mut harness = Harness::logged_out();
+        let token = harness.login_until_token();
+        let effects = harness.answer(token, 400, &two_factor_required(&providers));
+        let emailed = urls(&effects) == [SEND_EMAIL];
+        let expected = providers.contains(&1) && !providers.contains(&0);
+        prop_assert_eq!(emailed, expected);
+    }
+
+    #[test]
+    fn the_default_provider_is_the_most_preferred_one_offered(
+        providers in prop::collection::vec(0u8..8, 0..6)
+    ) {
+        let challenge = Challenge::TwoFactor { providers: providers.clone(), masked_email: None };
+        match challenge.default_provider() {
+            None => prop_assert!(CODE_PROVIDERS.iter().all(|code| !providers.contains(code))),
+            Some(chosen) => {
+                prop_assert!(providers.contains(&chosen));
+                let rank = CODE_PROVIDERS.iter().position(|&code| code == chosen);
+                prop_assert!(rank.is_some(), "{chosen} is not a code provider");
+                let preferred = &CODE_PROVIDERS[..rank.unwrap_or_default()];
+                prop_assert!(preferred.iter().all(|code| !providers.contains(code)));
+            }
+        }
+    }
+}
+
+#[test]
+fn the_new_device_check_has_no_default_provider() {
+    assert_eq!(Challenge::NewDevice.default_provider(), None);
 }
 
 #[test]
@@ -2754,7 +2950,9 @@ fn digest(core: &Core) -> String {
             email,
             challenge,
             error,
-        } => format!("second factor {email} {challenge:?} {error:?}"),
+            busy,
+            sending,
+        } => format!("second factor {email} {challenge:?} {error:?} {busy} {sending}"),
         Screen::Locked {
             email,
             error,

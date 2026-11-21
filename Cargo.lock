@@ -1265,23 +1265,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3244542535d5de959d90ec55d1b5ff0fd2bb7b1310223907d5f11932847f7b59"
 
 [[package]]
-name = "spikes"
-version = "0.1.0"
-dependencies = [
- "rustc-hash",
- "windows-collections",
- "windows-core",
- "windows-future",
- "windows-numerics",
- "windows-reactor",
- "windows-reference",
- "windows-sys",
- "windows-threading",
- "windows-time",
- "winui-immediate",
-]
-
-[[package]]
 name = "spin"
 version = "0.9.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1874,8 +1857,27 @@ dependencies = [
  "windows-bindgen",
  "windows-collections",
  "windows-core",
+ "windows-numerics",
  "windows-reference",
+ "windows-time",
  "zeroize",
+]
+
+[[package]]
+name = "winui-spikes"
+version = "0.1.0"
+dependencies = [
+ "rustc-hash",
+ "windows-collections",
+ "windows-core",
+ "windows-future",
+ "windows-numerics",
+ "windows-reactor",
+ "windows-reference",
+ "windows-sys",
+ "windows-threading",
+ "windows-time",
+ "winui-immediate",
 ]
 
 [[package]]

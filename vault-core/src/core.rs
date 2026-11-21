@@ -488,6 +488,7 @@ impl Core {
                     email,
                     kdf: None,
                     credentials: Credentials::ApiKey,
+                    challenge: None,
                     request: id,
                 }
             }
@@ -589,6 +590,7 @@ impl Core {
                                 password_hash,
                                 answer,
                             },
+                            challenge: None,
                             request: id,
                         }
                     }
@@ -805,6 +807,7 @@ impl Core {
                     email,
                     kdf,
                     credentials,
+                    challenge: _,
                     request,
                 },
                 Input::Http { id, response },
@@ -994,21 +997,48 @@ impl Core {
                         }
                         match (failure, credentials) {
                             (
-                                TokenFailure::SecondFactor { providers },
+                                TokenFailure::SecondFactor {
+                                    providers,
+                                    masked_email,
+                                },
                                 Credentials::Password {
                                     master,
                                     password_hash,
                                     answer,
                                 },
-                            ) => State::SecondFactor {
-                                server,
-                                email,
-                                master,
-                                password_hash,
-                                kdf,
-                                challenge: Challenge::TwoFactor { providers },
-                                error: answer_error(answer),
-                            },
+                            ) => {
+                                let challenge = Challenge::TwoFactor {
+                                    providers,
+                                    masked_email,
+                                };
+                                let error = answer_error(answer);
+                                // The first time this login reaches email as
+                                // the default method, ask for the code, so it
+                                // is on its way when the screen opens. A wrong
+                                // code returns here with an error and sends
+                                // nothing.
+                                if error.is_none() && challenge.default_provider() == Some(1) {
+                                    let id = requests.start(Purpose::SendEmailCode);
+                                    effects.push(Effect::Http {
+                                        id,
+                                        request: send_email_code(
+                                            &server,
+                                            config,
+                                            &email,
+                                            &password_hash,
+                                        ),
+                                    });
+                                }
+                                State::SecondFactor {
+                                    server,
+                                    email,
+                                    master,
+                                    password_hash,
+                                    kdf,
+                                    challenge,
+                                    error,
+                                }
+                            }
                             (
                                 TokenFailure::NewDeviceOtp,
                                 Credentials::Password {
@@ -1113,6 +1143,7 @@ impl Core {
                                 password_hash,
                                 answer: Some(answer),
                             },
+                            challenge: Some(challenge),
                             request: id,
                         }
                     }
@@ -1134,15 +1165,7 @@ impl Core {
                 let id = requests.start(Purpose::SendEmailCode);
                 effects.push(Effect::Http {
                     id,
-                    request: HttpRequest {
-                        method: Method::Post,
-                        url: endpoint(&server.urls.api, &["two-factor", "send-email-login"], &[]),
-                        headers: client_headers(config),
-                        body: Body::Json(serde_json::json!({
-                            "email": email,
-                            "masterPasswordHash": password_hash.as_str(),
-                        })),
-                    },
+                    request: send_email_code(&server, config, &email, &password_hash),
                 });
                 effects.push(Effect::Rerender);
                 State::SecondFactor {
@@ -1170,9 +1193,8 @@ impl Core {
             ) => {
                 let failed =
                     !matches!(&response, Ok(answer) if (200..300).contains(&answer.status));
-                if failed {
-                    effects.push(Effect::Rerender);
-                }
+                // Either way the screen's `sending` turns off.
+                effects.push(Effect::Rerender);
                 State::SecondFactor {
                     server,
                     email,
@@ -2410,6 +2432,11 @@ impl Core {
         })
     }
 
+    fn sending_email_code(&self) -> bool {
+        self.requests
+            .any(|purpose| matches!(purpose, Purpose::SendEmailCode))
+    }
+
     /// What the UI shows. Borrowed, so nothing secret is copied.
     pub fn screen(&self) -> Screen<'_> {
         match &self.state {
@@ -2419,6 +2446,17 @@ impl Core {
                 email: &form.email,
                 error: error.as_ref(),
                 busy: false,
+            },
+            State::TokenRequest {
+                email,
+                challenge: Some(challenge),
+                ..
+            } => Screen::SecondFactor {
+                email,
+                challenge,
+                error: None,
+                busy: true,
+                sending: self.sending_email_code(),
             },
             State::Prelogin { server, email, .. }
             | State::TokenRequest { server, email, .. }
@@ -2450,6 +2488,8 @@ impl Core {
                 email,
                 challenge,
                 error: error.as_ref(),
+                busy: false,
+                sending: self.sending_email_code(),
             },
             State::Locked { account, error } => Screen::Locked {
                 email: &account.email,
@@ -2869,6 +2909,10 @@ pub enum Screen<'a> {
         email: &'a str,
         challenge: &'a Challenge,
         error: Option<&'a LoginError>,
+        /// A code is being checked.
+        busy: bool,
+        /// A request to email a code is in flight.
+        sending: bool,
     },
     Locked {
         email: &'a str,
@@ -2940,8 +2984,30 @@ pub enum Challenge {
     /// Provider numbers (0 authenticator, 1 email, ...), sorted.
     TwoFactor {
         providers: Vec<u8>,
+        /// The address email codes go to, masked by the server, such as
+        /// `f***@example.com`. [`None`] when email is not offered, or the
+        /// server named no address.
+        masked_email: Option<String>,
     },
     NewDevice,
+}
+
+/// The second-factor providers a code can answer, in the order the login
+/// screen prefers them: authenticator, email, YubiKey OTP.
+pub const CODE_PROVIDERS: [u8; 3] = [0, 1, 3];
+
+impl Challenge {
+    /// The provider the second-factor screen opens with: the first of
+    /// [`CODE_PROVIDERS`] the server offers. [`None`] for the new-device
+    /// check, and when the account has no provider this app can answer.
+    pub fn default_provider(&self) -> Option<u8> {
+        match self {
+            Challenge::TwoFactor { providers, .. } => CODE_PROVIDERS
+                .into_iter()
+                .find(|provider| providers.contains(provider)),
+            Challenge::NewDevice => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -3014,6 +3080,9 @@ enum State {
         /// carries it.
         kdf: Option<Kdf>,
         credentials: Credentials,
+        /// The challenge the request answers with a code. While set, the UI
+        /// stays on the second-factor screen.
+        challenge: Option<Challenge>,
         request: RequestId,
     },
     SecondFactor {
@@ -4211,6 +4280,24 @@ fn abandon_writes(requests: &mut Table, account: &mut Account, effects: &mut Vec
         {
             refuse_passkey(id, effects);
         }
+    }
+}
+
+/// The request that asks the server to email a second-factor code.
+fn send_email_code(
+    server: &Server,
+    config: &Config,
+    email: &str,
+    password_hash: &SecretString,
+) -> HttpRequest {
+    HttpRequest {
+        method: Method::Post,
+        url: endpoint(&server.urls.api, &["two-factor", "send-email-login"], &[]),
+        headers: client_headers(config),
+        body: Body::Json(serde_json::json!({
+            "email": email,
+            "masterPasswordHash": password_hash.as_str(),
+        })),
     }
 }
 

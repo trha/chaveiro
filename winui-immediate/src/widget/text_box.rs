@@ -1,7 +1,7 @@
 use super::{Control, Response, must_write};
 use crate::{
     bindings::TextBox,
-    events::EventKind,
+    events::{EventKind, Key},
     pass::{ChildKind, ControlNode, Ui},
 };
 use std::{
@@ -133,6 +133,21 @@ impl TextBoxResponse<'_> {
     /// first call subscribes the box.
     pub fn enter_pressed(&mut self) -> Result<bool> {
         enter_pressed(&mut self.response)
+    }
+
+    /// The [`Key`]s the user pressed in the box since the last pass, in
+    /// order, seen before the box acted on them: a Backspace that deleted
+    /// nothing is here too. The first call subscribes the box, so its first
+    /// result is empty.
+    pub fn keys(&mut self) -> Result<impl Iterator<Item = Key> + '_> {
+        let Response { ui, node } = &mut self.response;
+        let control = ui.control_mut(*node);
+        let element = control.element.clone();
+        let mut subscribed = control.subscribed;
+        ui.events
+            .subscribe(*node, &mut subscribed, &element, EventKind::Key)?;
+        ui.control_mut(*node).subscribed = subscribed;
+        Ok(ui.events.keys(*node))
     }
 }
 

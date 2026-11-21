@@ -108,12 +108,23 @@ impl ErrorResponse {
     /// What a 400 from the token endpoint asks the client to do.
     pub fn token_failure(&self) -> TokenFailure {
         if let Some(providers) = &self.two_factor_providers {
-            let mut providers: Vec<u8> = providers
+            let mut sorted: Vec<u8> = providers
                 .keys()
                 .filter_map(|key| key.parse().ok())
                 .collect();
-            providers.sort_unstable();
-            return TokenFailure::SecondFactor { providers };
+            sorted.sort_unstable();
+            // Email's entry names the address, masked, such as
+            // `{"1": {"Email": "f***@example.com"}}`, with keys lowercased
+            // by `from_slice`.
+            let masked_email = providers
+                .get("1")
+                .and_then(|email| email.get("email"))
+                .and_then(Value::as_str)
+                .map(str::to_owned);
+            return TokenFailure::SecondFactor {
+                providers: sorted,
+                masked_email,
+            };
         }
         let new_device = self.error.as_deref() == Some("device_error")
             || self.message().is_some_and(|message| {
@@ -135,7 +146,11 @@ impl ErrorResponse {
 pub enum TokenFailure {
     /// Resend with `twoFactorToken` and `twoFactorProvider`, one of
     /// `providers` (0 authenticator, 1 email, ...), sorted.
-    SecondFactor { providers: Vec<u8> },
+    SecondFactor {
+        providers: Vec<u8>,
+        /// The address codes go to, masked by the server.
+        masked_email: Option<String>,
+    },
     /// Resend with the `NewDeviceOtp` form field from the email.
     NewDeviceOtp,
     /// Wrong password or another refusal; `message` is for the user.

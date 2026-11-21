@@ -149,9 +149,8 @@ const PASSWORD_ERROR: &str = "Enter your master password";
 pub fn view(ui: &mut Ui, form: &mut LoginForm, state: LoginState<'_>) -> Result<Option<Submit>> {
     let mut submitted = None;
     let enabled = !state.busy;
-    crate::form(ui, "login", |ui| {
-        ui.label("title", format_args!("Log in"))?
-            .style("TitleTextBlockStyle")?;
+    crate::screen::form(ui, "login", |ui| {
+        crate::screen::title(ui, "Log in")?;
         if let Some(warning) = state.warning {
             ui.info_bar("warning", Severity::Warning, "Settings not loaded", warning)?;
         }
@@ -238,6 +237,7 @@ pub fn view(ui: &mut Ui, form: &mut LoginForm, state: LoginState<'_>) -> Result<
             .accent(true)?
             .busy(state.busy)?
             .align(Align::Stretch)?
+            .margin(crate::screen::GROUP_GAP_ABOVE)?
             .access_key("L")?;
 
         // On submit, every field shows its error, and the login goes out

@@ -12,12 +12,15 @@ mod startup;
 mod tree;
 mod widget;
 
+pub use events::Key;
 pub use mailbox::Handle;
 pub use pass::Ui;
 pub use runner::{App, run};
 pub use widget::{
-    Align, ButtonResponse, ComboBoxResponse, FieldHandle, Length, ListId, Orientation,
-    PasswordField, PasswordHandle, Response, RowFn, Severity, TextBoxResponse, WindowResponse,
+    Align, ButtonResponse, CODE_LENGTH, CheckBoxResponse, CodeBoxes, CodeDigits, ComboBoxResponse,
+    ContentAlignment, FieldHandle, Length, LinkResponse, ListId, Orientation, PasswordField,
+    PasswordHandle, Response, RowFn, SLIDE_DURATION, SettingsCard, SettingsCardResponse, Severity,
+    Slide, TextBoxResponse, TitleBarResponse, WindowResponse,
 };
 /// The type [Ui::take_password] returns.
 pub use zeroize::Zeroizing;

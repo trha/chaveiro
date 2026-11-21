@@ -1,6 +1,6 @@
 use crate::{
     bindings::{
-        FrameworkElement, HorizontalAlignment, IWindow2, MicaBackdrop, OverlappedPresenter,
+        FrameworkElement, HorizontalAlignment, IWindow2, MicaBackdrop, OverlappedPresenter, Size,
         SizeInt32, VerticalAlignment, Window,
     },
     events::{EventKind, EventSet},
@@ -37,6 +37,7 @@ impl Ui {
                 fitted_once: false,
                 cloaked: false,
                 fit_tries: 0,
+                title_bar: None,
                 subscribed: EventSet::default(),
             }))
         })?;
@@ -149,10 +150,19 @@ impl WindowResponse<'_> {
             self.ui.window_mut(self.node).fitted_content = Some(content);
         }
         self.ui.window_mut(self.node).fit = true;
-        let (width, height) = (frame.ActualWidth()?, frame.ActualHeight()?);
-        if width <= 0.0 || height <= 0.0 {
+        if frame.ActualWidth()? <= 0.0 || frame.ActualHeight()? <= 0.0 {
             return Ok(self);
         }
+        // Layout clamps the content to the window, so its actual size never
+        // shows that it outgrew it. Measuring with no bound gives the size it
+        // wants, including controls this pass added; the next layout measures
+        // it again with the window's bound.
+        element.Measure(Size {
+            width: f32::INFINITY,
+            height: f32::INFINITY,
+        })?;
+        let wanted = element.DesiredSize()?;
+        let (width, height) = (f64::from(wanted.width), f64::from(wanted.height));
         let root = element.XamlRoot()?;
         let scale = root.RasterizationScale()?;
         let area = root.Size()?;

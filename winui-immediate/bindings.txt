@@ -132,3 +132,37 @@ Microsoft.UI.Xaml.UIElement::{put_AccessKey}
 Microsoft.UI.Xaml.Controls.ComboBox::{put_IsEditable, get_Text, put_Text, add_TextSubmitted, remove_TextSubmitted}
 Microsoft.UI.Xaml.Controls.ComboBoxTextSubmittedEventArgs::{}
 Microsoft.UI.Xaml.Controls.ComboBox::{add_DropDownClosed, remove_DropDownClosed}
+Microsoft.UI.Xaml.UIElement::{put_Translation, put_TranslationTransition, put_Clip, put_IsHitTestVisible}
+Microsoft.UI.Xaml.Vector3Transition::{CreateInstance, put_Duration}
+Microsoft.UI.Xaml.Media.RectangleGeometry::{CreateInstance, put_Rect}
+Windows.Foundation.Rect
+Microsoft.UI.Dispatching.DispatcherQueue::{CreateTimer}
+Microsoft.UI.Dispatching.DispatcherQueueTimer::{put_Interval, put_IsRepeating, Start, Stop, get_IsRunning, add_Tick, remove_Tick}
+Microsoft.UI.Xaml.UIElement::{Measure, get_DesiredSize}
+Microsoft.UI.Xaml.Controls.TitleBar::{put_Title, put_IsBackButtonVisible, put_IsBackButtonEnabled, add_BackRequested, remove_BackRequested}
+Microsoft.UI.Xaml.Controls.ITitleBarFactory::CreateInstance
+Microsoft.UI.Xaml.Window::{SetTitleBar}
+Microsoft.UI.Xaml.UIElement::{put_IsTabStop}
+Microsoft.UI.Xaml.UIElement::{add_PreviewKeyDown, remove_PreviewKeyDown}
+Microsoft.UI.Xaml.Controls.Control::{put_FontSize, put_FontWeight}
+Windows.UI.Text.FontWeight
+Microsoft.UI.Xaml.Controls.TextBox::{get_TextAlignment, put_TextAlignment}
+Microsoft.UI.Xaml.TextAlignment
+Microsoft.UI.Xaml.Controls.CheckBox::{}
+Microsoft.UI.Xaml.Controls.ICheckBoxFactory::CreateInstance
+Microsoft.UI.Xaml.Controls.Primitives.ToggleButton::{get_IsChecked, put_IsChecked}
+Microsoft.UI.Xaml.Controls.HyperlinkButton::{}
+Microsoft.UI.Xaml.Controls.IHyperlinkButtonFactory::CreateInstance
+Microsoft.UI.Xaml.FrameworkElement::{put_MinWidth}
+Microsoft.UI.Xaml.UIElement::{add_GotFocus, remove_GotFocus}
+Microsoft.UI.Xaml.Controls.TextBox::{SelectAll}
+Microsoft.UI.Xaml.Controls.Grid::{get_ColumnDefinitions, SetColumn, SetRowSpan, put_RowSpacing, put_BorderBrush, put_BorderThickness, put_CornerRadius, put_Padding}
+Microsoft.UI.Xaml.Controls.IGridStatics::{SetColumn, SetRowSpan}
+Microsoft.UI.Xaml.Controls.ColumnDefinition::{CreateInstance, put_Width}
+Microsoft.UI.Xaml.Controls.ColumnDefinitionCollection
+Microsoft.UI.Xaml.Controls.Control::{put_Padding, put_HorizontalContentAlignment, put_VerticalContentAlignment}
+Microsoft.UI.Xaml.FrameworkElement::{get_Resources}
+Microsoft.UI.Xaml.ResourceDictionary
+Microsoft.UI.Xaml.Controls.FontIcon::{put_MirroredWhenRightToLeft}
+Microsoft.UI.Xaml.Automation.AutomationProperties::{SetHelpText}
+Microsoft.UI.Xaml.Automation.IAutomationPropertiesStatics::{SetHelpText}

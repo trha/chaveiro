@@ -150,7 +150,14 @@ add_handler!(
     EventHandler<ScrollViewerViewChangedEventArgs>
 );
 add_handler!(IUIElement, add_key_down, KeyDown, KeyEventHandler);
+add_handler!(
+    IUIElement,
+    add_preview_key_down,
+    PreviewKeyDown,
+    KeyEventHandler
+);
 add_handler!(IUIElement, add_lost_focus, LostFocus, RoutedEventHandler);
+add_handler!(IUIElement, add_got_focus, GotFocus, RoutedEventHandler);
 add_handler!(
     IFrameworkElement,
     add_size_changed,
@@ -171,6 +178,7 @@ add_handler!(
 );
 add_handler!(IComboBox, add_text_submitted, TextSubmitted, TypedEventHandler<ComboBox, ComboBoxTextSubmittedEventArgs>);
 add_handler!(IAppWindow, add_closing, Closing, TypedEventHandler<AppWindow, AppWindowClosingEventArgs>);
+add_handler!(ITitleBar, add_back_requested, BackRequested, TypedEventHandler<TitleBar, windows_core::IInspectable>);
 
 impl IPasswordBox {
     /// The password as the `HSTRING` WinUI returns, unconverted, so the

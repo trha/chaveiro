@@ -9,15 +9,21 @@
 mod bindings;
 mod io;
 mod login;
+mod route;
+mod screen;
+mod second_factor;
 mod wipe;
 
 use io::{Answer, Io, Settings, SettingsError, TaskId};
 use login::{LoginForm, LoginState, Submit};
 use rand_core::OsRng;
+use route::Route;
+use screen::{form, title};
+use second_factor::{SecondFactorForm, SecondFactorState};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use vault_core::core::{Config, Core, Input, LoginError, Screen, UserAction};
 use windows_core::Result;
-use winui_immediate::{App, Handle, Orientation, Ui, run};
+use winui_immediate::{App, Handle, Orientation, Slide, Ui, run};
 
 /// Logs go to stderr, filtered by `CHAVEIRO_LOG` (such as `debug` or
 /// `winui_immediate=trace`), warnings and up by default. The app has no
@@ -65,6 +71,11 @@ struct Chaveiro {
     pending: Option<Submit>,
     /// The last pass showed the core's login screen.
     showed_login: bool,
+    second_factor: SecondFactorForm,
+    /// The screen the last pass showed.
+    route: Route,
+    /// How the last change of `route` moved.
+    slide: Slide,
 }
 
 /// What the user asked for in a pass, applied after the screen's borrow
@@ -99,9 +110,31 @@ impl App for Chaveiro {
         if !self.open {
             return Ok(());
         }
+        let route = Route::of(self.core.as_ref().map(Core::screen).as_ref());
+        if route != self.route {
+            // Each visit to the second factor starts with an empty form.
+            if route == Route::SecondFactor {
+                self.second_factor = SecondFactorForm::default();
+            }
+            self.slide = self.route.slide_to(route);
+            self.route = route;
+        }
         let mut next = None;
         let mut main = ui.window("main", "Chaveiro", |ui| {
-            next = self.body(ui)?;
+            ui.stack("window", Orientation::Vertical, 0.0, |ui| {
+                let mut title_bar = ui.title_bar("title bar", "Chaveiro", route.has_back())?;
+                if title_bar.back_requested()? && route.has_back() {
+                    next = Some(Next::User(UserAction::Cancel));
+                }
+                ui.navigator("screens", route, self.slide, |ui| {
+                    if let Some(asked) = self.body(ui)? {
+                        next = Some(asked);
+                    }
+                    Ok(())
+                })?;
+                Ok(())
+            })?
+            .width(FORM_WIDTH)?;
             Ok(())
         })?;
         main.mica()?.compact()?.fit_to_content()?;
@@ -140,6 +173,9 @@ impl Chaveiro {
             login: LoginForm::new(),
             pending: None,
             showed_login: false,
+            second_factor: SecondFactorForm::default(),
+            route: Route::Login,
+            slide: Slide::Instant,
         })
     }
 
@@ -235,6 +271,23 @@ impl Chaveiro {
                 }
                 (*busy, error.map(login_error))
             }
+            Some(Screen::SecondFactor {
+                email,
+                challenge,
+                error,
+                busy,
+                sending,
+            }) => {
+                self.showed_login = false;
+                let state = SecondFactorState {
+                    challenge,
+                    email,
+                    error: *error,
+                    busy: *busy,
+                    sending: *sending,
+                };
+                return Ok(second_factor::view(ui, &mut self.second_factor, state)?.map(Next::User));
+            }
             Some(other) => {
                 self.showed_login = false;
                 return placeholder(ui, other);
@@ -256,14 +309,12 @@ impl Chaveiro {
 /// login.
 fn placeholder(ui: &mut Ui, screen: &Screen<'_>) -> Result<Option<Next>> {
     let (name, button, action) = match screen {
-        Screen::SecondFactor { .. } => ("Two-step login", "Cancel", UserAction::Cancel),
         Screen::Locked { .. } => ("Unlock", "Log out", UserAction::Logout),
         _ => ("The vault", "Lock", UserAction::Lock),
     };
     let mut next = None;
     form(ui, "placeholder", |ui| {
-        ui.label("title", format_args!("{name}"))?
-            .style("TitleTextBlockStyle")?;
+        title(ui, name)?;
         ui.label("note", format_args!("This screen is not built yet."))?;
         if ui.button("action", button)?.clicked()? {
             next = Some(Next::User(action));
@@ -273,28 +324,8 @@ fn placeholder(ui: &mut Ui, screen: &Screen<'_>) -> Result<Option<Next>> {
     Ok(next)
 }
 
-/// The window's one control: the title bar row with the app name, over a
-/// vertical stack of the controls `body` declares, `space-2` apart. The
-/// window fits itself to this, so it is as wide as the login card.
-pub fn form(ui: &mut Ui, id: &'static str, body: impl FnOnce(&mut Ui) -> Result<()>) -> Result<()> {
-    ui.stack("window", Orientation::Vertical, 0.0, |ui| {
-        // The system keeps the top 32px as the drag area and draws the close
-        // button there.
-        ui.stack("title bar", Orientation::Horizontal, 0.0, |ui| {
-            ui.label("name", format_args!("Chaveiro"))?
-                .style("CaptionTextBlockStyle")?;
-            Ok(())
-        })?
-        .padding([16.0, 8.0, 16.0, 8.0])?;
-        ui.stack(id, Orientation::Vertical, 8.0, body)?
-            .padding([24.0, 8.0, 24.0, 24.0])?;
-        Ok(())
-    })?
-    .width(FORM_WIDTH)?;
-    Ok(())
-}
-
-/// The login card's width, from the LoginScreen design.
+/// The window's width, from the LoginScreen design. The window fits itself
+/// to its content, so this sets its width.
 const FORM_WIDTH: f64 = 360.0;
 
 /// The InfoBar sentence for a failed login.
