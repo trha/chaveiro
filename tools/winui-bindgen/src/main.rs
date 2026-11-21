@@ -2,7 +2,7 @@
 //!
 //! Usage: `winui-bindgen <winmd folder> <output .rs> <filter file>`
 //!
-//! Filter: `spikes.txt` for `spikes/src/bin/immediate`. The `winui-immediate`
+//! Filter: `spikes.txt` for `winui-spikes/src/bin/immediate`. The `winui-immediate`
 //! crate generates its own bindings in `build.rs`.
 
 fn main() {

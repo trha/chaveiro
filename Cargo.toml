@@ -2,7 +2,7 @@
 resolver = "3"
 members = [
   "chaveiro-winui",
-  "spikes",
+  "winui-spikes",
   "vault-core",
   "winui-executor",
   "winui-immediate",

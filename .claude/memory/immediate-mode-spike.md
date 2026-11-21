@@ -1,6 +1,6 @@
 ---
 name: immediate-mode-spike
-description: Results of the RAD-style immediate-mode spike over WinUI (spikes/src/bin/immediate), now superseded by the winui-immediate crate
+description: Results of the RAD-style immediate-mode spike over WinUI (winui-spikes/src/bin/immediate), now superseded by the winui-immediate crate
 metadata:
   type: project
 ---
@@ -17,7 +17,7 @@ replaces the spike's scripts. The vault app's shell builds on the crate
 (`plans/sans-io-vault-core.md`). Read this note for why the crate looks as
 it does, and the crate's plan for how it works now.
 
-Spike in `spikes/src/bin/immediate/` (`main.rs`, `ui.rs`, `winui.rs`,
+Spike in `winui-spikes/src/bin/immediate/` (`main.rs`, `ui.rs`, `winui.rs`,
 `winui/bindings.rs`), moved there from `src/bin/immediate/`. No Reactor. It answers whether a RAD debugger style API
 (rebuild everything on each event, keyed widget cache, diff to WinUI setters)
 works over the WinUI retained tree.
