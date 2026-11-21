@@ -323,10 +323,13 @@ in three ways.
   checks `field.currentEditor()`, downcasts it to `NSTextView`, and asks
   `hasMarkedText()`. A write while that is true waits for a later pass, and
   the text-changed event that ends the composition schedules that pass.
-- **Write while editing.** When `currentEditor` exists, write through it with
-  `setString` and restore the old selection, clamped to the new length.
-  Setting `stringValue` resets the caret. When no editor exists, use
-  `setStringValue`.
+- **Write while editing.** `setStringValue` keeps the caret and the
+  selection even while the field is edited (measured on 2026-11-21: after
+  the app rewrites "AxB" to "AXB" with the caret after X, the next key lands
+  there, whether the write goes through `setStringValue` or through the
+  field editor with the selection restored). So every write uses
+  `setStringValue`, and the field editor serves only the composition
+  check.
 
 The `Target` is the field's delegate and is registered for it.
 
@@ -520,7 +523,15 @@ The main agent owns every step, one at a time, because all steps edit
    opens at 228pt with rows 18, 40, 48 and 96, and after a resize to 600
    the star rows are 172 and 344. `tools/smoke.sh` passes 17 checks.
 5. Text field, then secure text field. Runs test 4 (typing, caret, composition with
-   a Japanese input source by hand).
+   a Japanese input source by hand). Done (2026-11-21): `tools/smoke.sh`
+   passes 21 checks, with 5 new for `examples/form.rs`: typing, Return, an
+   app write during an edit, the caret after that write, and `take`. The
+   caret check first passed with a deliberately broken write too, so it
+   now moves the caret inside the text and types after the app's write;
+   that showed `setStringValue` alone keeps the caret, and the field
+   editor write path was removed. `EventKind::Click` is now `Action`,
+   since a text field sends it on Return. Not verified: the composition
+   hold-back, which needs an input method switched on by hand.
 6. Form widgets and options: field stack with `ErrorLine`, `FieldHandle`,
    `pop_up_button`, `combo_box`, `box_view`, `default_button`, `busy`, window `visual_effect`,
    `compact` and `size_to_fit`, `Response` options. Runs a login-form smoke script

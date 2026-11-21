@@ -3,7 +3,7 @@
 # Accessibility access for the terminal that runs it.
 set -euo pipefail
 root=$(cd "$(dirname "$0")/../.." && pwd)
-cargo build -q -p appkit-immediate --example smoke --example grid --manifest-path "$root/Cargo.toml"
+cargo build -q -p appkit-immediate --example smoke --example grid --example form --manifest-path "$root/Cargo.toml"
 binary="$root/target/debug/examples/smoke"
 log=$(mktemp -t smoke.XXXXXX)
 failures=0
@@ -75,6 +75,41 @@ osascript -e "$grid to set size of window \"grid\" to {500, 600}" >/dev/null
 sleep 0.4
 check "grid rows after a resize" grid_ok
 check "star rows grow with the window" "[ \$(heights | awk '{ print \$4 }') -gt 300 ]"
+kill "$pid"
+
+# Run 4: text fields. Typing needs the app in front, so this run takes the
+# keyboard focus for a few seconds.
+"$root/target/debug/examples/form" >"$log" 2>&1 &
+pid=$!
+sleep 1.5
+form='tell application "System Events" to tell (first process whose name is "form")'
+texts() { osascript -e "$form to get value of static texts of window \"form\""; }
+type_into() { # field index, keystrokes
+    osascript -e "$form to set frontmost to true" \
+        -e "$form to set focused of text field $1 of window \"form\" to true" \
+        -e "tell application \"System Events\" to keystroke \"$2\"" >/dev/null
+    sleep 0.4
+}
+field_value() { osascript -e "$form to get value of text field $1 of window \"form\""; }
+type_into 1 hello
+check "typing reaches the app's value" "texts | grep -q 'name: hello'"
+osascript -e 'tell application "System Events" to key code 36' >/dev/null
+sleep 0.3
+check "Return reaches return_pressed" "texts | grep -q 'returns: 1'"
+type_into 2 ab
+check "an app write during an edit shows" "[ \"\$(field_value 2)\" = AB ]"
+# Left arrow puts the caret between A and B; the app's next write must keep it there.
+osascript -e 'tell application "System Events" to key code 123' -e 'tell application "System Events" to keystroke "x"' >/dev/null
+sleep 0.4
+# The app rewrote the field after the x; the next keystroke shows where the
+# caret ended up.
+osascript -e 'tell application "System Events" to keystroke "y"' >/dev/null
+sleep 0.4
+check "an app write keeps the caret inside the text" "[ \"\$(field_value 2)\" = AXYB ]"
+type_into 3 pw1
+osascript -e "$form to click button \"Take\" of window \"form\"" >/dev/null
+sleep 0.4
+check "take returns the password and clears the field" "texts | grep -q 'took: Some(3), empty: true'"
 kill "$pid"
 
 rm -f "$log"

@@ -14,4 +14,9 @@ mod widget;
 pub use mailbox::Handle;
 pub use pass::Ui;
 pub use runner::{App, run};
-pub use widget::{ButtonResponse, Length, Orientation, Response, WindowResponse};
+pub use widget::{
+    ButtonResponse, Length, Orientation, Response, SecureTextFieldHandle, SecureTextFieldResponse,
+    TextFieldResponse, WindowResponse,
+};
+/// The type [`Ui::take_password`] returns.
+pub use zeroize::Zeroizing;

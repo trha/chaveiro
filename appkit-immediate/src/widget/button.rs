@@ -63,7 +63,7 @@ pub struct ButtonResponse<'u>(Response<'u>);
 impl ButtonResponse<'_> {
     /// Whether the button was clicked since the last pass.
     pub fn clicked(&self) -> bool {
-        self.0.ui.events.happened(self.0.node, EventKind::Click)
+        self.0.ui.events.happened(self.0.node, EventKind::Action)
     }
 }
 

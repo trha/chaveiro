@@ -6,9 +6,10 @@ use objc2::{
     runtime::AnyObject,
 };
 use objc2_app_kit::{
-    NSApplication, NSApplicationDelegate, NSApplicationTerminateReply, NSWindowDelegate,
+    NSApplication, NSApplicationDelegate, NSApplicationTerminateReply,
+    NSControlTextEditingDelegate, NSTextFieldDelegate, NSWindowDelegate,
 };
-use objc2_foundation::{NSObject, NSObjectProtocol};
+use objc2_foundation::{NSNotification, NSObject, NSObjectProtocol};
 use std::{
     cell::RefCell,
     collections::{HashMap, hash_map::Entry},
@@ -95,7 +96,13 @@ impl Events {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum EventKind {
-    Click,
+    /// A control sent its action: a button click, a pop-up pick, Return in
+    /// a text field.
+    Action,
+    /// The user changed a text field's text.
+    TextDidChange,
+    /// A text field lost the keyboard focus after editing.
+    DidEndEditing,
     ShouldClose,
     ShouldTerminate,
 }
@@ -114,11 +121,12 @@ define_class!(
     pub(crate) struct Target;
 
     impl Target {
-        /// The action selector for controls.
+        /// The action selector for controls. A text field sends it on
+        /// Return.
         #[unsafe(method(fire:))]
         fn fire(&self, sender: Option<&AnyObject>) {
             if let Some(sender) = sender {
-                self.push(sender, EventKind::Click);
+                self.push(sender, EventKind::Action);
             }
         }
     }
@@ -134,6 +142,24 @@ define_class!(
             false
         }
     }
+
+    unsafe impl NSControlTextEditingDelegate for Target {
+        #[unsafe(method(controlTextDidChange:))]
+        fn control_text_did_change(&self, notification: &NSNotification) {
+            if let Some(field) = notification.object() {
+                self.push(&field, EventKind::TextDidChange);
+            }
+        }
+
+        #[unsafe(method(controlTextDidEndEditing:))]
+        fn control_text_did_end_editing(&self, notification: &NSNotification) {
+            if let Some(field) = notification.object() {
+                self.push(&field, EventKind::DidEndEditing);
+            }
+        }
+    }
+
+    unsafe impl NSTextFieldDelegate for Target {}
 
     unsafe impl NSApplicationDelegate for Target {
         /// Reports the request and keeps running: the app quits by declaring

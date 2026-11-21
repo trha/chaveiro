@@ -6,18 +6,24 @@
 
 use crate::{pass::Ui, tree::NodeId};
 use objc2::rc::Retained;
-use objc2_app_kit::{NSButton, NSLayoutConstraint, NSStackView, NSTextField, NSView};
+use objc2_app_kit::{
+    NSButton, NSLayoutConstraint, NSSecureTextField, NSStackView, NSTextField, NSView,
+};
 
 mod button;
 mod grid;
 mod label;
+mod secure_text_field;
 mod stack_view;
+mod text_field;
 mod window;
 
 pub use button::ButtonResponse;
 pub use grid::Length;
 pub(crate) use grid::{Rule as GridRule, constraints as grid_constraints, rules as grid_rules};
+pub use secure_text_field::{SecureTextFieldHandle, SecureTextFieldResponse};
 pub use stack_view::Orientation;
+pub use text_field::TextFieldResponse;
 pub use window::WindowResponse;
 
 /// Access to the view a widget declared, for what the widget does not cover.
@@ -78,5 +84,15 @@ pub(crate) enum Control {
     Button {
         button: Retained<NSButton>,
         label: String,
+    },
+    TextField {
+        field: Retained<NSTextField>,
+        /// The field's text as last written or read back.
+        text: String,
+        placeholder: String,
+    },
+    SecureTextField {
+        field: Retained<NSSecureTextField>,
+        placeholder: String,
     },
 }
