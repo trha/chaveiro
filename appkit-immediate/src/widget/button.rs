@@ -19,7 +19,7 @@ impl Ui {
             let button = unsafe {
                 NSButton::buttonWithTitle_target_action(&NSString::new(), None, None, mtm)
             };
-            ControlNode::new(
+            ControlNode::payload(
                 Retained::clone(&button).into_super().into_super(),
                 Control::Button {
                     button,

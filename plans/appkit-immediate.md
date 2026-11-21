@@ -483,10 +483,18 @@ The main agent owns every step, one at a time, because all steps edit
 ## Steps
 
 1. Commit the POC and this plan. Rename the POC's `stack` to
-   `stack_view` and `close_requested` to `should_close`.
+   `stack_view` and `close_requested` to `should_close`. Done (2026-11-21):
+   commit `99b93c4` on branch `appkit-immediate`.
 2. Runner: `run(make)`, autorelease pool around `turn` and `make` (recheck with
    `OBJC_DEBUG_MISSING_POOLS=YES`: no missing-pool lines), panic boundary with `close_all`, main menu, app
-   delegate, `should_terminate`. Runs tests 1, 4 (quit and close) and 6.
+   delegate, `should_terminate`. Runs tests 1, 4 (quit and close) and 6. Done (2026-11-21):
+   `tools/smoke.sh` passes all 12 checks, and the 14 unit tests pass. One
+   pool around all setup before `NSApplication::run` was needed, beyond
+   the pools around `make` and each pass: menu and activation setup leaked
+   936 objects without it. The 143 missing-pool lines left come from two
+   AppKit-owned threads, so the script checks only the main thread, whose
+   id the example prints. The panic check runs on pass 2, because the
+   smoke app has no third pass without input.
 3. `Response::invalidate`, `stale` and `must_write`; `translatesAutoresizing…`
    off; window sized to fit. Runs test 4.
 4. Grid: `rules` with its property tests, the `Control::Grid` arm in

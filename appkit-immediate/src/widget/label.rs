@@ -15,7 +15,7 @@ impl Ui {
             .expect("formatting into a String cannot fail");
         let (node, _) = self.visit(id, ChildKind::Visual, |mtm| {
             let field = NSTextField::labelWithString(&NSString::new(), mtm);
-            ControlNode::new(
+            ControlNode::payload(
                 Retained::clone(&field).into_super().into_super(),
                 Control::Label {
                     field,

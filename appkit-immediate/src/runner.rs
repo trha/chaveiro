@@ -5,13 +5,20 @@ use crate::{
     pass::Ui,
 };
 use dispatch2::DispatchQueue;
-use objc2::MainThreadMarker;
+use objc2::{
+    MainThreadMarker, MainThreadOnly,
+    rc::{Retained, autoreleasepool},
+    sel,
+};
 use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy, NSEvent, NSEventModifierFlags, NSEventType,
+    NSMenu, NSMenuItem,
 };
-use objc2_foundation::NSPoint;
+use objc2_foundation::{NSPoint, NSString};
 use std::{
+    any::Any,
     cell::{Cell, RefCell},
+    panic::{AssertUnwindSafe, catch_unwind, resume_unwind},
     rc::{Rc, Weak},
     sync::Arc,
 };
@@ -30,45 +37,72 @@ pub trait App: 'static {
     fn view(&mut self, ui: &mut Ui);
 }
 
-/// Starts AppKit on this thread, runs `start`, then runs passes until a pass
-/// declares no window.
+/// Starts AppKit on this thread, builds the app with `make`, then runs
+/// passes until a pass declares no window. `make` runs once AppKit is up, so
+/// it may create AppKit objects; a message it sends waits for the first
+/// pass.
+///
+/// Installs a main menu with Quit, the Edit commands and the Window
+/// commands. A panic in [`App::update`] or [`App::view`] closes every window,
+/// and `run` then resumes it.
 ///
 /// Panics when called off the main thread.
-pub fn run<A: App>(mut app: A, start: impl FnOnce(&mut A, Handle<A::Message>)) {
+pub fn run<A: App>(make: impl FnOnce(Handle<A::Message>) -> A) {
     let mtm = MainThreadMarker::new().expect("run is called on the main thread");
-    let application = NSApplication::sharedApplication(mtm);
-    application.setActivationPolicy(NSApplicationActivationPolicy::Regular);
-    let mailbox = Arc::new(Mailbox::new(|| {
-        // The block captures nothing, so it can be built on any thread; it
-        // finds the runner through the main thread's local.
-        DispatchQueue::main().exec_async(turn_current);
-        true
-    }));
-    start(&mut app, Handle::new(Arc::clone(&mailbox)));
-    let runner = Rc::new_cyclic(|weak: &Weak<Runner<A>>| {
-        let weak = weak.clone();
-        let wake = Rc::new(move || {
-            if let Some(runner) = weak.upgrade() {
-                runner.schedule();
+    // Until `NSApplication::run` starts, no run-loop pool exists, and AppKit
+    // autoreleases objects in setup, in `make` and in the first pass. Each
+    // later pass has its own pool, inside the run loop's.
+    let (runner, open) = autoreleasepool(|_| {
+        let application = NSApplication::sharedApplication(mtm);
+        application.setActivationPolicy(NSApplicationActivationPolicy::Regular);
+        application.setMainMenu(Some(&main_menu(mtm)));
+        let mailbox = Arc::new(Mailbox::new(|| {
+            // The block captures nothing, so it can be built on any thread;
+            // it finds the runner through the main thread's local.
+            DispatchQueue::main().exec_async(turn_current);
+            true
+        }));
+        let app = make(Handle::new(Arc::clone(&mailbox)));
+        let runner = Rc::new_cyclic(|weak: &Weak<Runner<A>>| {
+            let weak = weak.clone();
+            let wake = Rc::new(move || {
+                if let Some(runner) = weak.upgrade() {
+                    runner.schedule();
+                }
+            });
+            Runner {
+                ui: RefCell::new(Ui::new(mtm, wake)),
+                app: RefCell::new(app),
+                mailbox,
+                messages: RefCell::new(Vec::new()),
+                scheduled: Cell::new(false),
+                running: Cell::new(false),
+                panic: RefCell::new(None),
             }
         });
-        Runner {
-            ui: RefCell::new(Ui::new(mtm, wake)),
-            app: RefCell::new(app),
-            mailbox,
-            messages: RefCell::new(Vec::new()),
-            scheduled: Cell::new(false),
-            running: Cell::new(false),
+        runner.ui.borrow().adopt_application(&application);
+        CURRENT.set(Some(Rc::clone(&runner) as Rc<dyn Turn>));
+        let open = runner.turn();
+        if open {
+            runner.running.set(true);
+            #[expect(deprecated, reason = "the replacement needs macOS 14")]
+            application.activateIgnoringOtherApps(true);
         }
+        (runner, open)
     });
-    CURRENT.set(Some(Rc::clone(&runner) as Rc<dyn Turn>));
-    if runner.turn() {
-        runner.running.set(true);
-        #[expect(deprecated, reason = "the replacement needs macOS 14")]
-        application.activateIgnoringOtherApps(true);
-        application.run();
+    if open {
+        NSApplication::sharedApplication(mtm).run();
     }
-    CURRENT.set(None);
+    let panic = autoreleasepool(|_| {
+        CURRENT.set(None);
+        NSApplication::sharedApplication(mtm).setDelegate(None);
+        let panic = runner.panic.take();
+        drop(runner);
+        panic
+    });
+    if let Some(payload) = panic {
+        resume_unwind(payload);
+    }
 }
 
 thread_local! {
@@ -99,6 +133,8 @@ struct Runner<A: App> {
     scheduled: Cell<bool>,
     /// Whether `NSApplication::run` was entered and must be stopped.
     running: Cell<bool>,
+    /// The panic of a failed pass, which [`run`] resumes.
+    panic: RefCell<Option<Box<dyn Any + Send>>>,
 }
 
 impl<A: App> Runner<A> {
@@ -108,11 +144,10 @@ impl<A: App> Runner<A> {
             DispatchQueue::main().exec_async(turn_current);
         }
     }
-}
 
-impl<A: App> Turn for Runner<A> {
-    fn turn(&self) -> bool {
-        self.scheduled.set(false);
+    /// Applies messages and runs one pass. Returns whether events arrived
+    /// and how many windows are open.
+    fn pass(&self) -> (bool, usize) {
         let mut app = self.app.borrow_mut();
         let mut messages = self.messages.borrow_mut();
         self.mailbox.drain(&mut messages);
@@ -122,21 +157,92 @@ impl<A: App> Turn for Runner<A> {
         let mut ui = self.ui.borrow_mut();
         let consumed = ui.begin();
         app.view(&mut ui);
-        let windows = ui.end();
-        if windows > 0 {
-            // A widget declared before the one that read an event shows the
-            // old state, so one more pass catches it up.
-            if consumed {
-                self.schedule();
+        (consumed, ui.end())
+    }
+}
+
+impl<A: App> Turn for Runner<A> {
+    fn turn(&self) -> bool {
+        self.scheduled.set(false);
+        if self.panic.borrow().is_some() {
+            return false;
+        }
+        // A panic must not unwind into libdispatch or AppKit frames, so it
+        // stops here and `run` resumes it.
+        let outcome = autoreleasepool(|_| catch_unwind(AssertUnwindSafe(|| self.pass())));
+        let windows = match outcome {
+            Ok((consumed, windows)) => {
+                // A widget declared before the one that read an event shows
+                // the old state, so one more pass catches it up.
+                if consumed && windows > 0 {
+                    self.schedule();
+                }
+                windows
             }
+            Err(payload) => {
+                *self.panic.borrow_mut() = Some(payload);
+                autoreleasepool(|_| self.ui.borrow_mut().close_all());
+                0
+            }
+        };
+        if windows > 0 {
             return true;
         }
         self.mailbox.close();
         if self.running.replace(false) {
-            stop(ui.mtm);
+            stop(self.ui.borrow().mtm);
         }
         false
     }
+}
+
+/// The app menu with Quit, the Edit menu and the Window menu. Edit and Window
+/// items have no target, so the responder chain routes them to the key
+/// window and its field editor.
+fn main_menu(mtm: MainThreadMarker) -> Retained<NSMenu> {
+    let item = |title: &str, action, key: &str| unsafe {
+        NSMenuItem::initWithTitle_action_keyEquivalent(
+            NSMenuItem::alloc(mtm),
+            &NSString::from_str(title),
+            Some(action),
+            &NSString::from_str(key),
+        )
+    };
+    let submenu = |title: &str, items: &[Retained<NSMenuItem>]| {
+        let menu = NSMenu::initWithTitle(NSMenu::alloc(mtm), &NSString::from_str(title));
+        for entry in items {
+            menu.addItem(entry);
+        }
+        let holder = NSMenuItem::new(mtm);
+        holder.setSubmenu(Some(&menu));
+        (holder, menu)
+    };
+    let bar = NSMenu::new(mtm);
+    let (app_holder, _) = submenu("App", &[item("Quit", sel!(terminate:), "q")]);
+    let (edit_holder, _) = submenu(
+        "Edit",
+        &[
+            item("Undo", sel!(undo:), "z"),
+            item("Redo", sel!(redo:), "Z"),
+            NSMenuItem::separatorItem(mtm),
+            item("Cut", sel!(cut:), "x"),
+            item("Copy", sel!(copy:), "c"),
+            item("Paste", sel!(paste:), "v"),
+            item("Select All", sel!(selectAll:), "a"),
+        ],
+    );
+    let (window_holder, window_menu) = submenu(
+        "Window",
+        &[
+            item("Minimize", sel!(performMiniaturize:), "m"),
+            item("Close", sel!(performClose:), "w"),
+        ],
+    );
+    bar.addItem(&app_holder);
+    bar.addItem(&edit_holder);
+    bar.addItem(&window_holder);
+    NSApplication::sharedApplication(mtm).setWindowsMenu(Some(&window_menu));
+    bar
 }
 
 /// Makes `NSApplication::run` return. `stop` takes effect after the next

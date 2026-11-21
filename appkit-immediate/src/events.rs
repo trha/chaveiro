@@ -5,7 +5,9 @@ use objc2::{
     DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, rc::Retained,
     runtime::AnyObject,
 };
-use objc2_app_kit::NSWindowDelegate;
+use objc2_app_kit::{
+    NSApplication, NSApplicationDelegate, NSApplicationTerminateReply, NSWindowDelegate,
+};
 use objc2_foundation::{NSObject, NSObjectProtocol};
 use std::{
     cell::RefCell,
@@ -94,7 +96,8 @@ impl Events {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum EventKind {
     Click,
-    CloseRequested,
+    ShouldClose,
+    ShouldTerminate,
 }
 
 pub(crate) struct TargetIvars {
@@ -127,8 +130,21 @@ define_class!(
         /// no longer declaring it.
         #[unsafe(method(windowShouldClose:))]
         fn window_should_close(&self, sender: &AnyObject) -> bool {
-            self.push(sender, EventKind::CloseRequested);
+            self.push(sender, EventKind::ShouldClose);
             false
+        }
+    }
+
+    unsafe impl NSApplicationDelegate for Target {
+        /// Reports the request and keeps running: the app quits by declaring
+        /// no window.
+        #[unsafe(method(applicationShouldTerminate:))]
+        fn application_should_terminate(
+            &self,
+            sender: &NSApplication,
+        ) -> NSApplicationTerminateReply {
+            self.push(sender, EventKind::ShouldTerminate);
+            NSApplicationTerminateReply::TerminateCancel
         }
     }
 );

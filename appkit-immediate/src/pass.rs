@@ -3,12 +3,12 @@
 
 use crate::{
     children::{Edit, edits},
-    events::Events,
+    events::{EventKind, Events},
     tree::{Key, NodeId, Tree, Visit},
     widget::Control,
 };
-use objc2::{MainThreadMarker, rc::Retained};
-use objc2_app_kit::{NSView, NSWindow};
+use objc2::{MainThreadMarker, rc::Retained, runtime::ProtocolObject};
+use objc2_app_kit::{NSApplication, NSView, NSWindow};
 use std::{hash::Hash, rc::Rc};
 
 /// Builds the UI. The app gets it in [`App::view`](crate::App::view).
@@ -49,6 +49,37 @@ impl Ui {
     pub(crate) fn end(&mut self) -> usize {
         self.close();
         self.tree.children(self.tree.root()).len()
+    }
+
+    /// Closes every window, as a pass that declares none would. Used after a
+    /// pass panicked, which may have left containers open: closing them
+    /// first attaches every node they visited to its parent, so no node is
+    /// left live but unreachable.
+    pub(crate) fn close_all(&mut self) {
+        while !self.frames.is_empty() {
+            self.close();
+        }
+        self.tree.begin_pass();
+        let root = self.tree.root();
+        let mut nothing = self.tree.take_list();
+        let events = &self.events;
+        self.tree
+            .close(root, &mut nothing, |payload| release(events, payload));
+        self.tree.recycle_list(nothing);
+    }
+
+    /// Whether the user asked to quit (Cmd+Q, the Dock, logout) since the
+    /// last pass. The app quits by declaring no window.
+    pub fn should_terminate(&self) -> bool {
+        self.events
+            .happened(self.tree.root(), EventKind::ShouldTerminate)
+    }
+
+    /// Routes the application's delegate calls to the root node and makes
+    /// the shared target the application's delegate.
+    pub(crate) fn adopt_application(&self, application: &NSApplication) {
+        self.events.register(application, self.tree.root());
+        application.setDelegate(Some(ProtocolObject::from_ref(self.events.target())));
     }
 
     /// Opens `node` as the container for the widgets declared next.
@@ -190,7 +221,8 @@ pub(crate) struct ControlNode {
 }
 
 impl ControlNode {
-    pub(crate) fn new(view: Retained<NSView>, control: Control) -> Payload {
+    /// A control node, wrapped as the payload the tree stores.
+    pub(crate) fn payload(view: Retained<NSView>, control: Control) -> Payload {
         Payload::Control(ControlNode {
             view,
             control,

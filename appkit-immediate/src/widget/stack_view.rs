@@ -22,7 +22,7 @@ impl Ui {
                 bottom: 12.0,
                 right: 12.0,
             });
-            ControlNode::new(
+            ControlNode::payload(
                 Retained::clone(&stack).into_super(),
                 Control::Stack {
                     stack,

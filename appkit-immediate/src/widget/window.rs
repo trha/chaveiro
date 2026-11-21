@@ -63,7 +63,7 @@ impl Ui {
             window.makeKeyAndOrderFront(None);
         }
         WindowResponse {
-            should_close: self.events.happened(node, EventKind::CloseRequested),
+            should_close: self.events.happened(node, EventKind::ShouldClose),
         }
     }
 
