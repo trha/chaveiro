@@ -5,21 +5,19 @@
 use winui_immediate::{App, Handle, Orientation, Ui, run};
 
 fn main() -> windows_core::Result<()> {
-    run(
-        Smoke {
+    run(|handle: Handle<String>| {
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(500));
+            // The window may already be gone, which needs no message.
+            let _ = handle.send(String::from("hello from a background thread"));
+        });
+        Ok(Smoke {
             clicks: 0,
             second_open: true,
             main_open: true,
             status: String::from("waiting for the background thread"),
-        },
-        |_, handle: Handle<String>| {
-            std::thread::spawn(move || {
-                std::thread::sleep(std::time::Duration::from_millis(500));
-                // The window may already be gone, which needs no message.
-                let _ = handle.send(String::from("hello from a background thread"));
-            });
-        },
-    )?;
+        })
+    })?;
     eprintln!("run returned");
     Ok(())
 }

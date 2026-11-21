@@ -106,6 +106,27 @@ impl Events {
             EventKind::CompositionEnded => source
                 .cast::<ITextBox>()?
                 .add_text_composition_ended(&self.delegates.composition_ended)?,
+            EventKind::Enter => source
+                .cast::<IUIElement>()?
+                .add_key_down(&self.delegates.enter)?,
+            EventKind::DropDownClosed => source
+                .cast::<IComboBox>()?
+                .add_drop_down_closed(&self.delegates.drop_down_closed)?,
+            EventKind::TextSubmitted => source
+                .cast::<IComboBox>()?
+                .add_text_submitted(&self.delegates.text_submitted)?,
+            EventKind::LostFocus => source
+                .cast::<IUIElement>()?
+                .add_lost_focus(&self.delegates.lost_focus)?,
+            EventKind::PasswordChanged => source
+                .cast::<IPasswordBox>()?
+                .add_password_changed(&self.delegates.password_changed)?,
+            EventKind::SizeChanged => source
+                .cast::<IFrameworkElement>()?
+                .add_size_changed(&self.delegates.size_changed)?,
+            EventKind::SelectionChanged => source
+                .cast::<ISelector>()?
+                .add_selection_changed(&self.delegates.selection_changed)?,
         };
         let identity = identity(source)?;
         tracing::trace!(?kind, source = identity, "subscribe");
@@ -133,6 +154,16 @@ pub(crate) enum EventKind {
     TextChanged,
     CompositionStarted,
     CompositionEnded,
+    /// The Enter key went down; other keys raise nothing.
+    Enter,
+    SelectionChanged,
+    SizeChanged,
+    LostFocus,
+    PasswordChanged,
+    /// An editable combo box took typed text, on Enter or on leaving it.
+    TextSubmitted,
+    /// A combo box's list closed.
+    DropDownClosed,
 }
 
 /// Event kinds a node is subscribed to, one bit per [`EventKind`].
@@ -173,6 +204,13 @@ struct Delegates {
     text_changed: TextChangedEventHandler,
     composition_started: TypedEventHandler<TextBox, TextCompositionStartedEventArgs>,
     composition_ended: TypedEventHandler<TextBox, TextCompositionEndedEventArgs>,
+    enter: KeyEventHandler,
+    selection_changed: SelectionChangedEventHandler,
+    size_changed: SizeChangedEventHandler,
+    lost_focus: RoutedEventHandler,
+    password_changed: RoutedEventHandler,
+    text_submitted: TypedEventHandler<ComboBox, ComboBoxTextSubmittedEventArgs>,
+    drop_down_closed: EventHandler<IInspectable>,
 }
 
 impl Delegates {
@@ -228,12 +266,84 @@ impl Delegates {
                 )
             })
         };
+        let enter = {
+            let inbox = Rc::clone(inbox);
+            KeyEventHandler::shared(
+                move |sender: Ref<'_, IInspectable>, arguments: Ref<'_, KeyRoutedEventArgs>| {
+                    let Ok(arguments) = arguments.ok() else {
+                        return;
+                    };
+                    if arguments.Key().ok() != Some(VirtualKey::Enter) {
+                        return;
+                    }
+                    // Marked handled so a parent does not act on it too. If
+                    // the write fails the key only bubbles on.
+                    let _ = arguments.SetHandled(true);
+                    inbox.push(canonical(sender.ok().ok()).as_ref(), EventKind::Enter);
+                },
+            )
+        };
+        let selection_changed = {
+            let inbox = Rc::clone(inbox);
+            SelectionChangedEventHandler::shared(move |sender: Ref<'_, IInspectable>, _| {
+                inbox.push(
+                    canonical(sender.ok().ok()).as_ref(),
+                    EventKind::SelectionChanged,
+                )
+            })
+        };
+        let size_changed = {
+            let inbox = Rc::clone(inbox);
+            SizeChangedEventHandler::shared(move |sender: Ref<'_, IInspectable>, _| {
+                inbox.push(canonical(sender.ok().ok()).as_ref(), EventKind::SizeChanged)
+            })
+        };
+        let lost_focus = {
+            let inbox = Rc::clone(inbox);
+            RoutedEventHandler::shared(move |sender: Ref<'_, IInspectable>, _| {
+                inbox.push(canonical(sender.ok().ok()).as_ref(), EventKind::LostFocus)
+            })
+        };
+        let password_changed = {
+            let inbox = Rc::clone(inbox);
+            RoutedEventHandler::shared(move |sender: Ref<'_, IInspectable>, _| {
+                inbox.push(
+                    canonical(sender.ok().ok()).as_ref(),
+                    EventKind::PasswordChanged,
+                )
+            })
+        };
+        let text_submitted = {
+            let inbox = Rc::clone(inbox);
+            TypedEventHandler::shared(move |sender: Ref<'_, ComboBox>, _| {
+                inbox.push(
+                    canonical(sender.ok().ok()).as_ref(),
+                    EventKind::TextSubmitted,
+                )
+            })
+        };
+        let drop_down_closed = {
+            let inbox = Rc::clone(inbox);
+            EventHandler::<IInspectable>::shared(move |sender: Ref<'_, IInspectable>, _| {
+                inbox.push(
+                    canonical(sender.ok().ok()).as_ref(),
+                    EventKind::DropDownClosed,
+                )
+            })
+        };
         Delegates {
             click,
             close_requested,
             text_changed,
             composition_started,
             composition_ended,
+            enter,
+            selection_changed,
+            size_changed,
+            lost_focus,
+            password_changed,
+            text_submitted,
+            drop_down_closed,
         }
     }
 }

@@ -1,6 +1,9 @@
-use super::{Control, Response, must_write};
+use super::{Control, Response, must_write, resource};
 use crate::{
-    bindings::{Panel, StackPanel},
+    bindings::{
+        Brush, CornerRadius, FrameworkElement, HorizontalAlignment, IPanel, Panel, StackPanel,
+        Thickness, VerticalAlignment,
+    },
     pass::{ChildKind, ControlNode, Ui},
 };
 use std::hash::Hash;
@@ -27,6 +30,7 @@ impl Ui {
                     children,
                     orientation: None,
                     spacing: f64::NAN,
+                    width: f64::NAN,
                 },
             ))
         })?;
@@ -56,6 +60,64 @@ impl Ui {
         body(self)?;
         self.close()?;
         Ok(Response { ui: self, node })
+    }
+}
+
+impl Ui {
+    /// A Fluent card centered in its container, `width` wide: a vertical
+    /// stack of the controls `body` declares, 8px apart, with the card fill
+    /// and stroke, 8px corners and 24px padding.
+    ///
+    /// The fill and stroke are the theme's at creation, so a card made
+    /// before a theme change keeps the old colors.
+    pub fn card(
+        &mut self,
+        id: impl Hash,
+        width: f64,
+        body: impl FnOnce(&mut Ui) -> Result<()>,
+    ) -> Result<Response<'_>> {
+        let node = self.stack(id, Orientation::Vertical, 8.0, body)?.node;
+        let control = self.control_mut(node);
+        let Control::Stack {
+            panel,
+            width: written,
+            ..
+        } = &mut control.control
+        else {
+            unreachable!("card keys hold stacks")
+        };
+        if written.is_nan() {
+            // The first pass: a stack becomes a card once.
+            panel
+                .cast::<IPanel>()?
+                .SetBackground(&resource::<Brush>("CardBackgroundFillColorDefaultBrush")?)?;
+            panel.SetBorderBrush(&resource::<Brush>("CardStrokeColorDefaultBrush")?)?;
+            panel.SetBorderThickness(uniform(1.0))?;
+            panel.SetCornerRadius(CornerRadius {
+                top_left: 8.0,
+                top_right: 8.0,
+                bottom_right: 8.0,
+                bottom_left: 8.0,
+            })?;
+            panel.SetPadding(uniform(24.0))?;
+            let frame = panel.cast::<FrameworkElement>()?;
+            frame.SetHorizontalAlignment(HorizontalAlignment::Center)?;
+            frame.SetVerticalAlignment(VerticalAlignment::Center)?;
+        }
+        if *written != width {
+            panel.cast::<FrameworkElement>()?.SetWidth(width)?;
+            *written = width;
+        }
+        Ok(Response { ui: self, node })
+    }
+}
+
+fn uniform(length: f64) -> Thickness {
+    Thickness {
+        left: length,
+        top: length,
+        right: length,
+        bottom: length,
     }
 }
 

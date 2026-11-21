@@ -54,7 +54,19 @@ impl Ui {
     /// number of open windows.
     pub(crate) fn end(&mut self) -> Result<usize> {
         self.close()?;
-        Ok(self.tree.children(self.tree.root()).len())
+        let root = self.tree.root();
+        for index in 0..self.tree.children(root).len() {
+            let node = self.tree.children(root)[index];
+            if let Payload::Window(window) = &mut self.tree.node_mut(node).payload {
+                // A window shows after its first pass, or after its first fit
+                // when it fits its content, so no resize is seen.
+                if window.cloaked && !(window.fit && !window.fitted_once) {
+                    crate::widget::cloak(&window.window, false)?;
+                    window.cloaked = false;
+                }
+            }
+        }
+        Ok(self.tree.children(root).len())
     }
 
     /// Closes every window, as a pass that declares none would. Used after a
@@ -304,6 +316,22 @@ pub(crate) struct WindowNode {
     /// The title last written.
     pub(crate) title: String,
     pub(crate) activated: bool,
+    /// The Mica backdrop is set.
+    pub(crate) mica: bool,
+    /// The content draws the title bar, and only the close button is left.
+    pub(crate) compact: bool,
+    /// The client size last written by `fit_to_content`, in pixels.
+    pub(crate) fitted: (i32, i32),
+    /// The content node whose alignment `fit_to_content` last set.
+    pub(crate) fitted_content: Option<NodeId>,
+    /// The app called `fit_to_content`, so the window waits for its first
+    /// fit before it shows.
+    pub(crate) fit: bool,
+    pub(crate) fitted_once: bool,
+    /// DWM hides the window until its first pass, or first fit, is done.
+    pub(crate) cloaked: bool,
+    /// Resizes made by `fit_to_content`.
+    pub(crate) fit_tries: u32,
     pub(crate) subscribed: EventSet,
 }
 
@@ -320,6 +348,26 @@ pub(crate) struct ControlNode {
     pub(crate) stale: bool,
     /// The `Grid.Row` last written; -1 until the control is placed in a grid.
     pub(crate) grid_row: i32,
+    /// `Control.IsEnabled` as last written; [`None`] until first written.
+    pub(crate) enabled: Option<bool>,
+    /// The header text last written, without the required mark; empty
+    /// until first written.
+    pub(crate) header: String,
+    /// The field is marked required: its header ends in ` *`.
+    pub(crate) required: bool,
+    /// The access key last written; empty until first written.
+    pub(crate) access_key: String,
+    /// The style key last written; empty until first written.
+    pub(crate) style: String,
+    /// The horizontal alignment last written.
+    pub(crate) align: Option<crate::widget::Align>,
+    /// The width last written; `NaN` until first written.
+    pub(crate) width: f64,
+    /// The padding last written.
+    pub(crate) padding: Option<[f64; 4]>,
+    /// The line under a field for its error, made by the first
+    /// [`error`](crate::Response) call, and the message it shows.
+    pub(crate) error: Option<crate::widget::ErrorLine>,
 }
 
 impl ControlNode {
@@ -331,6 +379,15 @@ impl ControlNode {
             subscribed: EventSet::default(),
             stale: false,
             grid_row: -1,
+            enabled: None,
+            header: String::new(),
+            required: false,
+            access_key: String::new(),
+            style: String::new(),
+            align: None,
+            width: f64::NAN,
+            padding: None,
+            error: None,
         })
     }
 }

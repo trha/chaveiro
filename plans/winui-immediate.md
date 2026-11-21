@@ -940,6 +940,34 @@ Acceptance: the vault plan names no Reactor API in its shell sections.
 
 Handoff: diff of both files.
 
+### WP-09: Fluent widgets for the Chaveiro login screen
+
+Status: done (2026-11-21)  
+Owner: main agent  
+Depends on: WP-04
+
+Result: `Ui::combo_box`, `Ui::info_bar` with `Severity`, and `Ui::card`.
+`Response::enabled`, `style`, `align`, `width` and `padding`. `header` on
+text boxes, password boxes and combo boxes. `enter_pressed` on text and
+password boxes. `accent` and `busy` (a 16px ring before the label) on
+buttons. `mica`, `compact` (content in the title bar, close button only,
+fixed size) and `fit_to_content` on windows. Every window starts cloaked and
+is uncloaked at the end of its first pass, or after its first fit settles
+(at most 3 resizes), so the resize is never seen. Enter, SelectionChanged
+and SizeChanged are new shared delegates. Each property is written only when
+it changes, and `invalidate` resets the new records.
+
+Acceptance: `tests/ui/widgets.ps1` "combo box, Enter, info bar" checks a
+pick, an app write after a pick, three Enters, a disabled combo box and the
+info bar. Every earlier script still passes.
+
+Later on 2026-11-21: `run(make)` replaces `run(app, start)`. `make` gets the
+handle on the UI thread once WinUI is up and returns `Result<App>`, so an app
+holds its runner directly and a failed setup comes back from `run`.
+
+Gaps: `card` looks up its theme brushes once, so a theme change does not
+recolor it. `accent` and `busy` are not rewritten by `invalidate`.
+
 Waves: WP-00, then WP-01, then WP-02, then WP-03, then WP-04 and WP-05 in parallel
 (disjoint files), then WP-06, WP-07, WP-08.
 

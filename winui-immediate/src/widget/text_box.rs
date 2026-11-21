@@ -4,7 +4,10 @@ use crate::{
     events::EventKind,
     pass::{ChildKind, ControlNode, Ui},
 };
-use std::{hash::Hash, ops::Deref};
+use std::{
+    hash::Hash,
+    ops::{Deref, DerefMut},
+};
 use windows_core::{Interface, Result};
 
 impl Ui {
@@ -106,6 +109,43 @@ impl TextBoxResponse<'_> {
     pub fn changed(&self) -> bool {
         self.changed
     }
+
+    /// Writes the text shown above the box.
+    pub fn header(&mut self, text: &str) -> Result<&mut Self> {
+        self.response.set_header(text)?;
+        Ok(self)
+    }
+
+    /// Marks the field as required: ` *` after the header, and screen
+    /// readers say so.
+    pub fn required(&mut self, on: bool) -> Result<&mut Self> {
+        self.response.set_required(on)?;
+        Ok(self)
+    }
+    /// Shows `message` on the line under the box, or keeps the line empty;
+    /// see [`Response`]'s error line. The first call reserves the line.
+    pub fn error(&mut self, message: Option<&str>) -> Result<&mut Self> {
+        self.response.set_error(message)?;
+        Ok(self)
+    }
+
+    /// Whether the user pressed Enter in the box since the last pass. The
+    /// first call subscribes the box.
+    pub fn enter_pressed(&mut self) -> Result<bool> {
+        enter_pressed(&mut self.response)
+    }
+}
+
+/// Subscribes the control of `response` to Enter and reads it.
+pub(crate) fn enter_pressed(response: &mut Response<'_>) -> Result<bool> {
+    let Response { ui, node } = response;
+    let control = ui.control_mut(*node);
+    let element = control.element.clone();
+    let mut subscribed = control.subscribed;
+    ui.events
+        .subscribe(*node, &mut subscribed, &element, EventKind::Enter)?;
+    ui.control_mut(*node).subscribed = subscribed;
+    Ok(ui.events.happened(*node, EventKind::Enter))
 }
 
 impl<'u> Deref for TextBoxResponse<'u> {
@@ -113,5 +153,11 @@ impl<'u> Deref for TextBoxResponse<'u> {
 
     fn deref(&self) -> &Response<'u> {
         &self.response
+    }
+}
+
+impl<'u> DerefMut for TextBoxResponse<'u> {
+    fn deref_mut(&mut self) -> &mut Response<'u> {
+        &mut self.response
     }
 }

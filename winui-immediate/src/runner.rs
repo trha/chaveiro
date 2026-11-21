@@ -29,10 +29,12 @@ pub trait App: 'static {
     fn view(&mut self, ui: &mut Ui) -> Result<()>;
 }
 
-/// Starts WinUI on this thread, runs `start`, then runs passes until a pass
-/// declares no window. Returns the first error a pass returned, after closing
-/// every window.
-pub fn run<A: App>(app: A, start: impl 'static + FnOnce(&mut A, Handle<A::Message>)) -> Result<()> {
+/// Starts WinUI on this thread, builds the app with `make`, then runs passes
+/// until a pass declares no window. `make` runs on the UI thread once WinUI
+/// is up, so it may create WinRT objects and use the dispatcher. Returns the
+/// error of `make`, or the first error a pass returned, after closing every
+/// window.
+pub fn run<A: App>(make: impl 'static + FnOnce(Handle<A::Message>) -> Result<A>) -> Result<()> {
     let failure = Rc::new(RefCell::new(None));
     let launch_failure = Rc::clone(&failure);
     startup::start(move || {
@@ -52,6 +54,9 @@ pub fn run<A: App>(app: A, start: impl 'static + FnOnce(&mut A, Handle<A::Messag
                 matches!(dispatcher.TryEnqueue(&handler), Ok(true))
             }
         }));
+        // A message sent from `make` waits in the mailbox: its wake finds
+        // the runner through the thread local, which is set below.
+        let app = make(Handle::new(Arc::clone(&mailbox)))?;
         let runner = Rc::new_cyclic(|weak: &Weak<Runner<A>>| {
             let wake = {
                 let weak = weak.clone();
@@ -81,10 +86,6 @@ pub fn run<A: App>(app: A, start: impl 'static + FnOnce(&mut A, Handle<A::Messag
             }
         });
         CURRENT.with(|current| *current.borrow_mut() = Some(runner.clone() as Rc<dyn Turn>));
-        start(
-            &mut runner.app.borrow_mut(),
-            Handle::new(Arc::clone(&runner.mailbox)),
-        );
         runner.turn();
         Ok(())
     })?;

@@ -7,7 +7,7 @@ mod ime;
 
 use std::time::Duration;
 use windows_core::{HSTRING, IInspectable, Interface, Result};
-use winui_immediate::{App, Handle, Length, Orientation, Ui, run};
+use winui_immediate::{App, Handle, Length, Orientation, Severity, Ui, run};
 
 fn main() -> Result<()> {
     let tick = std::env::var("WIDGETS_TICK")
@@ -15,8 +15,15 @@ fn main() -> Result<()> {
         .and_then(|text| text.parse().ok())
         .map(Duration::from_millis);
     let ime = std::env::var("WIDGETS_IME").as_deref() == Ok("vi");
-    run(
-        Widgets {
+    run(move |handle: Handle<Tick>| {
+        if let Some(tick) = tick {
+            std::thread::spawn(move || {
+                while handle.send(Tick) {
+                    std::thread::sleep(tick);
+                }
+            });
+        }
+        Ok(Widgets {
             open: true,
             filter: String::new(),
             edits: 0,
@@ -24,17 +31,10 @@ fn main() -> Result<()> {
             unlocked: false,
             revealed: false,
             ime_pending: ime,
-        },
-        move |_, handle: Handle<Tick>| {
-            if let Some(tick) = tick {
-                std::thread::spawn(move || {
-                    while handle.send(Tick) {
-                        std::thread::sleep(tick);
-                    }
-                });
-            }
-        },
-    )
+            color: 0,
+            enters: 0,
+        })
+    })
 }
 
 struct Tick;
@@ -48,7 +48,13 @@ struct Widgets {
     revealed: bool,
     /// Telex is switched on once the window exists; TSF ignores it before.
     ime_pending: bool,
+    /// An index into [`COLORS`].
+    color: usize,
+    /// Enter presses in the filter box.
+    enters: u32,
 }
+
+const COLORS: [&str; 3] = ["Red", "Green", "Blue"];
 
 impl App for Widgets {
     type Message = Tick;
@@ -62,22 +68,33 @@ impl App for Widgets {
             return Ok(());
         }
         let window = ui.window("main", "winui-immediate widgets", |ui| {
-            ui.grid("rows", &[Length::Auto; 5], |ui| {
+            ui.grid("rows", &[Length::Auto; 6], |ui| {
                 ui.label(
                     "status",
                     format_args!("{} edits, filter '{}'", self.edits, self.filter),
                 )?;
-                if ui.text_box("filter", "Filter", &mut self.filter)?.changed() {
+                let mut filter = ui.text_box("filter", "Filter", &mut self.filter)?;
+                if filter.changed() {
                     self.edits += 1;
                 }
+                if filter.header("Filter")?.enter_pressed()? {
+                    self.enters += 1;
+                }
                 ui.stack("unlock", Orientation::Horizontal, 8.0, |ui| {
-                    let password = ui.password_box("password", "Master password")?.handle();
+                    let mut field = ui.password_box("password", "Master password")?;
+                    // Read on every pass, to show the check leaves the box's
+                    // text whole.
+                    let empty = field.is_empty()?;
+                    field.changed()?;
+                    let password = field.handle();
                     let submitted = ui
                         .button("submit", if self.unlocked { "Lock" } else { "Unlock" })?
                         .clicked()?;
                     if submitted {
-                        self.unlocked = !self.unlocked && !ui.take_password(password)?.is_empty();
+                        self.unlocked =
+                            !self.unlocked && ui.take_password(password)?.as_str() == "hunter2";
                     }
+                    ui.label("empty", format_args!("empty {empty}"))?;
                     ui.label(
                         "state",
                         format_args!("{}", if self.unlocked { "Unlocked" } else { "Locked" }),
@@ -110,6 +127,22 @@ impl App for Widgets {
                     self.revealed = !self.revealed;
                 }
                 ui.native("switch", toggle_switch, |_| Ok(()))?;
+                ui.stack("picker", Orientation::Vertical, 8.0, |ui| {
+                    ui.combo_box("color", &COLORS, &mut self.color)?
+                        .header("Color")?
+                        .enabled(self.enters < 3)?;
+                    ui.label(
+                        "picked",
+                        format_args!("picked {}, enters {}", COLORS[self.color], self.enters),
+                    )?;
+                    if ui.button("reset", "Reset color")?.accent(true)?.clicked()? {
+                        self.color = 0;
+                    }
+                    if self.enters > 0 {
+                        ui.info_bar("entered", Severity::Warning, "Enter", "Enter was pressed.")?;
+                    }
+                    Ok(())
+                })?;
                 Ok(())
             })?;
             Ok(())

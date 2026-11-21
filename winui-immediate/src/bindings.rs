@@ -52,6 +52,31 @@ shared_delegate!(
     IInspectable,
     KeyRoutedEventArgs
 );
+shared_delegate!(
+    SizeChangedEventHandler,
+    SizeChangedEventHandlerBox,
+    IInspectable,
+    SizeChangedEventArgs
+);
+shared_delegate!(
+    SelectionChangedEventHandler,
+    SelectionChangedEventHandlerBox,
+    IInspectable,
+    SelectionChangedEventArgs
+);
+
+impl EventHandler<IInspectable> {
+    /// Builds one delegate object that many event sources can share.
+    pub(crate) fn shared<F>(invoke: F) -> Self
+    where
+        F: 'static + Fn(Ref<'_, IInspectable>, Ref<'_, IInspectable>),
+    {
+        let delegate =
+            DelegateBox::<Self, F>::new(&EventHandlerBox::<IInspectable, F>::VTABLE, invoke);
+        // SAFETY: the same conversion the generated event methods do.
+        unsafe { core::mem::transmute(box_new(delegate)) }
+    }
+}
 
 impl EventHandler<ScrollViewerViewChangedEventArgs> {
     /// Builds one delegate object that many scroll viewers can share.
@@ -125,4 +150,38 @@ add_handler!(
     EventHandler<ScrollViewerViewChangedEventArgs>
 );
 add_handler!(IUIElement, add_key_down, KeyDown, KeyEventHandler);
+add_handler!(IUIElement, add_lost_focus, LostFocus, RoutedEventHandler);
+add_handler!(
+    IFrameworkElement,
+    add_size_changed,
+    SizeChanged,
+    SizeChangedEventHandler
+);
+add_handler!(
+    ISelector,
+    add_selection_changed,
+    SelectionChanged,
+    SelectionChangedEventHandler
+);
+add_handler!(
+    IComboBox,
+    add_drop_down_closed,
+    DropDownClosed,
+    EventHandler<IInspectable>
+);
+add_handler!(IComboBox, add_text_submitted, TextSubmitted, TypedEventHandler<ComboBox, ComboBoxTextSubmittedEventArgs>);
 add_handler!(IAppWindow, add_closing, Closing, TypedEventHandler<AppWindow, AppWindowClosingEventArgs>);
+
+impl IPasswordBox {
+    /// The password as the `HSTRING` WinUI returns, unconverted, so the
+    /// caller can wipe its buffer.
+    pub(crate) fn password_string(&self) -> windows_core::Result<windows_core::HSTRING> {
+        // SAFETY: the slot's signature is `HRESULT(this, *mut HSTRING)`; on
+        // success the out value is an owned HSTRING.
+        unsafe {
+            let mut result = core::mem::zeroed();
+            (Interface::vtable(self).Password)(Interface::as_raw(self), &mut result)
+                .map(|| core::mem::transmute::<_, windows_core::HSTRING>(result))
+        }
+    }
+}

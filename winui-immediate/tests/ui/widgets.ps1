@@ -59,6 +59,8 @@ Start-Sleep -Milliseconds 600
 $password = Find-All ([System.Windows.Automation.ControlType]::Edit) | Where-Object { $_.Current.IsPassword } | Select-Object -First 1
 $password.SetFocus(); Start-Sleep -Milliseconds 300
 Type-Keys "hunter2"
+Start-Sleep -Milliseconds 300
+"  typed: $((Texts) -match 'empty False') (expect True: the box is not empty)"
 Invoke (Button "Unlock")
 "  after Unlock: $(Texts); first button now '$((Find-All ([System.Windows.Automation.ControlType]::Button) | Select-Object -First 1).Current.Name)'"
 "  native toggle switches: $(@($script:window.FindAll($descendants, (New-Object System.Windows.Automation.PropertyCondition($automation::ClassNameProperty, "ToggleSwitch")))).Count)"
@@ -72,4 +74,24 @@ Type-Keys "tieesng vieetj "
 Start-Sleep -Milliseconds 600
 "  filter: '$(Value $filter)' (expect 'tiếng việt ')"
 "  labels: $(Texts)"
+Stop-Widgets
+
+"== combo box, Enter, info bar, with a pass every 10 ms"
+Start-Widgets @{ WIDGETS_TICK = "10" }
+function Picked { (Find-All ([System.Windows.Automation.ControlType]::Text) | Where-Object { $_.Current.Name -like "picked*" }).Current.Name }
+$combo = Find-All ([System.Windows.Automation.ControlType]::ComboBox) | Select-Object -First 1
+"  combo: '$($combo.Current.Name)' (expect 'Color'), $(Picked) (expect 'picked Red, enters 0')"
+$combo.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand(); Start-Sleep -Milliseconds 500
+$items = @($combo.FindAll($descendants, (New-Object System.Windows.Automation.PropertyCondition($automation::ControlTypeProperty, [System.Windows.Automation.ControlType]::ListItem))))
+$items[2].GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select(); Start-Sleep -Milliseconds 500
+"  after picking Blue: $(Picked) (expect 'picked Blue, enters 0')"
+Invoke (Button "Reset color")
+$shown = $combo.GetCurrentPattern([System.Windows.Automation.SelectionPattern]::Pattern).Current.GetSelection() | ForEach-Object { $_.Current.Name }
+"  after Reset: $(Picked), box shows '$shown' (expect 'picked Red', 'Red')"
+$filter = Get-FilterBox
+$filter.SetFocus(); Start-Sleep -Milliseconds 300
+foreach ($n in 1..3) { [System.Windows.Forms.SendKeys]::SendWait("{ENTER}"); Start-Sleep -Milliseconds 200 }
+Start-Sleep -Milliseconds 300
+"  after 3 Enters: $(Picked) (expect 'enters 3'), combo enabled=$($combo.Current.IsEnabled) (expect False)"
+"  info bar: $((Find-All ([System.Windows.Automation.ControlType]::Text) | Where-Object { $_.Current.Name -eq 'Enter was pressed.' }).Count) (expect 1)"
 Stop-Widgets

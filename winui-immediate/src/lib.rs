@@ -16,6 +16,8 @@ pub use mailbox::Handle;
 pub use pass::Ui;
 pub use runner::{App, run};
 pub use widget::{
-    ButtonResponse, Length, ListId, Orientation, PasswordField, PasswordHandle, Response, RowFn,
-    TextBoxResponse, WindowResponse,
+    Align, ButtonResponse, ComboBoxResponse, FieldHandle, Length, ListId, Orientation,
+    PasswordField, PasswordHandle, Response, RowFn, Severity, TextBoxResponse, WindowResponse,
 };
+/// The type [Ui::take_password] returns.
+pub use zeroize::Zeroizing;

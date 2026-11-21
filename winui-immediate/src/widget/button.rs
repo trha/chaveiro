@@ -1,6 +1,9 @@
-use super::{Control, Response, must_write};
+use super::{Control, Response, must_write, resource};
 use crate::{
-    bindings::{Button, ContentControl, TextBlock},
+    bindings::{
+        Button, ContentControl, FrameworkElement, IPanel, Orientation, ProgressRing, StackPanel,
+        Style, TextBlock, UIElement, Visibility,
+    },
     events::EventKind,
     pass::{ChildKind, ControlNode, Ui},
 };
@@ -23,6 +26,9 @@ impl Ui {
                     button,
                     content,
                     label: String::new(),
+                    accent: false,
+                    ring: None,
+                    busy: false,
                 },
             ))
         })?;
@@ -64,6 +70,70 @@ impl ButtonResponse<'_> {
             .subscribe(*node, &mut subscribed, &button, EventKind::Click)?;
         ui.control_mut(*node).subscribed = subscribed;
         Ok(ui.events.happened(*node, EventKind::Click))
+    }
+
+    /// Gives the button the accent style, for the one primary action of a
+    /// screen, or the standard style.
+    pub fn accent(&mut self, on: bool) -> Result<&mut Self> {
+        let control = self.0.ui.control_mut(self.0.node);
+        let stale = control.stale;
+        let Control::Button { button, accent, .. } = &mut control.control else {
+            unreachable!("button keys hold buttons")
+        };
+        if must_write(stale, accent, &on) {
+            let frame = button.cast::<FrameworkElement>()?;
+            match on {
+                true => frame.SetStyle(&resource::<Style>("AccentButtonStyle")?)?,
+                false => frame.SetStyle(None::<&Style>)?,
+            }
+            *accent = on;
+        }
+        Ok(self)
+    }
+
+    /// While `on`, the button is disabled and shows a 16px progress ring
+    /// before its label, for a request it started. It keeps its width only
+    /// when the layout gives it one, such as a full-width button.
+    pub fn busy(&mut self, on: bool) -> Result<&mut Self> {
+        let control = self.0.ui.control_mut(self.0.node);
+        let stale = control.stale;
+        let Control::Button {
+            button,
+            content,
+            ring,
+            busy,
+            ..
+        } = &mut control.control
+        else {
+            unreachable!("button keys hold buttons")
+        };
+        if must_write(stale, busy, &on) {
+            if ring.is_none() && on {
+                // The content becomes a row of the ring and the label.
+                let row = StackPanel::new()?;
+                row.SetOrientation(Orientation::Horizontal)?;
+                row.SetSpacing(8.0)?;
+                let made = ProgressRing::new()?;
+                let frame = made.cast::<FrameworkElement>()?;
+                frame.SetWidth(16.0)?;
+                frame.SetHeight(16.0)?;
+                button.cast::<ContentControl>()?.SetContent(&row)?;
+                let children = row.cast::<IPanel>()?.Children()?;
+                children.Append(&made.cast::<UIElement>()?)?;
+                children.Append(&content.cast::<UIElement>()?)?;
+                *ring = Some(made);
+            }
+            if let Some(ring) = ring {
+                ring.SetIsActive(on)?;
+                ring.cast::<UIElement>()?.SetVisibility(match on {
+                    true => Visibility::Visible,
+                    false => Visibility::Collapsed,
+                })?;
+            }
+            *busy = on;
+        }
+        self.0.enabled(!on)?;
+        Ok(self)
     }
 }
 

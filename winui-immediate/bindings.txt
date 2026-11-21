@@ -56,7 +56,8 @@ Microsoft.UI.Xaml.Controls.TextBox::{add_TextCompositionStarted, remove_TextComp
 Microsoft.UI.Xaml.Controls.TextCompositionStartedEventArgs::{}
 Microsoft.UI.Xaml.Controls.TextCompositionEndedEventArgs::{}
 Microsoft.UI.Xaml.Window::{Close, get_AppWindow}
-Microsoft.UI.Windowing.AppWindow::{add_Closing, remove_Closing}
+Microsoft.UI.Windowing.AppWindow::{add_Closing, remove_Closing, get_Id}
+Microsoft.UI.WindowId
 Microsoft.UI.Windowing.AppWindowClosingEventArgs::{get_Cancel, put_Cancel}
 Microsoft.UI.Xaml.Media.VisualTreeHelper::{GetParent}
 Microsoft.UI.Xaml.Media.IVisualTreeHelperStatics::GetParent
@@ -67,3 +68,67 @@ Microsoft.UI.Xaml.Controls.RowDefinition::{CreateInstance, get_Height, put_Heigh
 Microsoft.UI.Xaml.Controls.RowDefinitionCollection
 Microsoft.UI.Xaml.GridLength
 Microsoft.UI.Xaml.GridUnitType
+Microsoft.UI.Xaml.Application::{get_Current}
+Microsoft.UI.Xaml.IApplicationStatics::get_Current
+Microsoft.UI.Xaml.Style
+Microsoft.UI.Xaml.Media.Brush
+Microsoft.UI.Xaml.Window::{put_SystemBackdrop}
+Microsoft.UI.Xaml.Media.SystemBackdrop
+Microsoft.UI.Xaml.Media.MicaBackdrop::{}
+Microsoft.UI.Xaml.Media.IMicaBackdropFactory::CreateInstance
+Microsoft.UI.Xaml.FrameworkElement::{put_Style, put_HorizontalAlignment, put_VerticalAlignment}
+Microsoft.UI.Xaml.HorizontalAlignment
+Microsoft.UI.Xaml.VerticalAlignment
+Microsoft.UI.Xaml.CornerRadius
+Microsoft.UI.Xaml.Controls.Control::{put_IsEnabled}
+Microsoft.UI.Xaml.Controls.Panel::{put_Background}
+Microsoft.UI.Xaml.Controls.StackPanel::{put_BorderBrush, put_BorderThickness, put_CornerRadius, put_Padding}
+Microsoft.UI.Xaml.Controls.TextBox::{put_Header}
+Microsoft.UI.Xaml.Controls.PasswordBox::{put_Header}
+Microsoft.UI.Xaml.Controls.ComboBox::{put_Header}
+Microsoft.UI.Xaml.Controls.IComboBoxFactory::CreateInstance
+Microsoft.UI.Xaml.Controls.ItemsControl::{get_Items}
+Microsoft.UI.Xaml.Controls.ItemCollection
+Microsoft.UI.Xaml.Controls.Primitives.Selector::{get_SelectedIndex, put_SelectedIndex, add_SelectionChanged, remove_SelectionChanged}
+Microsoft.UI.Xaml.Controls.SelectionChangedEventHandler
+Microsoft.UI.Xaml.Controls.SelectionChangedEventArgs::{}
+Microsoft.UI.Xaml.Controls.InfoBar::{put_IsOpen, put_IsClosable, put_Severity, put_Title, put_Message}
+Microsoft.UI.Xaml.Controls.IInfoBarFactory::CreateInstance
+Microsoft.UI.Xaml.Controls.InfoBarSeverity
+Microsoft.UI.Xaml.Controls.ProgressRing::{put_IsActive}
+Microsoft.UI.Xaml.Controls.IProgressRingFactory::CreateInstance
+Microsoft.UI.Xaml.Window::{put_ExtendsContentIntoTitleBar}
+Microsoft.UI.Windowing.AppWindow::{get_Presenter}
+Microsoft.UI.Windowing.AppWindow::{get_Size, Resize}
+Windows.Foundation.Size
+Microsoft.UI.Windowing.AppWindowPresenter
+Microsoft.UI.Windowing.OverlappedPresenter::{put_IsMaximizable, put_IsMinimizable, put_IsResizable}
+Windows.Graphics.SizeInt32
+Microsoft.UI.Xaml.FrameworkElement::{get_ActualWidth, get_ActualHeight, add_SizeChanged, remove_SizeChanged}
+Microsoft.UI.Xaml.SizeChangedEventHandler
+Microsoft.UI.Xaml.SizeChangedEventArgs::{}
+Microsoft.UI.Xaml.XamlRoot::{get_RasterizationScale, get_Size}
+Microsoft.UI.Xaml.Controls.StackPanel::{put_Padding}
+Microsoft.UI.Xaml.UIElement::{get_XamlRoot}
+Microsoft.UI.Xaml.Controls.TextBox::{put_Description}
+Microsoft.UI.Xaml.Controls.PasswordBox::{put_Description}
+Microsoft.UI.Xaml.Controls.ComboBox::{put_Description}
+Microsoft.UI.Xaml.Controls.Control::{put_BorderBrush, Focus}
+Microsoft.UI.Xaml.FocusState
+Microsoft.UI.Xaml.UIElement::{add_LostFocus, remove_LostFocus}
+Microsoft.UI.Xaml.Controls.FontIcon::{put_Glyph, put_FontSize}
+Microsoft.UI.Xaml.Controls.IFontIconFactory::CreateInstance
+Microsoft.UI.Xaml.Controls.IconElement::{put_Foreground}
+Microsoft.UI.Xaml.Controls.TextBlock::{put_FontSize, put_Foreground, put_TextWrapping}
+Microsoft.UI.Xaml.TextWrapping
+Microsoft.UI.Xaml.FrameworkElement::{put_MinHeight}
+Microsoft.UI.Xaml.Automation.AutomationProperties::{SetFullDescription, SetIsDataValidForForm, SetIsRequiredForForm, SetName}
+Microsoft.UI.Xaml.Automation.IAutomationPropertiesStatics::{SetFullDescription, SetIsDataValidForForm, SetIsRequiredForForm, SetName}
+Microsoft.UI.Xaml.DependencyObject::{ClearValue}
+Microsoft.UI.Xaml.DependencyProperty
+Microsoft.UI.Xaml.Controls.Control::{get_BorderBrushProperty}
+Microsoft.UI.Xaml.Controls.IControlStatics::get_BorderBrushProperty
+Microsoft.UI.Xaml.UIElement::{put_AccessKey}
+Microsoft.UI.Xaml.Controls.ComboBox::{put_IsEditable, get_Text, put_Text, add_TextSubmitted, remove_TextSubmitted}
+Microsoft.UI.Xaml.Controls.ComboBoxTextSubmittedEventArgs::{}
+Microsoft.UI.Xaml.Controls.ComboBox::{add_DropDownClosed, remove_DropDownClosed}

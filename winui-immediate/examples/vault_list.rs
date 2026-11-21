@@ -43,7 +43,7 @@ fn main() -> Result<()> {
         bench,
     };
     vault.refilter();
-    run(vault, move |_, handle| {
+    run(move |handle| {
         if ticking {
             std::thread::spawn(move || {
                 while handle.send(()) {
@@ -51,6 +51,7 @@ fn main() -> Result<()> {
                 }
             });
         }
+        Ok(vault)
     })?;
     eprintln!("run returned");
     Ok(())
