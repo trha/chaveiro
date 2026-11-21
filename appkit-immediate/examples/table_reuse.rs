@@ -10,6 +10,11 @@
 //! Run: `cargo run -p appkit-immediate --example table_reuse -- pool|queue [auto]`.
 //! `auto` turns on `usesAutomaticRowHeights`.
 
+// The program is macOS only. On other targets it is empty, so it checks but
+// does not link.
+#![cfg_attr(not(target_os = "macos"), no_main)]
+#![cfg(target_os = "macos")]
+
 use dispatch2::{DispatchQueue, DispatchTime};
 use objc2::{
     DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, rc::Retained,

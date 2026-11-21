@@ -2,6 +2,11 @@
 //! and at 520px, where it stays beside the header. The clickable card counts
 //! clicks in its description. `tests/ui/settings_card.ps1` drives it.
 
+// The program is Windows only. On other targets it is empty, so it checks
+// but does not link.
+#![cfg_attr(not(windows), no_main)]
+#![cfg(windows)]
+
 use winui_immediate::{App, ContentAlignment, Handle, Orientation, SettingsCard, Ui, run};
 
 fn main() -> windows_core::Result<()> {

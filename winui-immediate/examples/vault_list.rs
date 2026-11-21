@@ -7,6 +7,11 @@
 //! counts the Rust allocations of each steady pass on the UI thread, prints
 //! a summary and exits.
 
+// The program is Windows only. On other targets it is empty, so it checks
+// but does not link.
+#![cfg_attr(not(windows), no_main)]
+#![cfg(windows)]
+
 use std::{
     alloc::{GlobalAlloc, Layout, System},
     cell::Cell,

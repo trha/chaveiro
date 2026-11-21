@@ -3,6 +3,11 @@
 //! `WIDGETS_TICK=<ms>` sends a message on a timer, so passes run while you
 //! type. `WIDGETS_IME=vi` switches this process to Vietnamese Telex.
 
+// The program is Windows only. On other targets it is empty, so it checks
+// but does not link.
+#![cfg_attr(not(windows), no_main)]
+#![cfg(windows)]
+
 mod ime;
 
 use std::time::Duration;

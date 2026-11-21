@@ -3,6 +3,11 @@
 //! frames of three labels pinned start, center and stretch in a 300pt wide
 //! vertical stack, and whether layout is ambiguous.
 
+// The program is macOS only. On other targets it is empty, so it checks but
+// does not link.
+#![cfg_attr(not(target_os = "macos"), no_main)]
+#![cfg(target_os = "macos")]
+
 use objc2::MainThreadMarker;
 use objc2_app_kit::{
     NSLayoutAttribute, NSStackView, NSTextField, NSUserInterfaceLayoutOrientation,

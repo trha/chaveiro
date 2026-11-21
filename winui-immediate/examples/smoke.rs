@@ -2,6 +2,11 @@
 //! closes on its own when asked, and a message from a background thread
 //! updates the first window's status line.
 
+// The program is Windows only. On other targets it is empty, so it checks
+// but does not link.
+#![cfg_attr(not(windows), no_main)]
+#![cfg(windows)]
+
 use winui_immediate::{App, Handle, Orientation, Ui, run};
 
 fn main() -> windows_core::Result<()> {

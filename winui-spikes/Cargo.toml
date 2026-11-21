@@ -5,7 +5,7 @@ edition = "2024"
 license = "GPL-3.0-or-later"
 publish = false
 
-[dependencies]
+[target.'cfg(windows)'.dependencies]
 rustc-hash = "2"
 windows-collections = { version = "0.100.0", features = ["std"] }
 windows-core = "0.100.0"

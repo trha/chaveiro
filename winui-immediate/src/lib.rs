@@ -2,6 +2,9 @@
 //!
 //! See `plans/winui-immediate.md` for the design.
 
+// The crate is Windows only and empty on other targets.
+#![cfg(windows)]
+
 mod bindings;
 mod children;
 mod events;

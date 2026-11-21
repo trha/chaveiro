@@ -5,6 +5,11 @@
 //! YubiKey); every other code is refused. Accepted codes print to stderr.
 //! `tests/ui/second_factor.ps1` drives it.
 
+// The program is Windows only. On other targets it is empty, so it checks
+// but does not link.
+#![cfg_attr(not(windows), no_main)]
+#![cfg(windows)]
+
 #![allow(dead_code, reason = "shares modules with the app")]
 
 #[path = "../src/screen.rs"]

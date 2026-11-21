@@ -1,6 +1,11 @@
 //! A grid with an Auto, a 40pt, a 1-star and a 2-star row, each holding a
 //! label, so `tools/smoke.sh` can measure the rows through Accessibility.
 
+// The program is macOS only. On other targets it is empty, so it checks but
+// does not link.
+#![cfg_attr(not(target_os = "macos"), no_main)]
+#![cfg(target_os = "macos")]
+
 use appkit_immediate::{App, Length, Ui, run};
 
 fn main() {

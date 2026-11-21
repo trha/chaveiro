@@ -8,6 +8,11 @@
 //! `SPIKE_TOPMOST` also makes the window topmost and a tool window (no
 //! taskbar button).
 
+// The program is Windows only. On other targets it is empty, so it checks
+// but does not link.
+#![cfg_attr(not(windows), no_main)]
+#![cfg(windows)]
+
 use std::time::Duration;
 use windows_reactor::*;
 use windows_sys::Win32::{

@@ -4,6 +4,11 @@
 //! Runs under winui-immediate only to get a WinUI thread; the window closes
 //! itself once every check has reported.
 
+// The program is Windows only. On other targets it is empty, so it checks
+// but does not link.
+#![cfg_attr(not(windows), no_main)]
+#![cfg(windows)]
+
 use std::{
     cell::{Cell, RefCell},
     rc::Rc,

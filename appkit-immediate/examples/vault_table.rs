@@ -3,6 +3,11 @@
 //! views the table keeps, which `tools/smoke.sh` checks stays near one
 //! screen while it scrolls.
 
+// The program is macOS only. On other targets it is empty, so it checks but
+// does not link.
+#![cfg_attr(not(target_os = "macos"), no_main)]
+#![cfg(target_os = "macos")]
+
 use appkit_immediate::{App, Length, Orientation, TableViewId, Ui, run};
 
 const ROWS: usize = 10_000;

@@ -15,6 +15,11 @@
 //! Set `SPIKE_WIPE` to install an allocator that zeroes every block on free.
 //! The Submit button takes the password out of state and resets the box.
 
+// The program is Windows only. On other targets it is empty, so it checks
+// but does not link.
+#![cfg_attr(not(windows), no_main)]
+#![cfg(windows)]
+
 use std::{
     alloc::{GlobalAlloc, Layout, System},
     time::Duration,

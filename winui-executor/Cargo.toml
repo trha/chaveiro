@@ -5,10 +5,10 @@ edition = "2024"
 publish = false
 description = "Runs !Send futures on the WinUI dispatcher of the current thread"
 
-[dependencies]
+[target.'cfg(windows)'.dependencies]
 windows-core = "0.100.0"
 
-[dev-dependencies]
+[target.'cfg(windows)'.dev-dependencies]
 windows-future = "0.100.0"
 winui-immediate = { path = "../winui-immediate" }
 

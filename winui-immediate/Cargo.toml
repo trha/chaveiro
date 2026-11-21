@@ -6,7 +6,7 @@ license = "GPL-3.0-or-later"
 publish = false
 description = "An immediate-mode UI over the WinUI 3 retained tree"
 
-[dependencies]
+[target.'cfg(windows)'.dependencies]
 ahash = "0.8"
 tracing = "0.1"
 windows-collections = { version = "0.100.0", features = ["std"] }
@@ -16,7 +16,7 @@ windows-reference = { version = "0.100.0", features = ["std"] }
 windows-time = "0.100.0"
 zeroize = "1"
 
-[dev-dependencies]
+[target.'cfg(windows)'.dev-dependencies]
 proptest = "1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 

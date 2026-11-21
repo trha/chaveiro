@@ -3,6 +3,9 @@
 //! A proof of concept that shares its tree, child diff and mailbox with
 //! `winui-immediate` by copy, so the two crates can evolve apart.
 
+// The crate is macOS only and empty on other targets.
+#![cfg(target_os = "macos")]
+
 mod children;
 mod events;
 mod mailbox;

@@ -5,6 +5,11 @@
 //! `SPIKE_TICK=<ms>` rebuilds on a timer while you type, to check that caret,
 //! selection and IME survive rebuilds.
 
+// The program is Windows only. On other targets it is empty, so it checks
+// but does not link.
+#![cfg_attr(not(windows), no_main)]
+#![cfg(windows)]
+
 mod ime;
 mod ui;
 mod winui;

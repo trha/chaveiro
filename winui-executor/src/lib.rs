@@ -4,6 +4,9 @@
 //! polled in its own dispatcher callback, so a waker may run on any thread,
 //! such as the thread pool thread that completes a WinRT operation.
 
+// The crate is Windows only and empty on other targets.
+#![cfg(windows)]
+
 mod bindings;
 
 use bindings::{DispatcherQueue, DispatcherQueueHandler};

@@ -7,6 +7,10 @@
 use std::path::PathBuf;
 
 fn main() {
+    // The bindings are Windows only, and the crate is empty on other targets.
+    if std::env::var_os("CARGO_CFG_WINDOWS").is_none() {
+        return;
+    }
     println!("cargo:rerun-if-changed=bindings.txt");
     println!("cargo:rerun-if-env-changed=WINUI_IMMEDIATE_WINMD");
 

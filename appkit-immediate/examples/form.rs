@@ -3,6 +3,11 @@
 //! `tools/smoke.sh` can check reads, app writes during an edit, Return and
 //! `take`.
 
+// The program is macOS only. On other targets it is empty, so it checks but
+// does not link.
+#![cfg_attr(not(target_os = "macos"), no_main)]
+#![cfg(target_os = "macos")]
+
 use appkit_immediate::{App, Orientation, Ui, run};
 
 fn main() {

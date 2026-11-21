@@ -6,6 +6,11 @@
 //! allocations, the row renders, and the time from `update` to the end of
 //! publication.
 
+// The program is Windows only. On other targets it is empty, so it checks
+// but does not link.
+#![cfg_attr(not(windows), no_main)]
+#![cfg(windows)]
+
 use std::{
     rc::Rc,
     sync::atomic::{AtomicUsize, Ordering},

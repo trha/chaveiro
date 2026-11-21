@@ -9,7 +9,7 @@ description = "Chaveiro for Windows: winui-immediate over the vault-core state m
 name = "chaveiro"
 path = "src/main.rs"
 
-[dependencies]
+[target.'cfg(windows)'.dependencies]
 rand_core = { version = "0.6", features = ["getrandom"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -29,7 +29,7 @@ winui-immediate = { path = "../winui-immediate" }
 zeroize = "1"
 zeroizing-alloc = "0.1.1"
 
-[dev-dependencies]
+[target.'cfg(windows)'.dev-dependencies]
 proptest = "1"
 
 [build-dependencies]

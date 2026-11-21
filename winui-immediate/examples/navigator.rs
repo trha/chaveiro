@@ -3,6 +3,11 @@
 //! lock must. The first screen's text box shows that a screen's state is
 //! dropped when the screen goes. `tests/ui/navigator.ps1` drives it.
 
+// The program is Windows only. On other targets it is empty, so it checks
+// but does not link.
+#![cfg_attr(not(windows), no_main)]
+#![cfg(windows)]
+
 use std::{cell::RefCell, rc::Rc};
 use winui_immediate::{App, Handle, Orientation, Slide, Ui, run};
 

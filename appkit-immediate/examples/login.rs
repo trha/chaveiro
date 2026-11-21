@@ -3,6 +3,11 @@
 //! combo box, the error line, Return, and the busy state that disables the
 //! fields.
 
+// The program is macOS only. On other targets it is empty, so it checks but
+// does not link.
+#![cfg_attr(not(target_os = "macos"), no_main)]
+#![cfg(target_os = "macos")]
+
 use appkit_immediate::{Align, App, Handle, Style, Ui, run};
 use std::thread::JoinHandle;
 

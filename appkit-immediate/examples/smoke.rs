@@ -5,6 +5,11 @@
 //! With `SMOKE_PANIC=1`, the second pass (the background message) panics, to check that `run` closes
 //! the windows and resumes the panic.
 
+// The program is macOS only. On other targets it is empty, so it checks but
+// does not link.
+#![cfg_attr(not(target_os = "macos"), no_main)]
+#![cfg(target_os = "macos")]
+
 use appkit_immediate::{App, Handle, Orientation, Ui, run};
 use objc2_app_kit::NSTextField;
 use objc2_foundation::NSString;
