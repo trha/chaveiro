@@ -4,6 +4,7 @@ use crate::{
     mailbox::{Handle, Mailbox},
     pass::Ui,
     tree::NodeId,
+    write_check,
 };
 use dispatch2::DispatchQueue;
 use objc2::{
@@ -50,6 +51,7 @@ pub trait App: 'static {
 /// Panics when called off the main thread.
 pub fn run<A: App>(make: impl FnOnce(Handle<A::Message>) -> A) {
     let mtm = MainThreadMarker::new().expect("run is called on the main thread");
+    write_check::install();
     // Until `NSApplication::run` starts, no run-loop pool exists, and AppKit
     // autoreleases objects in setup, in `make` and in the first pass. Each
     // later pass has its own pool, inside the run loop's.
@@ -174,15 +176,40 @@ impl<A: App> Runner<A> {
         }
     }
 
-    /// Applies messages and runs one pass. Returns whether events arrived
-    /// and how many windows are open.
+    /// Applies messages and runs one pass, then in debug builds the idle
+    /// check. Returns whether events arrived and how many windows are open.
     fn pass(&self) -> (bool, usize) {
-        let mut app = self.app.borrow_mut();
-        let mut messages = self.messages.borrow_mut();
-        self.mailbox.drain(&mut messages);
-        for message in messages.drain(..) {
-            app.update(message);
+        let drained = {
+            let mut app = self.app.borrow_mut();
+            let mut messages = self.messages.borrow_mut();
+            self.mailbox.drain(&mut messages);
+            let drained = !messages.is_empty();
+            for message in messages.drain(..) {
+                app.update(message);
+            }
+            drained
+        };
+        let (consumed, windows) = self.view();
+        // A pass that took nothing new in has caught up, so the same view
+        // again must write nothing.
+        if cfg!(debug_assertions) && !consumed && !drained && windows > 0 {
+            write_check::begin();
+            let (consumed, windows) = self.view();
+            let writes = write_check::end();
+            assert!(
+                consumed || writes.is_empty(),
+                "{}",
+                self.ui.borrow().describe_writes(&writes)
+            );
+            return (consumed, windows);
         }
+        (consumed, windows)
+    }
+
+    /// Runs the app's view once. Returns whether events arrived and how many
+    /// windows are open.
+    fn view(&self) -> (bool, usize) {
+        let mut app = self.app.borrow_mut();
         let mut ui = self.ui.borrow_mut();
         let consumed = ui.begin();
         app.view(&mut ui);

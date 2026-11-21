@@ -47,14 +47,14 @@ impl Ui {
         else {
             unreachable!("stack keys hold stacks")
         };
-        if must_write(stale, written_orientation, &Some(orientation)) {
+        if must_write(node, stale, written_orientation, &Some(orientation)) {
             stack.setOrientation(match orientation {
                 Orientation::Vertical => NSUserInterfaceLayoutOrientation::Vertical,
                 Orientation::Horizontal => NSUserInterfaceLayoutOrientation::Horizontal,
             });
             *written_orientation = Some(orientation);
         }
-        if must_write(stale, written_spacing, &spacing) {
+        if must_write(node, stale, written_spacing, &spacing) {
             stack.setSpacing(spacing);
             *written_spacing = spacing;
         }

@@ -64,6 +64,7 @@ impl Ui {
         }
         let window = self.window_mut(node);
         if window.title != title {
+            crate::write_check::record(node);
             window.window.setTitle(&NSString::from_str(title));
             window.title.clear();
             window.title.push_str(title);
@@ -188,10 +189,15 @@ impl WindowResponse<'_> {
     /// Sizes the window to its content's fitting size on every pass where
     /// that size changed, in place of the 360×200 minimum.
     pub fn size_to_fit(&mut self) -> &mut Self {
-        let window = self.ui.window_mut(self.node);
-        window.container.layoutSubtreeIfNeeded();
-        let fitting = window.container.fittingSize();
+        let node = self.node;
+        let window = self.ui.window_mut(node);
+        // Layout sets properties of AppKit's own, which are no write of ours.
+        let fitting = crate::write_check::paused(|| {
+            window.container.layoutSubtreeIfNeeded();
+            window.container.fittingSize()
+        });
         if window.fitted != Some((fitting.width, fitting.height)) {
+            crate::write_check::record(node);
             window.window.setContentSize(fitting);
             window.fitted = Some((fitting.width, fitting.height));
         }

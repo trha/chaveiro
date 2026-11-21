@@ -73,7 +73,7 @@ impl Response<'_> {
     /// Panics when the view is not an `NSControl`, such as a stack view.
     pub fn enabled(&mut self, on: bool) -> &mut Self {
         let control = self.ui.control_mut(self.node);
-        if control.enabled != Some(on) {
+        if must_write(self.node, false, &control.enabled, &Some(on)) {
             control
                 .control
                 .as_control()
@@ -89,7 +89,7 @@ impl Response<'_> {
     /// Panics when the view is not an `NSControl`.
     pub fn style(&mut self, style: Style) -> &mut Self {
         let control = self.ui.control_mut(self.node);
-        if control.style != Some(style) {
+        if must_write(self.node, false, &control.style, &Some(style)) {
             let text_style = match style {
                 Style::Title => unsafe { NSFontTextStyleTitle1 },
                 Style::Body => unsafe { NSFontTextStyleBody },
@@ -127,7 +127,10 @@ impl Response<'_> {
         let control = self.ui.control_mut(self.node);
         match &control.width {
             Some(constraint) if constraint.constant() == width => {}
-            Some(constraint) => constraint.setConstant(width),
+            Some(constraint) => {
+                crate::write_check::record(self.node);
+                constraint.setConstant(width);
+            }
             None => {
                 let constraint = control.view.widthAnchor().constraintEqualToConstant(width);
                 constraint.setActive(true);
@@ -143,7 +146,7 @@ impl Response<'_> {
     /// Panics on any other view.
     pub fn padding(&mut self, padding: [f64; 4]) -> &mut Self {
         let control = self.ui.control_mut(self.node);
-        if control.padding != Some(padding) {
+        if must_write(self.node, false, &control.padding, &Some(padding)) {
             let stack = control
                 .control
                 .arranged()
@@ -190,10 +193,17 @@ pub enum Style {
     Caption,
 }
 
-/// Whether a managed value must be written: the control is stale, or the
-/// declared value differs from the last one written.
-fn must_write<T: ?Sized + PartialEq>(stale: bool, written: &T, declared: &T) -> bool {
-    stale || written != declared
+/// Whether a managed value of `node` must be written: the control is
+/// stale, or the declared value differs from the last one written. A true
+/// answer counts as a write for the idle pass check, at the caller's
+/// location.
+#[track_caller]
+fn must_write<T: ?Sized + PartialEq>(node: NodeId, stale: bool, written: &T, declared: &T) -> bool {
+    let write = stale || written != declared;
+    if write {
+        crate::write_check::record(node);
+    }
+    write
 }
 
 /// The concrete view behind a node, with the values this layer last wrote.
@@ -294,6 +304,24 @@ impl Control {
             | Control::Row { .. }
             | Control::Native => return None,
         })
+    }
+
+    /// The widget's name, as its `Ui` method spells it.
+    pub(crate) fn kind(&self) -> &'static str {
+        match self {
+            Control::Stack { .. } => "stack_view",
+            Control::Grid { .. } => "grid",
+            Control::Label { .. } => "label",
+            Control::Button { .. } => "button",
+            Control::TextField { .. } => "text_field",
+            Control::SecureTextField { .. } => "secure_text_field",
+            Control::PopUpButton { .. } => "pop_up_button",
+            Control::ComboBox { .. } => "combo_box",
+            Control::BoxView { .. } => "box_view",
+            Control::Native => "native",
+            Control::TableView { .. } => "table_view",
+            Control::Row { .. } => "row",
+        }
     }
 
     /// The stack that arranges this control's children, for a stack view

@@ -19,7 +19,8 @@ impl Ui {
         let (node, _) = self.visit(id, ChildKind::Visual, |mtm| {
             ControlNode::payload(create(mtm), Control::Native)
         });
-        update(&self.control(node).view);
+        // The update writes by contract, on every pass.
+        crate::write_check::paused(|| update(&self.control(node).view));
         Response { ui: self, node }
     }
 }

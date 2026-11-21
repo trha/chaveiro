@@ -31,7 +31,7 @@ impl Ui {
         let Control::Label { field, text } = &mut control.control else {
             unreachable!("label keys hold labels")
         };
-        if must_write(stale, text, scratch) {
+        if must_write(node, stale, text, scratch) {
             field.setStringValue(&NSString::from_str(scratch));
             text.clone_from(scratch);
         }

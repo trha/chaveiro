@@ -43,6 +43,7 @@ osascript -e "$process to click menu item \"Quit\" of menu 1 of menu bar item 2 
 check "Quit ends the app" "wait_exit $pid"
 check "Quit reaches should_terminate" "grep -q 'should terminate' '$log'"
 check "run returns and drops the app" "grep -q 'app dropped' '$log' && grep -q 'run returned' '$log'"
+check "smoke: no idle pass wrote" "! grep -q 'an idle pass wrote' '$log'"
 
 # Run 2: a panic in view closes the windows and resumes the panic.
 SMOKE_PANIC=1 "$binary" >"$log" 2>&1 &
@@ -77,6 +78,7 @@ osascript -e "$grid to set size of window \"grid\" to {500, 600}" >/dev/null
 sleep 0.4
 check "grid rows after a resize" grid_ok
 check "star rows grow with the window" "[ \$(heights | awk '{ print \$4 }') -gt 300 ]"
+check "grid: no idle pass wrote" "! grep -q 'an idle pass wrote' '$log'"
 kill "$pid"
 
 # Run 4: text fields. Typing needs the app in front, so this run takes the
@@ -112,6 +114,7 @@ type_into 3 pw1
 osascript -e "$form to click button \"Take\" of window \"form\"" >/dev/null
 sleep 0.4
 check "take returns the password and clears the field" "texts | grep -q 'took: Some(3), empty: true'"
+check "form: no idle pass wrote" "! grep -q 'an idle pass wrote' '$log'"
 kill "$pid"
 
 # Run 5: the login form. Also takes the keyboard focus.
@@ -149,6 +152,7 @@ check "a busy form disables its pop-up button" '[ "$(server_enabled)" = false ]'
 check "the error clears on a good submit" "! status | grep -q 'Enter your master password'"
 sleep 2
 check "the result arrives and enables the form again" 'status | grep -q "signed in with 2 characters" && [ "$(server_enabled)" = true ]'
+check "login: no idle pass wrote" "! grep -q 'an idle pass wrote' '$log'"
 kill "$pid"
 
 # Run 6: a 10,000-row table view. Scrolls through it, then picks a row.
@@ -188,6 +192,7 @@ sleep 0.4
 check "a click in a scrolled row picks that row's item" 'vault_status | grep -q "picked: Some($picked)"'
 slots=$(vault_status | sed -n "s/.*slots: //p")
 check "scrolling far keeps about one screen of row views" '[ "$slots" -gt 0 ] && [ "$slots" -lt 40 ]'
+check "vault_table: no idle pass wrote" "! grep -q 'an idle pass wrote' '$log'"
 kill "$pid"
 
 rm -f "$log"

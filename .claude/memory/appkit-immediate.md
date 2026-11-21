@@ -35,3 +35,18 @@ through System Events. It needs Accessibility access for the shell's app,
 which macOS can revoke mid-session (error -1728); Accessibility frames are
 2pt taller than the alignment rects constraints size, and AX positions of
 rows off screen are wrong.
+
+## Idle pass check (plans/idle-pass-check.md)
+
+- Debug builds rerun `view` after each pass that took no events and no
+  messages; that rerun must record zero writes (`src/write_check.rs`).
+- Setter hooks: hook a selector only on the highest class that defines
+  it. Hooking a subclass and its superclass both loops forever, because
+  the subclass's `super` call reaches a trampoline that looks up the
+  receiver's class again. Stack overflow was the symptom.
+- AppKit sends hooked setters to private views (`NSTextIndicatorOverlay`,
+  the caret overlay of a focused secure field), so the hook counts only
+  classes the crate creates.
+- AppKit still calls setters while the main thread exits, after
+  thread-locals are destroyed: use `try_with` in any hook.
+- `labelWithString` calls `setStringValue:` itself.

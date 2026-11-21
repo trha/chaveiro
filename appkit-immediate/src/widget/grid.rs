@@ -45,7 +45,7 @@ impl Ui {
         else {
             unreachable!("grid keys hold grids")
         };
-        if must_write(stale, written.as_slice(), rows) {
+        if must_write(node, stale, written.as_slice(), rows) {
             written.clear();
             written.extend_from_slice(rows);
             *placed = false;

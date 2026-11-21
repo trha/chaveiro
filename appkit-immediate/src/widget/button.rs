@@ -55,7 +55,7 @@ impl Ui {
         else {
             unreachable!("button keys hold buttons")
         };
-        if must_write(stale, written.as_str(), label) {
+        if must_write(node, stale, written.as_str(), label) {
             button.setTitle(&NSString::from_str(label));
             written.clear();
             written.push_str(label);
@@ -84,7 +84,7 @@ impl ButtonResponse<'_> {
         else {
             unreachable!("button keys hold buttons")
         };
-        if must_write(stale, default, &on) {
+        if must_write(self.0.node, stale, default, &on) {
             button.setKeyEquivalent(&NSString::from_str(if on { "\r" } else { "" }));
             *default = on;
         }
@@ -107,7 +107,7 @@ impl ButtonResponse<'_> {
         else {
             unreachable!("button keys hold buttons")
         };
-        if !must_write(stale, busy, &on) {
+        if !must_write(self.0.node, stale, busy, &on) {
             return self;
         }
         *busy = on;

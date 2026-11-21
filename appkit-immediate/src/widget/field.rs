@@ -40,10 +40,13 @@ impl Field {
         })
     }
 
-    fn set_header(&mut self, mtm: MainThreadMarker, text: &str, required: bool) {
+    /// Writes the header of `node`'s field when `text` or `required`
+    /// changed.
+    fn set_header(&mut self, node: NodeId, mtm: MainThreadMarker, text: &str, required: bool) {
         if self.header.is_some() && self.header_text == text && self.required == required {
             return;
         }
+        crate::write_check::record(node);
         self.header_text.clear();
         self.header_text.push_str(text);
         self.required = required;
@@ -169,10 +172,10 @@ impl Response<'_> {
     ///
     /// Panics when the control is not a field.
     pub fn header(&mut self, text: &str) -> &mut Self {
-        let mtm = self.ui.mtm;
+        let (mtm, node) = (self.ui.mtm, self.node);
         let field = self.field_mut();
         let required = field.required;
-        field.set_header(mtm, text, required);
+        field.set_header(node, mtm, text, required);
         self
     }
 
@@ -180,7 +183,7 @@ impl Response<'_> {
     ///
     /// Panics when the control is not a field.
     pub fn required(&mut self, on: bool) -> &mut Self {
-        let mtm = self.ui.mtm;
+        let (mtm, node) = (self.ui.mtm, self.node);
         let field = self.field_mut();
         if field.required == on {
             return self;
@@ -188,7 +191,7 @@ impl Response<'_> {
         // `set_header` reads the text from an argument, so the field's own
         // copy moves out; `set_header` writes it back.
         let text = std::mem::take(&mut field.header_text);
-        field.set_header(mtm, &text, on);
+        field.set_header(node, mtm, &text, on);
         self
     }
 
@@ -199,9 +202,10 @@ impl Response<'_> {
     ///
     /// Panics when the control is not a field.
     pub fn error(&mut self, message: Option<&str>) -> &mut Self {
-        let mtm = self.ui.mtm;
+        let (mtm, node) = (self.ui.mtm, self.node);
         let line = self.field_mut().error_line(mtm);
         if line.message.as_deref() != message {
+            crate::write_check::record(node);
             line.message = message.map(str::to_owned);
             line.render();
         }
@@ -212,9 +216,10 @@ impl Response<'_> {
     ///
     /// Panics when the control is not a field.
     pub fn hint(&mut self, text: &str) -> &mut Self {
-        let mtm = self.ui.mtm;
+        let (mtm, node) = (self.ui.mtm, self.node);
         let line = self.field_mut().error_line(mtm);
         if line.hint != text {
+            crate::write_check::record(node);
             line.hint.clear();
             line.hint.push_str(text);
             line.render();

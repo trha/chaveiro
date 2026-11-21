@@ -64,7 +64,7 @@ impl Ui {
         else {
             unreachable!("text field keys hold text fields")
         };
-        if must_write(stale, written_placeholder.as_str(), placeholder) {
+        if must_write(node, stale, written_placeholder.as_str(), placeholder) {
             field.setPlaceholderString(Some(&NSString::from_str(placeholder)));
             written_placeholder.clear();
             written_placeholder.push_str(placeholder);
@@ -78,7 +78,7 @@ impl Ui {
                 *text = current;
                 changed = true;
             }
-        } else if must_write(stale, text.as_str(), value.as_str()) {
+        } else if must_write(node, stale, text.as_str(), value.as_str()) {
             // `setStringValue` during an edit keeps the caret and selection
             // (measured by `tools/smoke.sh`), but it would replace an open
             // composition's marked text, so that write waits.

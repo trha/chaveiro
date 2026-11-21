@@ -61,7 +61,7 @@ impl Ui {
         else {
             unreachable!("secure text field keys hold secure text fields")
         };
-        if must_write(stale, written.as_str(), placeholder) {
+        if must_write(node, stale, written.as_str(), placeholder) {
             field.setPlaceholderString(Some(&NSString::from_str(placeholder)));
             written.clear();
             written.push_str(placeholder);

@@ -69,6 +69,7 @@ impl Ui {
                 .map(String::as_str)
                 .ne(items.iter().copied())
         {
+            crate::write_check::record(node);
             combo_box.removeAllItems();
             let values: Vec<Retained<NSString>> =
                 items.iter().map(|item| NSString::from_str(item)).collect();
@@ -87,7 +88,7 @@ impl Ui {
                 *written = current;
                 changed = true;
             }
-        } else if must_write(stale, written.as_str(), text.as_str()) {
+        } else if must_write(node, stale, written.as_str(), text.as_str()) {
             combo_box.setStringValue(&NSString::from_str(text));
             written.clone_from(text);
         }

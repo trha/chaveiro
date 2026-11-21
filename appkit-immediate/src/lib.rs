@@ -10,6 +10,7 @@ mod pass;
 mod runner;
 mod tree;
 mod widget;
+mod write_check;
 
 pub use mailbox::Handle;
 pub use pass::Ui;

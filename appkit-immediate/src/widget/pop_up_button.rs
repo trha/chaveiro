@@ -69,6 +69,7 @@ impl Ui {
                 .map(String::as_str)
                 .ne(items.iter().copied())
         {
+            crate::write_check::record(node);
             button.removeAllItems();
             let titles: Vec<Retained<NSString>> =
                 items.iter().map(|item| NSString::from_str(item)).collect();
@@ -93,7 +94,7 @@ impl Ui {
             .ok()
             .filter(|index| (*index as usize) < items.len())
             .unwrap_or(-1);
-        if must_write(stale, written_selected, &declared) {
+        if must_write(node, stale, written_selected, &declared) {
             button.selectItemAtIndex(declared);
             *written_selected = declared;
         }

@@ -201,6 +201,7 @@ impl Ui {
                 if window.content == content {
                     return;
                 }
+                crate::write_check::record(node);
                 window.content = content;
                 if let Some(old) = window.pinned.take() {
                     old.removeFromSuperview();
@@ -236,6 +237,7 @@ impl Ui {
                 if *content == declared_content {
                     return;
                 }
+                crate::write_check::record(node);
                 let old = std::mem::replace(content, declared_content);
                 NSLayoutConstraint::deactivateConstraints(&NSArray::from_retained_slice(
                     &std::mem::take(pins),
@@ -275,6 +277,7 @@ impl Ui {
                 if *placed && declared == visual {
                     return;
                 }
+                crate::write_check::record(node);
                 let container = container.clone();
                 let rules = grid_rules(rows, visual.len());
                 NSLayoutConstraint::deactivateConstraints(&NSArray::from_retained_slice(
@@ -355,6 +358,7 @@ impl Ui {
                 let changes: Vec<Edit> =
                     edits(declared, self.control(node).visual.as_slice()).collect();
                 for edit in changes {
+                    crate::write_check::record(node);
                     match edit {
                         Edit::RemoveAt(index) => {
                             let view = stack.arrangedSubviews().objectAtIndex(index as usize);
@@ -377,6 +381,7 @@ impl Ui {
                 for position in 0..self.control(node).visual.len() {
                     let child = self.control(node).visual[position];
                     if self.control(child).cross_stale {
+                        crate::write_check::record(child);
                         let child = self.control_mut(child);
                         child.cross_stale = false;
                         NSLayoutConstraint::deactivateConstraints(&NSArray::from_retained_slice(
