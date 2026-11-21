@@ -1,4 +1,4 @@
-use super::{Control, Response};
+use super::{Control, Response, must_write};
 use crate::pass::{ChildKind, ControlNode, Ui};
 use objc2::rc::Retained;
 use objc2_app_kit::NSTextField;
@@ -27,10 +27,11 @@ impl Ui {
         let crate::pass::Payload::Control(control) = &mut tree.node_mut(node).payload else {
             unreachable!("label keys hold labels")
         };
+        let stale = std::mem::take(&mut control.stale);
         let Control::Label { field, text } = &mut control.control else {
             unreachable!("label keys hold labels")
         };
-        if text != scratch {
+        if must_write(stale, text, scratch) {
             field.setStringValue(&NSString::from_str(scratch));
             text.clone_from(scratch);
         }

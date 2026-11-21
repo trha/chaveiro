@@ -4,14 +4,16 @@ use crate::{
     tree::{NodeId, Visit},
 };
 use objc2::{MainThreadOnly, runtime::ProtocolObject};
-use objc2_app_kit::{NSBackingStoreType, NSWindow, NSWindowStyleMask};
+use objc2_app_kit::{NSBackingStoreType, NSView, NSWindow, NSWindowStyleMask};
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
 use std::hash::Hash;
 
 impl Ui {
     /// A top-level window titled `title`, holding the one control `body`
-    /// declares. A window opens on the first pass that declares it and
-    /// closes on the first pass that does not.
+    /// declares, which fills it. A window opens on the first pass that
+    /// declares it, sized to its content but at least 360×200 points, and
+    /// closes on the first pass that does not. The user cannot shrink it
+    /// below its content.
     pub fn window(
         &mut self,
         id: impl Hash,
@@ -33,9 +35,14 @@ impl Ui {
             };
             // `Retained` owns the window; AppKit must not release it again.
             unsafe { window.setReleasedWhenClosed(false) };
+            let container = NSView::new(mtm);
+            window.setContentView(Some(&container));
             Payload::Window(WindowNode {
                 window,
+                container,
                 content: None,
+                pinned: None,
+                pins: Vec::new(),
                 title: String::new(),
             })
         });
@@ -58,9 +65,16 @@ impl Ui {
         body(self);
         self.close();
         if visit == Visit::Created {
-            let window = &self.window_mut(node).window;
-            window.center();
-            window.makeKeyAndOrderFront(None);
+            // Shown only now, at the size its content asks for, so the user
+            // never sees an empty or resized window.
+            let window = self.window_mut(node);
+            let fitting = window.container.fittingSize();
+            window.window.setContentSize(NSSize::new(
+                fitting.width.max(MINIMUM.width),
+                fitting.height.max(MINIMUM.height),
+            ));
+            window.window.center();
+            window.window.makeKeyAndOrderFront(None);
         }
         WindowResponse {
             should_close: self.events.happened(node, EventKind::ShouldClose),
@@ -74,6 +88,9 @@ impl Ui {
         }
     }
 }
+
+/// The smallest content size a new window opens at, in points.
+const MINIMUM: NSSize = NSSize::new(360.0, 200.0);
 
 /// What [`Ui::window`] returns.
 pub struct WindowResponse {

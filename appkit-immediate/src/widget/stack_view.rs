@@ -1,4 +1,4 @@
-use super::{Control, Response};
+use super::{Control, Response, must_write};
 use crate::pass::{ChildKind, ControlNode, Ui};
 use objc2::rc::Retained;
 use objc2_app_kit::{NSStackView, NSUserInterfaceLayoutOrientation};
@@ -31,22 +31,24 @@ impl Ui {
                 },
             )
         });
+        let control = self.control_mut(node);
+        let stale = std::mem::take(&mut control.stale);
         let Control::Stack {
             stack,
             orientation: written_orientation,
             spacing: written_spacing,
-        } = &mut self.control_mut(node).control
+        } = &mut control.control
         else {
             unreachable!("stack keys hold stacks")
         };
-        if *written_orientation != Some(orientation) {
+        if must_write(stale, written_orientation, &Some(orientation)) {
             stack.setOrientation(match orientation {
                 Orientation::Vertical => NSUserInterfaceLayoutOrientation::Vertical,
                 Orientation::Horizontal => NSUserInterfaceLayoutOrientation::Horizontal,
             });
             *written_orientation = Some(orientation);
         }
-        if *written_spacing != spacing {
+        if must_write(stale, written_spacing, &spacing) {
             stack.setSpacing(spacing);
             *written_spacing = spacing;
         }

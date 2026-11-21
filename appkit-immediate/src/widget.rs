@@ -20,8 +20,9 @@ pub use window::WindowResponse;
 /// Access to the view a widget declared, for what the widget does not cover.
 ///
 /// A property this crate manages (a label's text, a stack's spacing) is
-/// written again only when its declared value changes, so a value written
-/// here may be overwritten or kept depending on later declarations.
+/// written again only when its declared value changes. After writing one
+/// through [`view`](Self::view), call [`invalidate`](Self::invalidate), or
+/// the next change back to the old value is skipped.
 pub struct Response<'u> {
     pub(crate) ui: &'u mut Ui,
     pub(crate) node: NodeId,
@@ -32,6 +33,18 @@ impl Response<'_> {
     pub fn view(&self) -> Retained<NSView> {
         self.ui.control(self.node).view.clone()
     }
+
+    /// Makes the next pass write every managed property of this view, such
+    /// as after writing one of them through [`view`](Self::view).
+    pub fn invalidate(&mut self) {
+        self.ui.control_mut(self.node).stale = true;
+    }
+}
+
+/// Whether a managed value must be written: the control is stale, or the
+/// declared value differs from the last one written.
+fn must_write<T: ?Sized + PartialEq>(stale: bool, written: &T, declared: &T) -> bool {
+    stale || written != declared
 }
 
 /// The concrete view behind a node, with the values this layer last wrote.

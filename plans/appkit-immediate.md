@@ -496,7 +496,11 @@ The main agent owns every step, one at a time, because all steps edit
    id the example prints. The panic check runs on pass 2, because the
    smoke app has no third pass without input.
 3. `Response::invalidate`, `stale` and `must_write`; `translatesAutoresizing…`
-   off; window sized to fit. Runs test 4.
+   off; window sized to fit. Runs test 4. Done (2026-11-21): a window's
+   content view is a plain container with the body pinned to its edges, so
+   `fittingSize` works and the window cannot shrink below its content.
+   `tools/smoke.sh` passes 13 checks, including the 360×200 minimum.
+   `invalidate` has no UI check yet; step 5's text field tests use it.
 4. Grid: `rules` with its property tests, the `Control::Grid` arm in
    `apply_visual`. Runs test 3 and a smoke grid with Auto, Pixels and Star
    rows.

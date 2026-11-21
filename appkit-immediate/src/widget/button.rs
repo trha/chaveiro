@@ -1,4 +1,4 @@
-use super::{Control, Response};
+use super::{Control, Response, must_write};
 use crate::{
     events::EventKind,
     pass::{ChildKind, ControlNode, Ui},
@@ -39,14 +39,16 @@ impl Ui {
                 button.setAction(Some(sel!(fire:)));
             }
         }
+        let control = self.control_mut(node);
+        let stale = std::mem::take(&mut control.stale);
         let Control::Button {
             button,
             label: written,
-        } = &mut self.control_mut(node).control
+        } = &mut control.control
         else {
             unreachable!("button keys hold buttons")
         };
-        if written != label {
+        if must_write(stale, written.as_str(), label) {
             button.setTitle(&NSString::from_str(label));
             written.clear();
             written.push_str(label);

@@ -8,7 +8,8 @@ use crate::{
     widget::Control,
 };
 use objc2::{MainThreadMarker, rc::Retained, runtime::ProtocolObject};
-use objc2_app_kit::{NSApplication, NSView, NSWindow};
+use objc2_app_kit::{NSApplication, NSLayoutConstraint, NSView, NSWindow};
+use objc2_foundation::NSArray;
 use std::{hash::Hash, rc::Rc};
 
 /// Builds the UI. The app gets it in [`App::view`](crate::App::view).
@@ -160,11 +161,36 @@ impl Ui {
                     return;
                 }
                 window.content = content;
-                let window = window.window.clone();
-                match content {
-                    Some(content) => window.setContentView(Some(&self.control(content).view)),
-                    None => window.setContentView(None),
+                if let Some(old) = window.pinned.take() {
+                    old.removeFromSuperview();
                 }
+                NSLayoutConstraint::deactivateConstraints(&NSArray::from_retained_slice(
+                    &std::mem::take(&mut window.pins),
+                ));
+                let container = window.container.clone();
+                let Some(content) = content else {
+                    return;
+                };
+                let view = self.control(content).view.clone();
+                container.addSubview(&view);
+                // The content fills the window, and its size bounds the
+                // window's, so a window cannot shrink below its content.
+                let pins = vec![
+                    view.leadingAnchor()
+                        .constraintEqualToAnchor(&container.leadingAnchor()),
+                    view.trailingAnchor()
+                        .constraintEqualToAnchor(&container.trailingAnchor()),
+                    view.topAnchor()
+                        .constraintEqualToAnchor(&container.topAnchor()),
+                    view.bottomAnchor()
+                        .constraintEqualToAnchor(&container.bottomAnchor()),
+                ];
+                NSLayoutConstraint::activateConstraints(&NSArray::from_retained_slice(&pins));
+                let Payload::Window(window) = &mut self.tree.node_mut(node).payload else {
+                    unreachable!("matched above")
+                };
+                window.pins = pins;
+                window.pinned = Some(view);
             }
             Payload::Control(control) => {
                 let Control::Stack { stack, .. } = &control.control else {
@@ -205,10 +231,18 @@ pub(crate) enum Payload {
     Control(ControlNode),
 }
 
+/// Contract: `pinned` is the view of `content`, a subview of `container`,
+/// and `pins` are the active constraints that tie it to `container`'s
+/// edges; all three are empty together.
 pub(crate) struct WindowNode {
     pub(crate) window: Retained<NSWindow>,
-    /// The control set as the content view.
+    /// The window's content view, which keeps its autoresizing mask so the
+    /// window sizes it.
+    pub(crate) container: Retained<NSView>,
+    /// The control declared as the window's body.
     pub(crate) content: Option<NodeId>,
+    pub(crate) pinned: Option<Retained<NSView>>,
+    pub(crate) pins: Vec<Retained<NSLayoutConstraint>>,
     /// The title last written.
     pub(crate) title: String,
 }
@@ -218,15 +252,22 @@ pub(crate) struct ControlNode {
     pub(crate) control: Control,
     /// AppKit children as last applied (stacks only).
     pub(crate) visual: Vec<NodeId>,
+    /// Set by [`Response::invalidate`](crate::Response::invalidate): the next
+    /// pass writes every managed property, then clears it.
+    pub(crate) stale: bool,
 }
 
 impl ControlNode {
     /// A control node, wrapped as the payload the tree stores.
+    /// Turns off the view's autoresizing mask, because its container places
+    /// it with constraints.
     pub(crate) fn payload(view: Retained<NSView>, control: Control) -> Payload {
+        view.setTranslatesAutoresizingMaskIntoConstraints(false);
         Payload::Control(ControlNode {
             view,
             control,
             visual: Vec::new(),
+            stale: false,
         })
     }
 }
