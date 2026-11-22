@@ -2,10 +2,11 @@ use super::{Control, Response, must_write};
 use crate::{
     App,
     events::EventKind,
-    pass::{ChildKind, ControlNode, Payload, Ui},
+    pass::{ChildKind, ControlNode, NativeNode, Payload, Ui},
     tree::{Key, NodeId, Visit},
 };
 use ahash::AHashMap;
+use immediate_tree::Node;
 use objc2::{
     MainThreadMarker, MainThreadOnly, define_class, msg_send, rc::Retained, runtime::ProtocolObject,
 };
@@ -181,7 +182,7 @@ impl Ui {
         // AppKit asks between passes, so the last pass's stamps are still
         // current; a reused row's controls carry them. A fresh pass number
         // lets the row be built again.
-        self.tree.begin_pass();
+        self.core.tree.begin_pass();
         let (node, slot) = match self.table_data_mut(table).free.pop() {
             Some(free) => free,
             None => {
@@ -191,7 +192,7 @@ impl Ui {
                 let shell: Retained<RowShell> =
                     unsafe { msg_send![RowShell::alloc(self.mtm), init] };
                 let shell = shell.into_super().into_super();
-                let key = Key::child(self.tree.node(table).key(), ("row", slot));
+                let key = Key::child(self.core.tree.node(table).key(), ("row", slot));
                 let Payload::Control(row) = ControlNode::payload(
                     shell.clone(),
                     Control::Row {
@@ -204,7 +205,14 @@ impl Ui {
                 };
                 // The table sizes the cell with its autoresizing mask.
                 row.view.setTranslatesAutoresizingMaskIntoConstraints(true);
-                (self.tree.adopt(table, key, Payload::Control(row)), slot)
+                (
+                    self.core.tree.adopt(
+                        table,
+                        key,
+                        Node::Native(NativeNode(Payload::Control(row))),
+                    ),
+                    slot,
+                )
             }
         };
         self.build_row(table, node, index, app);
@@ -231,22 +239,22 @@ impl Ui {
     /// Whether `table` is still a live table view, for calls AppKit makes
     /// after a pass dropped it, and the row index it may show.
     pub(crate) fn table_len(&self, table: NodeId) -> Option<usize> {
-        match self.tree.get(table).map(|node| &node.payload) {
-            Some(Payload::Control(ControlNode {
+        match self.core.tree.get(table).map(|node| &node.payload) {
+            Some(Node::Native(NativeNode(Payload::Control(ControlNode {
                 control: Control::TableView { data, .. },
                 ..
-            })) => Some(data.len),
+            })))) => Some(data.len),
             _ => None,
         }
     }
 
     /// The table view of the node `table`, while it is live.
     pub(crate) fn table_of(&self, table: NodeId) -> Option<Retained<NSTableView>> {
-        match self.tree.get(table).map(|node| &node.payload) {
-            Some(Payload::Control(ControlNode {
+        match self.core.tree.get(table).map(|node| &node.payload) {
+            Some(Node::Native(NativeNode(Payload::Control(ControlNode {
                 control: Control::TableView { table, .. },
                 ..
-            })) => Some(table.clone()),
+            })))) => Some(table.clone()),
             _ => None,
         }
     }

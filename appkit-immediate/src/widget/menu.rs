@@ -8,7 +8,7 @@
 use super::{Control, Response, must_write};
 use crate::{
     events::EventKind,
-    pass::{ChildKind, MenuItemNode, MenuNode, Payload, Ui},
+    pass::{ChildKind, MenuItemNode, MenuNode, NativeTree, Payload, Ui},
     tree::{NodeId, Visit},
 };
 use objc2::{MainThreadOnly, rc::Retained, runtime::ProtocolObject, sel};
@@ -121,14 +121,14 @@ impl Ui {
     }
 
     fn menu_node(&mut self, node: NodeId) -> &mut MenuNode {
-        match &mut self.tree.node_mut(node).payload {
+        match self.core.tree.native_mut(node) {
             Payload::Menu(menu) => menu,
             _ => unreachable!("menu keys hold menus"),
         }
     }
 
     fn menu_item_node(&mut self, node: NodeId) -> &mut MenuItemNode {
-        match &mut self.tree.node_mut(node).payload {
+        match self.core.tree.native_mut(node) {
             Payload::MenuItem(item) => item,
             _ => unreachable!("menu item keys hold menu items"),
         }
@@ -148,11 +148,11 @@ impl Ui {
         // Menus change rarely and hold few items, so all are set again. A
         // probe may still hold the items of the menu it showed before.
         menu.removeAllItems();
-        let Payload::Menu(MenuNode { items, .. }) = &self.tree.node(node).payload else {
+        let Payload::Menu(MenuNode { items, .. }) = self.core.tree.native(node) else {
             unreachable!("matched above")
         };
         for &child in items {
-            let Payload::MenuItem(item) = &self.tree.node(child).payload else {
+            let Payload::MenuItem(item) = self.core.tree.native(child) else {
                 unreachable!("a menu holds menu items")
             };
             menu.addItem(&item.item);

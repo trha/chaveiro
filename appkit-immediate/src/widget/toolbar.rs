@@ -1,7 +1,7 @@
 use super::{Control, must_write};
 use crate::{
     events::{Command, EventKind},
-    pass::{ChildKind, Payload, ToolbarItemNode, ToolbarNode, Ui},
+    pass::{ChildKind, NativeTree, Payload, ToolbarItemNode, ToolbarNode, Ui},
     tree::{NodeId, Visit},
 };
 use objc2::{
@@ -26,7 +26,7 @@ impl Ui {
     ///
     /// Panics outside a window's body.
     pub fn toolbar(&mut self, body: impl FnOnce(&mut Ui)) {
-        let window = match &self.tree.node(self.container()).payload {
+        let window = match self.core.tree.native(self.container()) {
             Payload::Window(window) => window.window.clone(),
             _ => panic!("a toolbar is declared in a window's body"),
         };
@@ -49,7 +49,7 @@ impl Ui {
             })
         });
         if visit == Visit::Created {
-            let Payload::Toolbar(toolbar) = &self.tree.node(node).payload else {
+            let Payload::Toolbar(toolbar) = self.core.tree.native(node) else {
                 unreachable!("toolbar keys hold toolbars")
             };
             // AppKit holds the delegate weakly; the node keeps it.
@@ -334,7 +334,7 @@ impl Ui {
     }
 
     fn toolbar_item_node(&mut self, node: NodeId) -> &mut ToolbarItemNode {
-        match &mut self.tree.node_mut(node).payload {
+        match self.core.tree.native_mut(node) {
             Payload::ToolbarItem(item) => item,
             _ => unreachable!("toolbar item keys hold toolbar items"),
         }
@@ -343,12 +343,12 @@ impl Ui {
     /// Makes the items `declared` the toolbar's, in order, for the toolbar
     /// node `node`. Leaves the previous list in `declared`.
     pub(crate) fn apply_toolbar(&mut self, node: NodeId, declared: &mut Vec<NodeId>) {
-        let Payload::Toolbar(toolbar) = &mut self.tree.node_mut(node).payload else {
+        let Payload::Toolbar(toolbar) = self.core.tree.native_mut(node) else {
             unreachable!("toolbar keys hold toolbars")
         };
         // Afterwards `declared` holds the old list.
         std::mem::swap(&mut toolbar.items, declared);
-        let changes: Vec<_> = crate::children::edits(declared, &toolbar.items).collect();
+        let changes: Vec<_> = immediate_tree::edits(declared, &toolbar.items).collect();
         if changes.is_empty() {
             return;
         }
@@ -356,7 +356,7 @@ impl Ui {
         let bar = toolbar.toolbar.clone();
         let source = toolbar.source.clone();
         let items = toolbar.items.clone();
-        let item_of = |ui: &Ui, child: NodeId| match &ui.tree.node(child).payload {
+        let item_of = |ui: &Ui, child: NodeId| match ui.core.tree.native(child) {
             Payload::ToolbarItem(item) => (item.identifier.clone(), item.item.clone()),
             _ => unreachable!("a toolbar holds toolbar items"),
         };
@@ -370,8 +370,8 @@ impl Ui {
             .collect();
         for change in changes {
             match change {
-                crate::children::Edit::RemoveAt(index) => bar.removeItemAtIndex(index as _),
-                crate::children::Edit::InsertAt(index, child) => {
+                immediate_tree::Edit::RemoveAt(index) => bar.removeItemAtIndex(index as _),
+                immediate_tree::Edit::InsertAt(index, child) => {
                     let (identifier, _) = item_of(self, child);
                     bar.insertItemWithItemIdentifier_atIndex(&identifier, index as _);
                 }

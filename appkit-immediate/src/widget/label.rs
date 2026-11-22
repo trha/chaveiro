@@ -1,5 +1,5 @@
 use super::{Control, Response, must_write};
-use crate::pass::{ChildKind, ControlNode, Ui};
+use crate::pass::{ChildKind, ControlNode, NativeTree, Ui};
 use objc2::rc::Retained;
 use objc2_app_kit::{NSLineBreakMode, NSTextField};
 use objc2_foundation::NSString;
@@ -27,8 +27,8 @@ impl Ui {
                 },
             )
         });
-        let Ui { tree, scratch, .. } = self;
-        let crate::pass::Payload::Control(control) = &mut tree.node_mut(node).payload else {
+        let Ui { core, scratch, .. } = self;
+        let crate::pass::Payload::Control(control) = core.tree.native_mut(node) else {
             unreachable!("label keys hold labels")
         };
         let stale = std::mem::take(&mut control.stale);

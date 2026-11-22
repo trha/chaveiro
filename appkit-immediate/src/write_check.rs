@@ -9,10 +9,11 @@
 //! release builds the functions here do nothing and no hook goes in.
 
 use crate::{
-    pass::{Payload, Ui},
+    pass::{NativeNode, Payload, Ui},
     tree::NodeId,
 };
 use ahash::AHashMap;
+use immediate_tree::Node;
 use objc2::{
     ClassType, Message,
     ffi::{class_addMethod, method_getTypeEncoding},
@@ -369,46 +370,49 @@ impl Ui {
         // Each node's path, and the node behind each view and window.
         let mut paths = AHashMap::new();
         let mut owners = AHashMap::new();
-        let mut stack = vec![(self.tree.root(), String::new())];
+        let mut stack = vec![(self.core.tree.root(), String::new())];
         while let Some((id, path)) = stack.pop() {
-            for (index, child) in self.tree.children(id).iter().enumerate() {
-                let node = self.tree.node(*child);
+            for (index, child) in self.core.tree.children(id).iter().enumerate() {
+                let node = self.core.tree.node(*child);
                 let kind = match &node.payload {
-                    Payload::Root => "root",
-                    Payload::Window(window) => {
-                        owners.insert(Retained::as_ptr(&window.window).addr(), *child);
-                        owners.insert(Retained::as_ptr(&window.container).addr(), *child);
-                        "window"
-                    }
-                    Payload::Control(control) => {
-                        owners.insert(Retained::as_ptr(&control.view).addr(), *child);
-                        if let Some(inner) = control.control.as_control() {
-                            owners.insert(Retained::as_ptr(&inner).addr(), *child);
+                    Node::Root => "root",
+                    Node::Cache(_) => "cached",
+                    Node::Task(_) => "task",
+                    Node::Stream(_) => "stream",
+                    Node::State(_) => "state",
+                    Node::Flow(_) => "flow",
+                    Node::Native(NativeNode(native)) => match native {
+                        Payload::Window(window) => {
+                            owners.insert(Retained::as_ptr(&window.window).addr(), *child);
+                            owners.insert(Retained::as_ptr(&window.container).addr(), *child);
+                            "window"
                         }
-                        control.control.kind()
-                    }
-                    Payload::Cache(_) => "cached",
-                    Payload::Task(_) => "task",
-                    Payload::Stream(_) => "stream",
-                    Payload::State(_) => "state",
-                    Payload::Toolbar(toolbar) => {
-                        owners.insert(Retained::as_ptr(&toolbar.toolbar).addr(), *child);
-                        "toolbar"
-                    }
-                    Payload::ToolbarItem(item) => {
-                        if let Some(item) = &item.item {
-                            owners.insert(Retained::as_ptr(item).addr(), *child);
+                        Payload::Control(control) => {
+                            owners.insert(Retained::as_ptr(&control.view).addr(), *child);
+                            if let Some(inner) = control.control.as_control() {
+                                owners.insert(Retained::as_ptr(&inner).addr(), *child);
+                            }
+                            control.control.kind()
                         }
-                        "toolbar_item"
-                    }
-                    Payload::Menu(menu) => {
-                        owners.insert(Retained::as_ptr(&menu.menu).addr(), *child);
-                        "menu"
-                    }
-                    Payload::MenuItem(item) => {
-                        owners.insert(Retained::as_ptr(&item.item).addr(), *child);
-                        "menu_item"
-                    }
+                        Payload::Toolbar(toolbar) => {
+                            owners.insert(Retained::as_ptr(&toolbar.toolbar).addr(), *child);
+                            "toolbar"
+                        }
+                        Payload::ToolbarItem(item) => {
+                            if let Some(item) = &item.item {
+                                owners.insert(Retained::as_ptr(item).addr(), *child);
+                            }
+                            "toolbar_item"
+                        }
+                        Payload::Menu(menu) => {
+                            owners.insert(Retained::as_ptr(&menu.menu).addr(), *child);
+                            "menu"
+                        }
+                        Payload::MenuItem(item) => {
+                            owners.insert(Retained::as_ptr(&item.item).addr(), *child);
+                            "menu_item"
+                        }
+                    },
                 };
                 let child_path = if path.is_empty() {
                     format!("{kind}[{index}]")

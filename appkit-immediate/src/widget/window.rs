@@ -1,8 +1,9 @@
 use crate::{
     events::EventKind,
-    pass::{ChildKind, Payload, Ui, WindowNode},
+    pass::{ChildKind, NativeNode, NativeTree, Payload, Ui, WindowNode},
     tree::{NodeId, Visit},
 };
+use immediate_tree::Node;
 use objc2::{MainThreadOnly, runtime::ProtocolObject};
 use objc2_app_kit::{
     NSBackingStoreType, NSGlassEffectView, NSView, NSVisualEffectBlendingMode,
@@ -58,7 +59,7 @@ impl Ui {
             })
         });
         if visit == Visit::Created {
-            let Payload::Window(window) = &self.tree.node(node).payload else {
+            let Payload::Window(window) = self.core.tree.native(node) else {
                 unreachable!("window keys hold windows")
             };
             self.events.register(&window.window, node);
@@ -90,7 +91,8 @@ impl Ui {
     pub(crate) fn show_new_windows(&mut self) {
         for node in self.new_windows.drain(..) {
             // A window created and dropped in the same pass is gone.
-            let Some(Payload::Window(window)) = self.tree.get(node).map(|node| &node.payload)
+            let Some(Node::Native(NativeNode(Payload::Window(window)))) =
+                self.core.tree.get(node).map(|node| &node.payload)
             else {
                 continue;
             };
@@ -107,7 +109,7 @@ impl Ui {
     }
 
     pub(crate) fn window_mut(&mut self, node: NodeId) -> &mut WindowNode {
-        match &mut self.tree.node_mut(node).payload {
+        match self.core.tree.native_mut(node) {
             Payload::Window(window) => window,
             _ => unreachable!("window keys hold windows"),
         }

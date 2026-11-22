@@ -1,8 +1,5 @@
-use crate::{
-    pass::{CacheNode, ChildKind, Payload, Ui},
-    tree::{NodeId, Visit},
-};
-use std::{any::Any, hash::Hash};
+use crate::pass::Ui;
+use std::hash::Hash;
 
 impl Ui {
     /// Runs `body` only when `deps` differs from the value of the last run,
@@ -19,29 +16,10 @@ impl Ui {
         deps: D,
         body: impl FnOnce(&mut Ui),
     ) {
-        let (node, visit) = self.visit(id, ChildKind::Logical, |_| {
-            Payload::Cache(CacheNode {
-                deps: None,
-                emitted: Vec::new(),
-            })
+        let Ok(()) = immediate_tree::cache(self, id, deps, |ui| {
+            body(ui);
+            Ok(())
         });
-        let event = self.tree.has_event(node);
-        let cache = self.cache_mut(node);
-        let stored = cache
-            .deps
-            .as_mut()
-            .and_then(|stored| stored.downcast_mut::<D>());
-        if visit == Visit::Existing && !event && stored.as_deref() == Some(&deps) {
-            self.emit_cached(node);
-            return;
-        }
-        match stored {
-            Some(stored) => *stored = deps,
-            None => cache.deps = Some(Box::new(deps)),
-        }
-        self.open(node);
-        body(self);
-        self.close();
     }
 
     /// UI-only state that lives while each pass declares `id` here: an
@@ -67,26 +45,6 @@ impl Ui {
     ///
     /// Panics when the same `id` held state of another type.
     pub fn state<T: 'static>(&mut self, id: impl Hash, init: impl FnOnce() -> T) -> &mut T {
-        let (node, _) = self.visit(id, ChildKind::Logical, |_| Payload::State(Box::new(init())));
-        self.state_mut(node)
-            .downcast_mut::<T>()
-            .expect("an id keeps one state type")
-    }
-
-    fn cache_mut(&mut self, node: NodeId) -> &mut CacheNode {
-        match &mut self.tree.node_mut(node).payload {
-            Payload::Cache(cache) => cache,
-            _ => unreachable!("cache keys hold caches"),
-        }
-    }
-
-    fn state_mut(&mut self, node: NodeId) -> &mut Box<dyn Any> {
-        match &mut self.tree.node_mut(node).payload {
-            Payload::State(state) => state,
-            _ => unreachable!("state keys hold state"),
-        }
+        self.core.state(id, init)
     }
 }
-
-#[cfg(test)]
-mod tests;
