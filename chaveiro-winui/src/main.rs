@@ -139,6 +139,10 @@ impl App for Chaveiro {
             if route == Route::Vault {
                 self.vault.reset();
             }
+            // Leaving the vault means it locked or logged out.
+            if self.route == Route::Vault {
+                self.io.clear_clipboard();
+            }
             self.slide = self.route.slide_to(route);
             self.route = route;
         }

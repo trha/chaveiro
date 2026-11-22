@@ -1,3 +1,6 @@
-Microsoft.UI.Dispatching.DispatcherQueue::{GetForCurrentThread, TryEnqueue}
+Microsoft.UI.Dispatching.DispatcherQueue::{GetForCurrentThread, TryEnqueue, CreateTimer}
 Microsoft.UI.Dispatching.IDispatcherQueueStatics::GetForCurrentThread
 Microsoft.UI.Dispatching.DispatcherQueueHandler
+Microsoft.UI.Dispatching.DispatcherQueueTimer::{put_Interval, put_IsRepeating, add_Tick, remove_Tick, Start, Stop}
+Windows.Foundation.TypedEventHandler
+Windows.Foundation.TimeSpan

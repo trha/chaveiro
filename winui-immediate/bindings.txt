@@ -213,7 +213,7 @@ Microsoft.UI.Xaml.Controls.Primitives.FlyoutBase::{ShowAt, Hide, add_Closed, rem
 Microsoft.UI.Xaml.Controls.Primitives.FlyoutShowOptions::{put_Position, put_Placement}
 Microsoft.UI.Xaml.Controls.Primitives.IFlyoutShowOptionsFactory::CreateInstance
 Microsoft.UI.Xaml.Controls.Primitives.FlyoutPlacementMode
-Microsoft.UI.Xaml.Controls.MenuFlyoutItem::{put_Text, put_Icon, add_Click, remove_Click}
+Microsoft.UI.Xaml.Controls.MenuFlyoutItem::{put_Text, put_Icon, put_KeyboardAcceleratorTextOverride, add_Click, remove_Click}
 Microsoft.UI.Xaml.Controls.IMenuFlyoutItemFactory::CreateInstance
 Microsoft.UI.Xaml.Controls.ToggleMenuFlyoutItem::{get_IsChecked, put_IsChecked}
 Microsoft.UI.Xaml.Controls.IToggleMenuFlyoutItemFactory::CreateInstance

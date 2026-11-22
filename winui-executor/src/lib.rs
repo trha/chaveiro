@@ -9,17 +9,19 @@
 
 mod bindings;
 
-use bindings::{DispatcherQueue, DispatcherQueueHandler};
+use bindings::{DispatcherQueue, DispatcherQueueHandler, DispatcherQueueTimer, TimeSpan};
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     future::Future,
     marker::PhantomData,
     pin::Pin,
+    rc::Rc,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
     },
-    task::{Context, Wake, Waker},
+    task::{Context, Poll, Wake, Waker},
+    time::Duration,
 };
 
 /// Runs `future` on this thread's `DispatcherQueue`. The first poll happens
@@ -65,6 +67,98 @@ pub fn spawn(future: impl 'static + Future<Output = ()>) -> SpawnHandle {
         index,
         generation,
         thread_bound: PhantomData,
+    }
+}
+
+/// A future that is ready once `duration` has passed, timed by this
+/// thread's `DispatcherQueue`, so no thread waits. The time starts at the
+/// first poll. Dropping it stops the timer.
+///
+/// Poll it only on a thread with a `DispatcherQueue`, such as inside a
+/// task from [`spawn`]. A timer that fails to start makes it ready at once.
+pub fn sleep(duration: Duration) -> Sleep {
+    Sleep {
+        duration,
+        timer: None,
+    }
+}
+
+/// The future of [`sleep`].
+#[must_use = "a sleep does nothing unless awaited"]
+pub struct Sleep {
+    duration: Duration,
+    /// Made at the first poll.
+    timer: Option<Timer>,
+}
+
+struct Timer {
+    timer: DispatcherQueueTimer,
+    /// Removes the tick handler when dropped.
+    _tick: windows_core::EventRevoker,
+    /// The tick fired.
+    fired: Rc<Cell<bool>>,
+    /// The waker of the last poll, for the tick.
+    waker: Rc<RefCell<Option<Waker>>>,
+}
+
+impl Sleep {
+    fn start(&self) -> windows_core::Result<Timer> {
+        let queue = DispatcherQueue::GetForCurrentThread()?;
+        let timer = queue.CreateTimer()?;
+        timer.SetInterval(TimeSpan {
+            // A TimeSpan counts 100 ns units.
+            duration: i64::try_from(self.duration.as_nanos() / 100).unwrap_or(i64::MAX),
+        })?;
+        timer.SetIsRepeating(false)?;
+        let fired = Rc::new(Cell::new(false));
+        let waker = Rc::new(RefCell::new(None::<Waker>));
+        let tick = timer.Tick({
+            let (fired, waker) = (Rc::clone(&fired), Rc::clone(&waker));
+            move |_, _| {
+                fired.set(true);
+                if let Some(waker) = waker.borrow_mut().take() {
+                    waker.wake();
+                }
+            }
+        })?;
+        timer.Start()?;
+        Ok(Timer {
+            timer,
+            _tick: tick,
+            fired,
+            waker,
+        })
+    }
+}
+
+impl Future for Sleep {
+    type Output = ();
+
+    fn poll(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<()> {
+        if self.timer.is_none() {
+            match self.start() {
+                Ok(timer) => self.timer = Some(timer),
+                Err(error) => {
+                    // Waiting forever would hang the task, so it goes on now.
+                    eprintln!("winui_executor::sleep: the timer did not start: {error}");
+                    return Poll::Ready(());
+                }
+            }
+        }
+        let timer = self.timer.as_ref().expect("started above");
+        if timer.fired.get() {
+            return Poll::Ready(());
+        }
+        *timer.waker.borrow_mut() = Some(context.waker().clone());
+        Poll::Pending
+    }
+}
+
+impl Drop for Timer {
+    fn drop(&mut self) {
+        // Stopping fails only when the dispatcher is shutting down, and then
+        // the timer never fires anyway.
+        let _ = self.timer.Stop();
     }
 }
 

@@ -187,6 +187,18 @@ impl Ui {
             .expect("controls are declared inside a window")
     }
 
+    /// The element of the innermost open control.
+    pub(crate) fn enclosing_control(&self) -> UIElement {
+        self.frames
+            .iter()
+            .rev()
+            .find_map(|frame| match &self.tree.node(frame.node).payload {
+                Payload::Control(control) => Some(control.element.clone()),
+                _ => None,
+            })
+            .expect("a shortcut is declared inside a control")
+    }
+
     /// Closes the innermost container: applies its WinUI children, then drops
     /// the children it no longer declares.
     pub(crate) fn close(&mut self) -> Result<()> {
@@ -423,6 +435,7 @@ impl Ui {
                 Ok(())
             }
             Payload::State(_) => unreachable!("state nodes are never opened"),
+            Payload::Shortcut(_) => unreachable!("shortcut nodes are never opened"),
         }
     }
 
@@ -486,6 +499,15 @@ pub(crate) enum Payload {
     State(Box<dyn Any>),
     /// From [`Ui::menu`].
     Menu(Box<MenuNode>),
+    /// From [`Ui::shortcut`].
+    Shortcut(ShortcutNode),
+}
+
+/// A key held by `owner` from the first pass until the node drops.
+pub(crate) struct ShortcutNode {
+    pub(crate) accelerator: KeyboardAccelerator,
+    pub(crate) owner: UIElement,
+    pub(crate) subscribed: EventSet,
 }
 
 /// A menu, shown on its first pass and hidden when its node drops.
@@ -622,6 +644,10 @@ struct Frame {
 fn release(events: &mut Events, payload: Payload) {
     match payload {
         Payload::Root | Payload::Cache(_) | Payload::State(_) => {}
+        Payload::Shortcut(shortcut) => {
+            events.forget(&shortcut.accelerator);
+            crate::widget::shortcut::release(&shortcut);
+        }
         Payload::Menu(menu) => {
             events.forget(&menu.flyout);
             // Hiding fails only for a menu WinUI already closed, which is

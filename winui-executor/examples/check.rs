@@ -17,11 +17,11 @@ use std::{
     time::Duration,
 };
 use windows_future::IAsyncOperation;
-use winui_executor::{SpawnHandle, spawn};
+use winui_executor::{SpawnHandle, sleep, spawn};
 use winui_immediate::{App, Handle, Ui, run};
 
 /// The checks, each reported once through a message.
-const CHECKS: usize = 5;
+const CHECKS: usize = 7;
 
 static FAILED: AtomicBool = AtomicBool::new(false);
 
@@ -150,6 +150,39 @@ fn start(handle: Handle<Report>) {
                 "self abort stops the task",
                 dropped.get() && !resumed.get(),
             );
+        })
+        .detach();
+    }
+
+    // A sleep ends after its time, on the UI thread.
+    {
+        let handle = handle.clone();
+        spawn(async move {
+            let start = std::time::Instant::now();
+            sleep(Duration::from_millis(100)).await;
+            let passed =
+                start.elapsed() >= Duration::from_millis(90) && thread::current().id() == ui_thread;
+            report(&handle, "sleep waits its time on the UI thread", passed);
+        })
+        .detach();
+    }
+
+    // An aborted sleep never wakes its task.
+    {
+        let woke = Rc::new(Cell::new(false));
+        let task = {
+            let woke = Rc::clone(&woke);
+            spawn(async move {
+                sleep(Duration::from_millis(20)).await;
+                woke.set(true);
+            })
+        };
+        let handle = handle.clone();
+        spawn(async move {
+            yield_once().await;
+            drop(task);
+            sleep(Duration::from_millis(100)).await;
+            report(&handle, "an aborted sleep never resumes", !woke.get());
         })
         .detach();
     }

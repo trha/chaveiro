@@ -1,7 +1,7 @@
 //! The vault window on its own, over a made-up vault, so it can be seen and
 //! driven without an account. It plays the core's part for the item
 //! actions: Open, Close, Save of a favorite, Trash and Restore change the
-//! made-up vault and print to stderr. Lock prints `lock` and closes the
+//! made-up vault and print to stderr, and Copy prints the text it copies. Lock prints `lock` and closes the
 //! window. `tests/ui/vault.ps1` drives it.
 //!
 //! `VAULT_BENCH=1` runs passes on a timer, counts the Rust allocations of
@@ -20,8 +20,8 @@ use chaveiro_core::{
     core::{UserAction, VaultScreen},
     crypto::SecretString,
     vault::{
-        CardView, CipherContent, CipherKind, CipherSummary, CipherView, CustomField, FolderSummary,
-        IdentityView, LoginView, SshKeyView, UriView, VaultIndex,
+        CardView, CipherContent, CipherKind, CipherSummary, CipherView, CopyField, CopyFields,
+        CustomField, FolderSummary, IdentityView, LoginView, SshKeyView, UriView, VaultIndex,
     },
 };
 use std::{
@@ -50,6 +50,7 @@ fn main() -> Result<()> {
         // flag, as the core's does.
         for (summary, view) in index.ciphers.iter_mut().zip(&views) {
             summary.reprompt = view.reprompt;
+            summary.copyable = copyable(view);
             if let CipherContent::Login(login) = &view.content {
                 summary.uris = login
                     .uris
@@ -181,6 +182,14 @@ impl Preview {
                 self.views[position].folder_id = folder;
                 self.revision += 1;
             }
+            // The preview has no clipboard, so a test can check the text.
+            UserAction::Copy { id, field } => {
+                let view = &self.views[self.position(id)];
+                let guarded = field.guarded() && view.reprompt;
+                if let Some(text) = copy_text(view, field).filter(|_| !guarded) {
+                    eprintln!("copy {} {field:?} {text}", id.as_u128());
+                }
+            }
             UserAction::SetReprompt { id, on } => {
                 eprintln!("reprompt {} {on}", id.as_u128());
                 let position = self.position(id);
@@ -221,6 +230,7 @@ fn sample() -> VaultIndex {
             organization_id: None,
             favorite,
             reprompt: false,
+            copyable: Default::default(),
             deleted,
             readable: true,
         };
@@ -316,7 +326,7 @@ fn view_of(summary: &CipherSummary) -> CipherView {
         11 => CipherContent::Login(LoginView {
             username: some("alex-dev"),
             password: some("Tr0ub4dor&3-xK9"),
-            totp: None,
+            totp: some("JBSWY3DPEHPK3PXP"),
             password_revision_date: Some("2026-10-14T09:12:00.000Z".to_owned()),
             uris: vec![
                 UriView {
@@ -417,6 +427,38 @@ fn view_of(summary: &CipherSummary) -> CipherView {
         fields,
         password_history: Vec::new(),
     }
+}
+
+/// The text a copy of `field` gives, as the core gives it. A TOTP copy
+/// gives the secret, because the preview has no clock to make the code.
+fn copy_text(view: &CipherView, field: CopyField) -> Option<String> {
+    let login = match &view.content {
+        CipherContent::Login(login) => Some(login),
+        _ => None,
+    };
+    let text = match field {
+        CopyField::Username => login.and_then(|login| login.username.as_ref()),
+        CopyField::Password => login.and_then(|login| login.password.as_ref()),
+        CopyField::Totp => login.and_then(|login| login.totp.as_ref()),
+        CopyField::Uri => {
+            login.and_then(|login| login.uris.iter().find_map(|uri| uri.uri.as_ref()))
+        }
+        CopyField::Notes => view.notes.as_ref(),
+    };
+    text.map(|text| text.to_string())
+}
+
+fn copyable(view: &CipherView) -> CopyFields {
+    [
+        CopyField::Username,
+        CopyField::Password,
+        CopyField::Totp,
+        CopyField::Uri,
+        CopyField::Notes,
+    ]
+    .into_iter()
+    .filter(|field| copy_text(view, *field).is_some())
+    .collect()
 }
 
 fn secret(text: &str) -> SecretString {

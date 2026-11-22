@@ -43,6 +43,7 @@ mod pressable;
 mod scroll;
 mod search_box;
 mod settings_card;
+pub(crate) mod shortcut;
 mod stack;
 mod text_box;
 mod title_bar;
@@ -694,6 +695,8 @@ pub(crate) enum Control {
         item: MenuFlyoutItem,
         look: menu::Look,
         critical: bool,
+        /// The shortcut text last written; empty until first written.
+        hint: String,
     },
     /// From [`Ui::menu_toggle`].
     MenuToggle {

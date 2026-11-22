@@ -2,6 +2,7 @@
 //! `DispatcherQueue` that [`Io`] owns, and CPU-bound or blocking work inside
 //! a task runs on the process thread pool through [`off_thread`].
 
+mod clipboard;
 mod device_key;
 mod http;
 mod storage;
@@ -12,7 +13,7 @@ use chaveiro_core::{
     crypto::derive_master_key,
 };
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     collections::VecDeque,
     future::Future,
     panic::{AssertUnwindSafe, catch_unwind},
@@ -23,6 +24,7 @@ use std::{
         atomic::{AtomicBool, Ordering},
     },
     task::{Poll, Waker},
+    time::Duration,
 };
 pub use storage::{Settings, SettingsError};
 use windows_future::IAsyncAction;
@@ -50,11 +52,19 @@ pub struct Io {
     tasks: Vec<(TaskId, SpawnHandle)>,
     next_task: u64,
     storage: Storage,
+    /// The last copy to the clipboard, until it is cleared.
+    /// The last copy, until it is cleared. The copy task writes it.
+    copied: Rc<Cell<Option<clipboard::Copied>>>,
+    /// The task of the last copy: its retries, then its clear.
+    copy: Option<SpawnHandle>,
 }
 
 /// Names one task of [`Io`], so its answer can end it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TaskId(u64);
+
+/// How long a copy stays on the clipboard.
+const CLEAR_CLIPBOARD_AFTER: Duration = Duration::from_secs(30);
 
 /// What a task of [`Io`] sends back.
 pub enum Answer {
@@ -85,6 +95,8 @@ impl Io {
             window: None,
             tasks: Vec::new(),
             next_task: 0,
+            copied: Rc::default(),
+            copy: None,
         })
     }
 
@@ -191,6 +203,35 @@ impl Io {
             // Every pass reads the screen again, and a pass runs after each
             // message, so there is nothing to do.
             Effect::Rerender => {}
+            // A later copy replaces this one, aborting its retries and its
+            // clear, because that copy's own clear runs.
+            Effect::Copy { text } => {
+                let last = Rc::clone(&self.copied);
+                let window = self.window;
+                self.copy = Some(winui_executor::spawn(async move {
+                    let mut attempts = 0;
+                    let copied = loop {
+                        match clipboard::copy(window, &text) {
+                            Ok(copied) => break copied,
+                            // Another app holds the clipboard for a moment,
+                            // as monitors do after each change.
+                            Err(clipboard::CopyError::Busy) if attempts < 5 => {
+                                attempts += 1;
+                                winui_executor::sleep(Duration::from_millis(20)).await;
+                            }
+                            Err(error) => {
+                                tracing::warn!(?error, "nothing was copied");
+                                return;
+                            }
+                        }
+                    };
+                    drop(text);
+                    last.set(Some(copied));
+                    winui_executor::sleep(CLEAR_CLIPBOARD_AFTER).await;
+                    clipboard::clear(copied);
+                    last.set(None);
+                }));
+            }
             Effect::DeviceSecret {
                 id,
                 challenge,
@@ -222,7 +263,17 @@ impl Io {
     /// closes, so no write is lost.
     pub fn close(&mut self) {
         self.tasks.clear();
+        self.clear_clipboard();
         self.storage.flush();
+    }
+
+    /// Empties the clipboard if it still holds the last copy, and stops a
+    /// copy still trying. Call it when the vault locks.
+    pub fn clear_clipboard(&mut self) {
+        self.copy = None;
+        if let Some(copied) = self.copied.take() {
+            clipboard::clear(copied);
+        }
     }
 
     fn spawn(&mut self, future: impl 'static + Future<Output = Answer>) {
@@ -243,11 +294,37 @@ impl Io {
 /// Opens `url` in the default browser. The caller passes only `http` and
 /// `https` addresses, because the shell opens whatever program a scheme
 /// names. A failure only logs: the user sees nothing open and can try
-/// again.
+/// again. It returns at once: the shell runs on a thread of its own.
 pub fn open_website(url: &url::Url) {
-    use windows_sys::Win32::UI::{Shell::ShellExecuteW, WindowsAndMessaging::SW_SHOWNORMAL};
     let wide = |text: &str| text.encode_utf16().chain([0]).collect::<Vec<u16>>();
     let (verb, target) = (wide("open"), wide(url.as_str()));
+    // ShellExecuteW pumps messages while it waits, which on the UI thread
+    // runs the next pass inside this one. The shell asks for a COM
+    // apartment of its own, so the thread is new and not one of the pool.
+    let spawned = std::thread::Builder::new()
+        .name("open website".into())
+        .spawn(move || shell_open(&verb, &target));
+    if let Err(error) = spawned {
+        tracing::warn!(%error, "the browser did not open");
+    }
+}
+
+/// Runs `ShellExecuteW` with `verb` on `target`, both NUL-terminated, in a
+/// single-threaded COM apartment, as the shell asks.
+fn shell_open(verb: &[u16], target: &[u16]) {
+    use windows_sys::Win32::{
+        System::Com::{
+            COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE, CoInitializeEx, CoUninitialize,
+        },
+        UI::{Shell::ShellExecuteW, WindowsAndMessaging::SW_SHOWNORMAL},
+    };
+    // SAFETY: a new thread, so no apartment is set yet.
+    let initialized = unsafe {
+        CoInitializeEx(
+            std::ptr::null(),
+            (COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE) as u32,
+        )
+    } >= 0;
     // SAFETY: both strings end in a NUL and outlive the call; the null
     // window, parameters and directory are allowed.
     let result = unsafe {
@@ -264,6 +341,10 @@ pub fn open_website(url: &url::Url) {
     if result as usize <= 32 {
         tracing::warn!(code = result as usize, "the browser did not open");
     }
+    if initialized {
+        // SAFETY: matches the successful CoInitializeEx above.
+        unsafe { CoUninitialize() };
+    }
 }
 
 /// Runs `job` on the process thread pool and returns its result, or
@@ -271,7 +352,6 @@ pub fn open_website(url: &url::Url) {
 ///
 /// Dropping the future does not stop the job: it runs to the end and its
 /// result is dropped on the pool thread.
-
 pub async fn off_thread<T: 'static + Send>(job: impl 'static + Send + FnOnce() -> T) -> Option<T> {
     let slot = Arc::new(Mutex::new(None));
     let result = Arc::clone(&slot);

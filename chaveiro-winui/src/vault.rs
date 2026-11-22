@@ -13,7 +13,7 @@ use chaveiro_core::{
     filter::{Counts, Filter, KINDS},
     search::{Query, Tier},
     vault::{
-        CardView, CipherContent, CipherKind, CipherSummary, CipherView, FolderSummary,
+        CardView, CipherContent, CipherKind, CipherSummary, CipherView, CopyField, FolderSummary,
         IdentityView, LoginView, SshKeyView, VaultIndex,
     },
 };
@@ -416,6 +416,22 @@ pub fn view<A: VaultApp>(
                 )?;
                 Ok(())
             })?;
+            // The copy keys act on the selected item, as its menu would.
+            if let Some(summary) =
+                selected_item.and_then(|id| index.ciphers.iter().find(|cipher| cipher.id == id))
+            {
+                for &(field, .., key) in COPIES {
+                    if let Some((letter, _)) = key
+                        && copyable(summary, field)
+                        && ui.shortcut(("copy", field as u8), false, letter)?
+                    {
+                        action = Some(VaultAction::User(UserAction::Copy {
+                            id: summary.id,
+                            field,
+                        }));
+                    }
+                }
+            }
             if let Some(open_menu) = menus.open {
                 match index
                     .ciphers
@@ -776,6 +792,23 @@ fn item_menu(
             }
             ui.menu_separator("links")?;
         }
+        let mut any = false;
+        for &(field, glyph, label, key) in COPIES {
+            if !copyable(summary, field) {
+                continue;
+            }
+            any = true;
+            let mut item = ui.menu_item(("copy", field as u8), glyph, label)?;
+            if let Some((_, hint)) = key {
+                item.key_hint(hint)?;
+            }
+            if item.clicked()? {
+                *picked = Some(VaultAction::User(UserAction::Copy { id, field }));
+            }
+        }
+        if any {
+            ui.menu_separator("copies")?;
+        }
         ui.submenu("folder", '\u{E8B7}', "Move to folder", |ui| {
             // A folder the vault lacks counts as no folder, as in the pane.
             let current = summary
@@ -817,6 +850,41 @@ fn item_menu(
         *picked = Some(VaultAction::User(UserAction::Trash(id)));
     }
     Ok(())
+}
+
+/// The copy entries of the item menu, in order: the field, its glyph, its
+/// label, and its Ctrl key with the key's name, as Bitwarden binds them.
+const COPIES: &[(CopyField, char, &str, Option<(char, &str)>)] = &[
+    (
+        CopyField::Username,
+        '\u{E77B}',
+        "Copy username",
+        Some(('U', "Ctrl+U")),
+    ),
+    (
+        CopyField::Password,
+        '\u{E8D7}',
+        "Copy password",
+        Some(('P', "Ctrl+P")),
+    ),
+    (
+        CopyField::Totp,
+        '\u{E916}',
+        "Copy verification code",
+        Some(('T', "Ctrl+T")),
+    ),
+    (CopyField::Uri, '\u{E71B}', "Copy website", None),
+    (CopyField::Notes, '\u{E70B}', "Copy note", None),
+];
+
+/// Whether the item menu and keys offer to copy `field` of `summary`:
+/// the item holds it, decrypted, outside the trash, and the master password
+/// re-prompt, which Chaveiro cannot ask yet, does not guard it.
+fn copyable(summary: &CipherSummary, field: CopyField) -> bool {
+    summary.readable
+        && !summary.deleted
+        && summary.copyable.contains(field)
+        && !(field.guarded() && summary.reprompt)
 }
 
 /// The first of `uris` the browser can open: an `http` or `https` address,

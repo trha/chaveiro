@@ -104,6 +104,7 @@ impl Ui {
                     item,
                     look: Look::default(),
                     critical: false,
+                    hint: String::new(),
                 },
             ))
         })?;
@@ -280,6 +281,27 @@ impl MenuItemResponse<'_> {
             *checked = None;
         }
         Ok(clicked)
+    }
+
+    /// Shows `hint` at the item's right end, the name of a key that does
+    /// the same, such as `Ctrl+U` for a [`Ui::shortcut`]. Menu items only.
+    pub fn key_hint(&mut self, hint: &str) -> Result<&mut Self> {
+        let control = self.0.ui.control_mut(self.0.node);
+        let stale = control.stale;
+        let Control::MenuItem {
+            item,
+            hint: written,
+            ..
+        } = &mut control.control
+        else {
+            panic!("only menu items take a key hint");
+        };
+        if must_write(stale, written.as_str(), hint) {
+            item.SetKeyboardAcceleratorTextOverride(hint)?;
+            written.clear();
+            written.push_str(hint);
+        }
+        Ok(self)
     }
 
     /// Draws the item in the critical color, for an action such as Move to

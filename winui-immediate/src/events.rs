@@ -151,6 +151,9 @@ impl Events {
             EventKind::ContextRequested => source
                 .cast::<IUIElement>()?
                 .add_context_requested(&self.delegates.context_requested)?,
+            EventKind::Invoked => source
+                .cast::<IKeyboardAccelerator>()?
+                .add_invoked(&self.delegates.invoked)?,
             EventKind::FlyoutClosed => source
                 .cast::<IFlyoutBase>()?
                 .add_closed(&self.delegates.flyout_closed)?,
@@ -255,6 +258,8 @@ pub(crate) enum EventKind {
     ContextRequested,
     /// A flyout closed, by a pick, a click outside it, or Escape.
     FlyoutClosed,
+    /// A keyboard accelerator's key was pressed.
+    Invoked,
 }
 
 /// A key a control reports through [`TextBoxResponse::keys`]. Enter is not
@@ -361,6 +366,7 @@ struct Delegates {
         TypedEventHandler<NavigationView, NavigationViewSelectionChangedEventArgs>,
     context_requested: TypedEventHandler<UIElement, ContextRequestedEventArgs>,
     flyout_closed: EventHandler<IInspectable>,
+    invoked: TypedEventHandler<KeyboardAccelerator, KeyboardAcceleratorInvokedEventArgs>,
     /// Not an event the app sees: it selects the sender's text.
     select_all: RoutedEventHandler,
 }
@@ -543,6 +549,20 @@ impl Delegates {
                 )
             })
         };
+        let invoked = {
+            let inbox = Rc::clone(inbox);
+            TypedEventHandler::shared(
+                move |sender: Ref<'_, KeyboardAccelerator>,
+                      arguments: Ref<'_, KeyboardAcceleratorInvokedEventArgs>| {
+                    // Handled, so no other accelerator acts on the key; if the
+                    // write fails, the key only goes on to others.
+                    if let Ok(arguments) = arguments.ok() {
+                        let _ = arguments.SetHandled(true);
+                    }
+                    inbox.push(canonical(sender.ok().ok()).as_ref(), EventKind::Invoked)
+                },
+            )
+        };
         let select_all = RoutedEventHandler::shared(|sender: Ref<'_, IInspectable>, _| {
             // Only text boxes register it; a failed selection leaves the
             // caret where WinUI put it, which is still usable.
@@ -554,6 +574,7 @@ impl Delegates {
             navigation_selection_changed,
             context_requested,
             flyout_closed,
+            invoked,
             back_requested,
             select_all,
             key,
