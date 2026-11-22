@@ -28,8 +28,8 @@ use chaveiro_core::{
     core::{UserAction, VaultScreen},
     crypto::SecretString,
     vault::{
-        CipherContent, CipherKind, CipherSummary, CipherView, CustomField, FolderSummary,
-        LoginView, UriView, VaultIndex,
+        CardView, CipherContent, CipherKind, CipherSummary, CipherView, CustomField, FolderSummary,
+        IdentityView, LoginView, SshKeyView, UriView, VaultIndex,
     },
 };
 use objc2::{MainThreadMarker, Message, rc::Retained, sel};
@@ -120,6 +120,19 @@ const SCRIPT: &[Step] = &[
     Step::Click("Sync"),
     Step::Dump,
     Step::PickFilter("All Items"),
+    Step::PickRow("Personal Visa"),
+    Step::Dump,
+    Step::Click("Show"),
+    Step::Dump,
+    Step::Measure,
+    Step::Tick,
+    Step::Tick,
+    Step::Tick,
+    Step::Report,
+    Step::PickRow("Alex Lima"),
+    Step::Dump,
+    Step::PickRow("Deploy key"),
+    Step::Dump,
     Step::Search("hub"),
     Step::Dump,
     Step::Search("mail"),
@@ -630,7 +643,8 @@ fn sample() -> VaultIndex {
 }
 
 /// The opened form of `summary`: GitHub has every login field and custom
-/// fields, Mail server a user name and password, Home Wi-Fi asks for the
+/// fields, Mail server a user name and password, Personal Visa, Alex Lima
+/// and Deploy key every field of their type, Home Wi-Fi asks for the
 /// master password, and the rest have only a name.
 fn view_of(summary: &CipherSummary) -> CipherView {
     let some = |text: &str| Some(secret(text));
@@ -656,6 +670,39 @@ fn view_of(summary: &CipherSummary) -> CipherView {
             username: some("alex@mail.example"),
             password: some("hunter2-but-longer"),
             ..LoginView::default()
+        }),
+        (13, _) => CipherContent::Card(CardView {
+            cardholder_name: some("Alex M. Example"),
+            brand: some("Visa"),
+            number: some("4242424242424242"),
+            exp_month: some("8"),
+            exp_year: some("2029"),
+            code: some("123"),
+        }),
+        (14, _) => CipherContent::Identity(Box::new(IdentityView {
+            title: some("Mx"),
+            first_name: some("Alex"),
+            middle_name: some("M."),
+            last_name: some("Lima"),
+            address1: some("Rua das Flores 12, 3.º Esq."),
+            address2: None,
+            address3: None,
+            city: some("Lisboa"),
+            state: None,
+            postal_code: some("1200-195"),
+            country: some("Portugal"),
+            company: some("Example Lda."),
+            email: some("alex@example.com"),
+            phone: some("+351 912 345 678"),
+            ssn: some("123 456 789"),
+            username: some("alexexample"),
+            passport_number: some("CB1234567"),
+            license_number: some("L-1234567 8"),
+        })),
+        (16, _) => CipherContent::SshKey(SshKeyView {
+            private_key: some("-----BEGIN OPENSSH PRIVATE KEY----- b3BlbnNzaC1rZXktdjEAAAAA"),
+            public_key: some("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJq3RvT1xb8fKc build@chaveiro"),
+            key_fingerprint: some("SHA256:q3RvT1xYk0w2pV7sDm4hN9eLa6uZc3Jg5Fb8fKc"),
         }),
         (_, CipherKind::Login) => CipherContent::Login(LoginView::default()),
         (_, CipherKind::SecureNote) => CipherContent::SecureNote,
