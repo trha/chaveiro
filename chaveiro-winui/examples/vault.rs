@@ -18,6 +18,12 @@
 #[path = "../src/vault.rs"]
 mod vault;
 
+// The app's copy flow, so the UI script drives the code the app runs.
+#[path = "../src/io/clipboard.rs"]
+mod clipboard;
+#[path = "../src/copy.rs"]
+mod copy;
+
 use chaveiro_core::{
     core::{UserAction, VaultScreen},
     crypto::SecretString,
@@ -62,6 +68,8 @@ fn main() -> Result<()> {
             open: true,
             bench,
 
+            copies: copy::Copies::default(),
+            window: None,
             sync_running: false,
             syncs: 0,
             server: url::Url::parse("https://vault.bitwarden.com").expect("a valid URL"),
@@ -89,6 +97,10 @@ struct Preview {
     open: bool,
     bench: Option<Bench>,
 
+    /// The clipboard copies, run as a flow in the title bar.
+    copies: copy::Copies,
+    /// The window's `AppWindow.Id`, which owns the clipboard while it copies.
+    window: Option<u64>,
     /// Sync now started a made-up sync, which runs as a task.
     sync_running: bool,
     /// Syncs finished, which alternate between success and offline.
@@ -120,6 +132,11 @@ impl App for Preview {
                 winui_executor::interval(std::time::Duration::from_millis(10))
             });
             while ticks.next().is_some() {}
+            // A flow that waits, polled on every bench pass, so the count
+            // covers a pass that only replays a flow.
+            ui.flow("bench wait", winui_immediate::owned(&mut ()), |_| {
+                std::future::pending::<()>()
+            })?;
         }
         if !self.open {
             return Ok(());
@@ -145,7 +162,11 @@ impl App for Preview {
         let open = self
             .opened
             .and_then(|id| self.views.iter().find(|view| view.id == Some(id)));
-        let pass = vault::view::<Self>(ui, &mut self.form, &screen, open)?;
+        let (copies, window) = (&mut self.copies, self.window);
+        let pass = vault::view::<Self>(ui, &mut self.form, &screen, open, |ui| {
+            copies.status(ui, window)
+        })?;
+        self.window = Some(pass.window);
         match pass.action {
             None => {}
             Some(VaultAction::Close) => self.open = false,
@@ -245,6 +266,7 @@ impl Preview {
                 let guarded = field.guarded() && view.reprompt;
                 if let Some(text) = copy_text(view, field).filter(|_| !guarded) {
                     eprintln!("copy {} {field:?} {text}", id.as_u128());
+                    self.copies.start(SecretString::new(text.to_owned()));
                 }
             }
             UserAction::SetReprompt { id, on } => {

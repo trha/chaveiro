@@ -244,6 +244,9 @@ pub fn view<A: VaultApp>(
     form: &mut VaultForm,
     screen: &VaultScreen<'_>,
     open: Option<&CipherView>,
+    // Draws the app's status in the title bar, after the name and the
+    // Offline tag, such as the copy countdown.
+    status: impl FnOnce(&mut Ui) -> Result<()>,
 ) -> Result<VaultPass> {
     let index = screen.index;
     let revision = screen.index_revision;
@@ -346,7 +349,7 @@ pub fn view<A: VaultApp>(
                                         "Sync failed, so the list is the copy saved on this PC.",
                                     )?;
                                 }
-                                Ok(())
+                                status(ui)
                             })?
                             .valign(Align::Center)?
                             .margin([16.0, 0.0, 0.0, 0.0])?;

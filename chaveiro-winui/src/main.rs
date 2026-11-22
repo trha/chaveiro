@@ -12,6 +12,7 @@
 #![windows_subsystem = "windows"]
 
 mod bindings;
+mod copy;
 mod io;
 mod login;
 mod route;
@@ -21,10 +22,11 @@ mod vault;
 mod wipe;
 
 use chaveiro_core::{
-    core::{Config, Core, Input, LoginError, Screen, UserAction},
+    core::{Config, Core, Effect, Input, LoginError, Screen, UserAction},
     vault::VaultIndex,
 };
-use io::{Answer, Io, Settings, SettingsError};
+use copy::Copies;
+use io::{Answer, Io, Settings, SettingsError, clipboard};
 use login::{LoginForm, LoginState, Submit};
 use rand_core::OsRng;
 use route::Route;
@@ -69,6 +71,8 @@ fn main() -> Result<()> {
 struct Chaveiro {
     open: bool,
     io: Io,
+    /// The clipboard copies, which the vault's status runs as a flow.
+    copies: Copies,
     /// Made once the settings load, because it needs their device id.
     core: Option<Core>,
     /// Why the settings file did not load. While set, the file is never
@@ -178,7 +182,7 @@ impl App for Chaveiro {
             }
             // Leaving the vault means it locked or logged out.
             if self.route == Route::Vault {
-                self.io.clear_clipboard();
+                self.copies.clear();
             }
             self.slide = self.route.slide_to(route);
             self.route = route;
@@ -189,7 +193,10 @@ impl App for Chaveiro {
                     unreachable!("Route::Vault comes from Screen::Vault")
                 };
                 let open = screen.open.map(|item| &item.view);
-                let pass = vault::view::<Self>(ui, &mut self.vault, &screen, open)?;
+                let (copies, window) = (&mut self.copies, self.io.window());
+                let pass = vault::view::<Self>(ui, &mut self.vault, &screen, open, |ui| {
+                    copies.status(ui, window)
+                })?;
                 self.io.set_window(pass.window);
                 pass.action.and_then(|action| match action {
                     VaultAction::Close => Some(Next::Close),
@@ -232,6 +239,7 @@ impl App for Chaveiro {
             None => {}
             Some(Next::Close) => {
                 self.open = false;
+                self.copies.clear();
                 self.io.close();
             }
             Some(Next::Submit(submit)) => {
@@ -279,6 +287,7 @@ impl Chaveiro {
         Ok(Chaveiro {
             open: true,
             io,
+            copies: Copies::default(),
             core: None,
             settings_error: None,
             login: LoginForm::new(),
@@ -361,9 +370,12 @@ impl Chaveiro {
         let now_ms = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_or(0, |since| since.as_millis() as u64);
-        let io = &mut self.io;
         for effect in core.handle(now_ms, &mut OsRng, input) {
-            io.run(effect);
+            match effect {
+                // A copy is UI: it shows a countdown, so the app runs it.
+                Effect::Copy { text } => self.copies.start(text),
+                effect => self.io.run(effect),
+            }
         }
         if !matches!(core.screen(), Screen::Vault(_)) {
             wipe::wipe_stack();

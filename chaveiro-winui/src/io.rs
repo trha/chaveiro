@@ -2,7 +2,7 @@
 //! task node, and CPU-bound or blocking work inside it runs on the process
 //! thread pool through [`off_thread`].
 
-mod clipboard;
+pub(crate) mod clipboard;
 mod device_key;
 mod http;
 mod storage;
@@ -13,7 +13,7 @@ use chaveiro_core::{
     crypto::derive_master_key,
 };
 use std::{
-    cell::{Cell, RefCell},
+    cell::RefCell,
     collections::VecDeque,
     future::Future,
     panic::{AssertUnwindSafe, catch_unwind},
@@ -24,11 +24,10 @@ use std::{
         atomic::{AtomicBool, Ordering},
     },
     task::{Poll, Waker},
-    time::Duration,
 };
 pub use storage::{Settings, SettingsError};
 use windows_future::IAsyncAction;
-use winui_executor::SpawnHandle;
+
 use zeroize::Zeroizing;
 
 /// Holds the effects of the core as futures for the view to run, and the
@@ -51,21 +50,17 @@ pub struct Io {
     pending: Vec<(TaskId, Option<Work>)>,
     next_task: u64,
     storage: Storage,
-    /// The last copy, until it is cleared. The copy task writes it.
-    copied: Rc<Cell<Option<clipboard::Copied>>>,
-    /// The task of the last copy: its retries, then its clear.
-    copy: Option<SpawnHandle>,
+
     /// The stream of file work answers until the view starts it.
     stored: Option<StoredAnswers>,
 }
+
 
 /// Names one task of [`Io`], so its answer can end it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct TaskId(u64);
 
 
-/// How long a copy stays on the clipboard.
-const CLEAR_CLIPBOARD_AFTER: Duration = Duration::from_secs(30);
 
 /// The future of one effect that runs as a task node.
 pub type Work = std::pin::Pin<Box<dyn Future<Output = Answer>>>;
@@ -99,8 +94,7 @@ impl Io {
             window: None,
             pending: Vec::new(),
             next_task: 0,
-            copied: Rc::default(),
-            copy: None,
+
             stored: Some(stored),
         };
         Ok(io)
@@ -209,35 +203,8 @@ impl Io {
             // Every pass reads the screen again, and a pass runs after each
             // message, so there is nothing to do.
             Effect::Rerender => {}
-            // A later copy replaces this one, aborting its retries and its
-            // clear, because that copy's own clear runs.
-            Effect::Copy { text } => {
-                let last = Rc::clone(&self.copied);
-                let window = self.window;
-                self.copy = Some(winui_executor::spawn(async move {
-                    let mut attempts = 0;
-                    let copied = loop {
-                        match clipboard::copy(window, &text) {
-                            Ok(copied) => break copied,
-                            // Another app holds the clipboard for a moment,
-                            // as monitors do after each change.
-                            Err(clipboard::CopyError::Busy) if attempts < 5 => {
-                                attempts += 1;
-                                winui_executor::sleep(Duration::from_millis(20)).await;
-                            }
-                            Err(error) => {
-                                tracing::warn!(?error, "nothing was copied");
-                                return;
-                            }
-                        }
-                    };
-                    drop(text);
-                    last.set(Some(copied));
-                    winui_executor::sleep(CLEAR_CLIPBOARD_AFTER).await;
-                    clipboard::clear(copied);
-                    last.set(None);
-                }));
-            }
+            // A copy is UI: the app's `Copies` runs it as a flow.
+            Effect::Copy { .. } => unreachable!("the app routes copies to `Copies`"),
             Effect::DeviceSecret {
                 id,
                 challenge,
@@ -291,17 +258,13 @@ impl Io {
     /// next pass drops the futures, which aborts them.
     pub fn close(&mut self) {
         self.pending.clear();
-        self.clear_clipboard();
         self.storage.flush();
     }
 
-    /// Empties the clipboard if it still holds the last copy, and stops a
-    /// copy still trying. Call it when the vault locks.
-    pub fn clear_clipboard(&mut self) {
-        self.copy = None;
-        if let Some(copied) = self.copied.take() {
-            clipboard::clear(copied);
-        }
+    /// The window that owns the Hello prompt and the clipboard while a
+    /// copy lands; see [`set_window`](Self::set_window).
+    pub fn window(&self) -> Option<u64> {
+        self.window
     }
 
     /// Adds `future` as a pending effect for the view to run.
