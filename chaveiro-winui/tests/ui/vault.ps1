@@ -81,7 +81,7 @@ function Search([string]$text) {
     Start-Sleep -Milliseconds 500
 }
 # The list's row names, in order.
-function Rows { (Find-All ([System.Windows.Automation.ControlType]::Button) | ForEach-Object { $_.Current.Name } | Where-Object { $_ -and $_ -notmatch '^(Lock|Show|Hide|Favorite|Unfavorite|Move to trash|Restore|Close|Minimize|Maximize|Back)$' }) -join ", " }
+function Rows { (Find-All ([System.Windows.Automation.ControlType]::Button) | ForEach-Object { $_.Current.Name } | Where-Object { $_ -and $_ -notmatch '^(Lock \(Ctrl\+L\)|Account|Show|Hide|Copy code|Favorite|Unfavorite|Move to trash|Restore|Close|Minimize|Maximize|Back)$' }) -join ", " }
 "search box in trash: name '$((Search-Box).Current.Name)' help '$((Search-Box).Current.HelpText)' (expect Search trash somewhere)"
 Pick "All items"
 "search box in All items: name '$((Search-Box).Current.Name)' help '$((Search-Box).Current.HelpText)'"
@@ -139,7 +139,7 @@ if ($Shot) {
 Pick "Settings"
 "pick Settings: '$(Count)' (expect 'Settings are not built yet.')"
 Pick "All items"
-Invoke "Lock"
+Invoke "Lock (Ctrl+L)"
 if (-not $process.WaitForExit(5000)) { Stop-Process $process -Confirm:$false; "did not exit after Lock" }
 "stderr (expect open 11, save 11 favorite=false, open 12, close, open 15, open 14, trash 14, restore 14,"
 "  then the keys: open 10 16 11 16 10 14, close, open 14 10 16 11 15 12 18 13 17, then the rows: open 10 16 11 15 11, lock):"

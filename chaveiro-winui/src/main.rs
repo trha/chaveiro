@@ -278,6 +278,7 @@ impl Chaveiro {
             lock_after: LOCK_AFTER.as_millis() as u64,
         }));
         self.io.boot();
+        self.io.start_ticks();
     }
 
     /// Sends `pending` once the core has booted. A stored account that

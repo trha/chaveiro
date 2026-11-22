@@ -23,7 +23,7 @@ use url::Url;
 use uuid::Uuid;
 use windows_core::Result;
 use winui_immediate::{
-    App, Key, Length, ListId, MenuAnchor, NavigationEntry, NavigationSelection, Orientation,
+    Align, App, Key, Length, ListId, MenuAnchor, NavigationEntry, NavigationSelection, Orientation,
     Overflow, Severity, Ui,
 };
 use zeroize::{Zeroize, Zeroizing};
@@ -100,6 +100,7 @@ impl VaultForm {
         self.clicked = None;
         self.revealed.clear();
         self.menus.open = None;
+        self.menus.account = None;
     }
 
     /// Selects `id`, hiding the secrets of the item selected before.
@@ -187,6 +188,9 @@ impl ItemList {
 struct ItemMenus {
     /// The menu while it is open.
     open: Option<ItemMenu>,
+    /// The account flyout while it is open: its anchor, and its serial
+    /// from `opened`.
+    account: Option<(MenuAnchor, u64)>,
     /// How many menus opened, so each one is a menu of its own, which
     /// opens at its own anchor.
     opened: u64,
@@ -314,107 +318,158 @@ pub fn view<A: VaultApp>(
     let revealed = &mut form.revealed;
     let menus = &mut form.menus;
     let selected_item = form.selected;
+    let initials = Initials::of(screen.email);
     let mut window = ui.window("vault", "Chaveiro", |ui| {
         ui.grid("window", &[Length::Auto, Length::Star(1.0)], |ui| {
             // Rows that Up and Down in the search box move the selection by.
             let mut step = 0isize;
-            ui.title_bar("title bar", "Chaveiro", false, |ui| {
-                let mut field = ui.search_box("search", &search.placeholder, &mut search.text)?;
-                let changed = field.changed();
-                for key in field.keys()? {
-                    match key {
-                        Key::Down => step += 1,
-                        Key::Up => step -= 1,
-                        _ => {}
+            // The design's title bar: the name with the Offline tag right
+            // after it, the search box centered on the window, and Lock
+            // and the account button at the right end. The search box is
+            // drawn over the row, so the tag never moves it.
+            ui.drag_bar("title bar", |ui| {
+                ui.overlay("title bar", |ui| {
+                    ui.columns(
+                        "ends",
+                        &[Length::Auto, Length::Star(1.0), Length::Auto],
+                        0.0,
+                        |ui| {
+                            ui.stack("start", Orientation::Horizontal, 8.0, |ui| {
+                                ui.label("title", format_args!("Chaveiro"))?
+                                    .style("CaptionTextBlockStyle")?
+                                    .valign(Align::Center)?;
+                                if screen.sync_error.is_some() {
+                                    ui.tag(
+                                        "offline",
+                                        '\u{EB5E}',
+                                        "Offline",
+                                        "Sync failed, so the list is the copy saved on this PC.",
+                                    )?;
+                                }
+                                Ok(())
+                            })?
+                            .valign(Align::Center)?
+                            .margin([16.0, 0.0, 0.0, 0.0])?;
+                            ui.stack("middle", Orientation::Horizontal, 0.0, |_| Ok(()))?;
+                            let right = title_bar_end(ui, initials.as_str())?;
+                            if right.lock {
+                                action = Some(VaultAction::User(UserAction::Lock));
+                            }
+                            if let Some(anchor) = right.account {
+                                menus.opened += 1;
+                                menus.account = Some((anchor, menus.opened));
+                            }
+                            Ok(())
+                        },
+                    )?;
+                    let mut field =
+                        ui.search_box("search", &search.placeholder, &mut search.text)?;
+                    let changed = field.changed();
+                    for key in field.keys()? {
+                        match key {
+                            Key::Down => step += 1,
+                            Key::Up => step -= 1,
+                            _ => {}
+                        }
                     }
-                }
-                // The title bar sizes its middle to the content, so the
-                // box gets the design's widest as its width.
-                field.shortcut('F')?.width(SEARCH_WIDTH)?;
-                if changed {
-                    search.query.set(&search.text);
-                    search.revision += 1;
-                }
+                    field
+                        .shortcut('F')?
+                        .width(SEARCH_WIDTH)?
+                        .align(Align::Center)?
+                        .valign(Align::Center)?;
+                    if changed {
+                        search.query.set(&search.text);
+                        search.revision += 1;
+                    }
+                    Ok(())
+                })?;
                 Ok(())
             })?;
             let push = |entries: &mut Vec<_>| {
                 pane(index, &sidebar.counts, |_, entry| entries.push(entry));
             };
-            ui.navigation_view("pane", revision, push, &mut selected, |ui, selected| {
-                let shown = match selected {
-                    Some(NavigationSelection::Entry(entry)) => sidebar.filters[entry],
-                    Some(NavigationSelection::Settings) | None => None,
-                };
-                let Some(filter) = shown else {
-                    ui.stack("settings", Orientation::Vertical, 8.0, |ui| {
-                        if selected == Some(NavigationSelection::Settings) {
-                            title(ui, "Settings")?;
-                            ui.label("note", format_args!("Settings are not built yet."))?;
-                        }
-                        Ok(())
-                    })?
-                    .padding([24.0, 16.0, 24.0, 24.0])?;
-                    return Ok(());
-                };
-                list.refresh(index, revision, filter, search);
-                let searching = !search.query.is_empty();
-                ui.columns(
-                    "panes",
-                    &[Length::Pixels(LIST_WIDTH), Length::Star(1.0)],
-                    0.0,
-                    |ui| {
-                        let heading = ListHeading {
-                            title: label(filter, index),
-                            count: match searching {
-                                true => list.rows.len(),
-                                false => sidebar.counts.get(filter),
-                            },
-                            empty: match filter {
-                                _ if searching => "No items match your search.",
-                                Filter::Trash => "Trash is empty.",
-                                _ => "No items here yet.",
-                            },
-                        };
-                        let pane = list_pane::<A>(ui, list, heading)?;
-                        if pane.lock {
-                            action = Some(VaultAction::User(UserAction::Lock));
-                        }
-                        // Up and Down move the selection, from the search box
-                        // or from the list. The next pass opens the row they
-                        // moved to, as a click would. From the list, focus
-                        // follows the selection.
-                        if let Some(items) = pane.items {
-                            for (step, focus) in [(step, false), (pane.step, true)] {
-                                let Some(position) = moved(&list.rows, index, selected_item, step)
-                                else {
-                                    continue;
-                                };
-                                *clicked = Some(index.ciphers[list.rows[position]].id);
-                                ui.request_pass();
-                                match focus {
-                                    true => ui.focus_row(items, position),
-                                    false => ui.bring_into_view(items, position),
+            ui.overlay("panes and progress", |ui| {
+                ui.navigation_view("pane", revision, push, &mut selected, |ui, selected| {
+                    let shown = match selected {
+                        Some(NavigationSelection::Entry(entry)) => sidebar.filters[entry],
+                        Some(NavigationSelection::Settings) | None => None,
+                    };
+                    let Some(filter) = shown else {
+                        ui.stack("settings", Orientation::Vertical, 8.0, |ui| {
+                            if selected == Some(NavigationSelection::Settings) {
+                                title(ui, "Settings")?;
+                                ui.label("note", format_args!("Settings are not built yet."))?;
+                            }
+                            Ok(())
+                        })?
+                        .padding([24.0, 16.0, 24.0, 24.0])?;
+                        return Ok(());
+                    };
+                    list.refresh(index, revision, filter, search);
+                    let searching = !search.query.is_empty();
+                    ui.columns(
+                        "panes",
+                        &[Length::Pixels(LIST_WIDTH), Length::Star(1.0)],
+                        0.0,
+                        |ui| {
+                            let heading = ListHeading {
+                                title: label(filter, index),
+                                count: match searching {
+                                    true => list.rows.len(),
+                                    false => sidebar.counts.get(filter),
+                                },
+                                empty: match filter {
+                                    _ if searching => "No items match your search.",
+                                    Filter::Trash => "Trash is empty.",
+                                    _ => "No items here yet.",
+                                },
+                            };
+                            let pane = list_pane::<A>(ui, list, heading)?;
+
+                            // Up and Down move the selection, from the search box
+                            // or from the list. The next pass opens the row they
+                            // moved to, as a click would. From the list, focus
+                            // follows the selection.
+                            if let Some(items) = pane.items {
+                                for (step, focus) in [(step, false), (pane.step, true)] {
+                                    let Some(position) =
+                                        moved(&list.rows, index, selected_item, step)
+                                    else {
+                                        continue;
+                                    };
+                                    *clicked = Some(index.ciphers[list.rows[position]].id);
+                                    ui.request_pass();
+                                    match focus {
+                                        true => ui.focus_row(items, position),
+                                        false => ui.bring_into_view(items, position),
+                                    }
                                 }
                             }
-                        }
-                        let details = Details {
-                            index,
-                            selected: selected_item,
-                            open,
-                            opening,
-                            error: screen.error,
-                        };
-                        let pass = details_pane(ui, details, revealed)?;
-                        if let Some(asked) = pass.asked {
-                            action = Some(VaultAction::User(asked));
-                        }
-                        if let Some((id, anchor)) = pass.more {
-                            menus.open(id, anchor);
-                            ui.request_pass();
-                        }
-                        Ok(())
-                    },
-                )?;
+                            let details = Details {
+                                index,
+                                selected: selected_item,
+                                open,
+                                opening,
+                                error: screen.error,
+                            };
+                            let pass = details_pane(ui, details, revealed)?;
+                            if let Some(asked) = pass.asked {
+                                action = Some(VaultAction::User(asked));
+                            }
+                            if let Some((id, anchor)) = pass.more {
+                                menus.open(id, anchor);
+                                ui.request_pass();
+                            }
+                            Ok(())
+                        },
+                    )?;
+                    Ok(())
+                })?;
+                // The design's bar under the title bar while a sync runs,
+                // drawn over the panes so nothing below it moves.
+                if screen.syncing {
+                    ui.progress_bar("sync")?.valign(Align::Start)?;
+                }
                 Ok(())
             })?;
             // The copy keys act on the selected item, as its menu would.
@@ -431,6 +486,19 @@ pub fn view<A: VaultApp>(
                             field,
                         }));
                     }
+                }
+            }
+            if let Some((anchor, serial)) = menus.account {
+                let mut asked = false;
+                let flyout = ui.flyout(("account", serial), anchor, |ui| {
+                    asked = account_card(ui, screen, initials.as_str())?;
+                    Ok(())
+                })?;
+                if flyout.closed() {
+                    menus.account = None;
+                }
+                if asked {
+                    action = Some(VaultAction::User(UserAction::Sync));
                 }
             }
             if let Some(open_menu) = menus.open {
@@ -520,8 +588,6 @@ fn moved(rows: &[usize], index: &VaultIndex, selected: Option<Uuid>, step: isize
 
 /// What the user did in the list pane in a pass.
 struct ListPane {
-    /// Lock was clicked.
-    lock: bool,
     /// The item list; [`None`] while the list is empty and shows a note.
     items: Option<ListId>,
     /// Rows that Up and Down in the list move the selection by.
@@ -534,22 +600,16 @@ fn list_pane<A: VaultApp>(
     list: &ItemList,
     heading: ListHeading<'_>,
 ) -> Result<ListPane> {
-    let mut lock = false;
     let mut items = None;
     let mut step = 0;
     ui.grid("list pane", &[Length::Auto, Length::Star(1.0)], |ui| {
-        ui.columns("header", &[Length::Star(1.0), Length::Auto], 8.0, |ui| {
-            ui.stack("heading", Orientation::Vertical, 0.0, |ui| {
-                title(ui, heading.title)?;
-                let count = heading.count;
-                let plural = if count == 1 { "" } else { "s" };
-                ui.label("count", format_args!("{count} item{plural}"))?
-                    .secondary(true)?
-                    .style("CaptionTextBlockStyle")?;
-                Ok(())
-            })?;
-            // Lock moves to the title bar once it takes controls.
-            lock = ui.button("lock", "Lock")?.clicked()?;
+        ui.stack("heading", Orientation::Vertical, 0.0, |ui| {
+            title(ui, heading.title)?;
+            let count = heading.count;
+            let plural = if count == 1 { "" } else { "s" };
+            ui.label("count", format_args!("{count} item{plural}"))?
+                .secondary(true)?
+                .style("CaptionTextBlockStyle")?;
             Ok(())
         })?
         .margin([16.0, 16.0, 16.0, 8.0])?;
@@ -575,9 +635,159 @@ fn list_pane<A: VaultApp>(
     })?
     // The line between the list and the details.
     .dividers([false, false, true, false])?;
-    Ok(ListPane { lock, items, step })
+    Ok(ListPane { items, step })
 }
 
+/// The account's initial, the first letter of its email in uppercase, kept
+/// in a buffer of its own so a pass formats nothing.
+struct Initials {
+    bytes: [u8; 4],
+    length: usize,
+}
+
+impl Initials {
+    fn of(email: &str) -> Self {
+        let letter = email
+            .chars()
+            .find(|letter| letter.is_alphanumeric())
+            .and_then(|letter| letter.to_uppercase().next())
+            .unwrap_or('?');
+        let mut bytes = [0; 4];
+        let length = letter.encode_utf8(&mut bytes).len();
+        Initials { bytes, length }
+    }
+
+    fn as_str(&self) -> &str {
+        std::str::from_utf8(&self.bytes[..self.length]).expect("encode_utf8 wrote it")
+    }
+}
+
+/// What the user did at the title bar's right end in a pass.
+struct TitleBarEnd {
+    /// Lock or Ctrl+L.
+    lock: bool,
+    /// The account button was clicked: where its flyout opens.
+    account: Option<MenuAnchor>,
+}
+
+/// The title bar's right end, from the design: Lock and the account button.
+fn title_bar_end(ui: &mut Ui, initials: &str) -> Result<TitleBarEnd> {
+    let mut end = TitleBarEnd {
+        lock: false,
+        account: None,
+    };
+    ui.stack("end", Orientation::Horizontal, 4.0, |ui| {
+        end.lock = ui
+            .icon_button("lock", '\u{E72E}', "Lock (Ctrl+L)")?
+            .clicked()?;
+        end.lock |= ui.shortcut("lock key", false, 'L')?;
+        let mut account = ui.content_button("account", "Account", |ui| {
+            ui.person_picture("picture", initials, 24.0)?;
+            Ok(())
+        })?;
+        if account.clicked()? {
+            end.account = Some(account.anchor_right());
+        }
+        Ok(())
+    })?
+    .valign(Align::Center)?
+    .margin([0.0, 0.0, 8.0, 0.0])?;
+    Ok(end)
+}
+
+/// The AccountFlyout's card: who is logged in and where, and the sync line,
+/// the one place that shows the last sync and offers Sync now. Gives
+/// whether Sync now or Try again was clicked.
+fn account_card(ui: &mut Ui, screen: &VaultScreen<'_>, initials: &str) -> Result<bool> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    let now_ms = u64::try_from(now.as_millis()).unwrap_or(u64::MAX);
+    let ago = Ago(screen.synced_at.map(|at| now_ms.saturating_sub(at)));
+    // The text counts minutes, so the card draws again on the next one.
+    if let Some(elapsed) = ago.0 {
+        ui.request_pass_after(Duration::from_millis(60_000 - elapsed % 60_000));
+    }
+    let mut asked = false;
+    ui.stack("account card", Orientation::Vertical, 12.0, |ui| {
+        ui.columns("head", &[Length::Auto, Length::Star(1.0)], 12.0, |ui| {
+            ui.person_picture("picture", initials, 48.0)?;
+            ui.stack("who", Orientation::Vertical, 0.0, |ui| {
+                ui.label("email", format_args!("{}", screen.email))?
+                    .overflow(Overflow::Ellipsis)?
+                    .style("BodyStrongTextBlockStyle")?;
+                let server = screen.server.host_str().unwrap_or(screen.server.as_str());
+                ui.label("server", format_args!("{server}"))?
+                    .overflow(Overflow::Ellipsis)?
+                    .secondary(true)?;
+                Ok(())
+            })?;
+            Ok(())
+        })?;
+        ui.columns(
+            "sync",
+            &[Length::Auto, Length::Star(1.0), Length::Auto],
+            8.0,
+            |ui| {
+                let button = match (screen.syncing, screen.sync_error) {
+                    (true, _) => {
+                        ui.progress_ring("syncing", 12.0)?.valign(Align::Center)?;
+                        ui.label("text", format_args!("Syncing…"))?
+                            .valign(Align::Center)?;
+                        "Sync now"
+                    }
+                    (false, Some(_)) => {
+                        ui.font_icon("offline", '\u{EB5E}')?
+                            .size(12.0)?
+                            .valign(Align::Center)?;
+                        ui.label("text", format_args!("Offline · last synced {ago}"))?
+                            .overflow(Overflow::Wrap)?
+                            .valign(Align::Center)?;
+                        "Try again"
+                    }
+                    (false, None) => {
+                        ui.font_icon("synced", '\u{E73E}')?
+                            .size(12.0)?
+                            .valign(Align::Center)?;
+                        ui.label("text", format_args!("Synced {ago}"))?
+                            .overflow(Overflow::Wrap)?
+                            .valign(Align::Center)?;
+                        "Sync now"
+                    }
+                };
+                let mut sync = ui.button("sync", button)?;
+                sync.enabled(!screen.syncing)?;
+                asked = sync.clicked()?;
+                Ok(())
+            },
+        )?;
+        Ok(())
+    })?
+    .width(300.0)?;
+    Ok(asked)
+}
+
+/// How long ago something happened, in the words the sync line uses.
+/// [`None`] is a sync that never ran.
+#[derive(Clone, Copy)]
+struct Ago(Option<u64>);
+
+impl std::fmt::Display for Ago {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let Some(elapsed) = self.0 else {
+            return formatter.write_str("never");
+        };
+        let minutes = elapsed / 60_000;
+        let (count, unit) = match minutes {
+            0 => return formatter.write_str("just now"),
+            1..60 => (minutes, "minute"),
+            60..1440 => (minutes / 60, "hour"),
+            _ => (minutes / 1440, "day"),
+        };
+        let plural = if count == 1 { "" } else { "s" };
+        write!(formatter, "{count} {unit}{plural} ago")
+    }
+}
 /// One row of the item list: the type icon, the name over the subtitle,
 /// and a star for a favorite. A click selects the item, and the next pass
 /// opens it.

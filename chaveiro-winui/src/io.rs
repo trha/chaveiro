@@ -57,11 +57,17 @@ pub struct Io {
     copied: Rc<Cell<Option<clipboard::Copied>>>,
     /// The task of the last copy: its retries, then its clear.
     copy: Option<SpawnHandle>,
+    /// The task that sends [`Input::Tick`].
+    ticks: Option<SpawnHandle>,
 }
 
 /// Names one task of [`Io`], so its answer can end it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TaskId(u64);
+
+/// How often the core gets [`Input::Tick`]. Its timeouts are minutes,
+/// so a lock or a check lands at most this late.
+const TICK_EVERY: Duration = Duration::from_secs(30);
 
 /// How long a copy stays on the clipboard.
 const CLEAR_CLIPBOARD_AFTER: Duration = Duration::from_secs(30);
@@ -97,6 +103,7 @@ impl Io {
             next_task: 0,
             copied: Rc::default(),
             copy: None,
+            ticks: None,
         })
     }
 
@@ -123,6 +130,23 @@ impl Io {
             }
             Answer::None
         });
+    }
+
+    /// Sends [`Input::Tick`] every [`TICK_EVERY`] until [`close`](Self::close).
+    /// The core then locks after the idle time, checks the server for
+    /// changes, and ends prompts that waited too long, each when it is due
+    /// by the clock, so a tick after sleep catches up at once.
+    pub fn start_ticks(&mut self) {
+        let handle = self.handle.clone();
+        self.ticks = Some(winui_executor::spawn(async move {
+            loop {
+                winui_executor::sleep(TICK_EVERY).await;
+                handle.send(Message::Io {
+                    task: None,
+                    answer: Answer::Core(Input::Tick),
+                });
+            }
+        }));
     }
 
     /// Reads every slot and answers with [`Input::Started`]. A slot that
@@ -263,6 +287,7 @@ impl Io {
     /// closes, so no write is lost.
     pub fn close(&mut self) {
         self.tasks.clear();
+        self.ticks = None;
         self.clear_clipboard();
         self.storage.flush();
     }

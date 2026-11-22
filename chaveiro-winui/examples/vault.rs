@@ -1,7 +1,9 @@
 //! The vault window on its own, over a made-up vault, so it can be seen and
 //! driven without an account. It plays the core's part for the item
 //! actions: Open, Close, Save of a favorite, Trash and Restore change the
-//! made-up vault and print to stderr, and Copy prints the text it copies. Lock prints `lock` and closes the
+//! made-up vault and print to stderr, and Copy prints the text it copies.
+//! Sync now runs a made-up sync of 2 seconds that alternates between a
+//! success and offline. Lock prints `lock` and closes the
 //! window. `tests/ui/vault.ps1` drives it.
 //!
 //! `VAULT_BENCH=1` runs passes on a timer, counts the Rust allocations of
@@ -36,10 +38,11 @@ use winui_immediate::{App, Handle, Ui, run};
 fn main() -> Result<()> {
     let bench = std::env::var_os("VAULT_BENCH").map(|_| Bench::new());
     let ticking = bench.is_some();
-    run(move |handle: Handle<()>| {
+    run(move |handle: Handle<Message>| {
         if ticking {
+            let handle = handle.clone();
             std::thread::spawn(move || {
-                while handle.send(()) {
+                while handle.send(Message::Tick) {
                     std::thread::sleep(std::time::Duration::from_millis(10));
                 }
             });
@@ -67,6 +70,15 @@ fn main() -> Result<()> {
             form: VaultForm::default(),
             open: true,
             bench,
+            handle,
+            syncs: 0,
+            server: url::Url::parse("https://vault.bitwarden.com").expect("a valid URL"),
+            sync: match std::env::var("VAULT_SYNC").as_deref() {
+                Ok("syncing") => Some(SyncPreview::Syncing),
+                Ok("offline") => Some(SyncPreview::Offline),
+                _ => None,
+            },
+            synced_at: epoch_ms().saturating_sub(2 * 60_000),
         })
     })
 }
@@ -84,12 +96,47 @@ struct Preview {
     form: VaultForm,
     open: bool,
     bench: Option<Bench>,
+    handle: Handle<Message>,
+    /// Syncs finished, which alternate between success and offline.
+    syncs: u32,
+    server: url::Url,
+    /// `VAULT_SYNC`: `syncing` or `offline` starts in that sync state.
+    /// Sync now then runs a sync of 2 seconds.
+    sync: Option<SyncPreview>,
+    /// When the last sync succeeded, in epoch ms; two minutes before the
+    /// preview started at first.
+    synced_at: u64,
+}
+
+enum Message {
+    /// A bench pass.
+    Tick,
+    /// The made-up sync ended.
+    SyncDone,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SyncPreview {
+    Syncing,
+    Offline,
 }
 
 impl App for Preview {
-    type Message = ();
+    type Message = Message;
 
-    fn update(&mut self, (): ()) {}
+    fn update(&mut self, message: Message) {
+        if let Message::SyncDone = message {
+            // Every second sync fails, so both results show.
+            self.syncs += 1;
+            self.sync = match self.syncs % 2 {
+                1 => None,
+                _ => Some(SyncPreview::Offline),
+            };
+            if self.sync.is_none() {
+                self.synced_at = epoch_ms();
+            }
+        }
+    }
 
     fn view(&mut self, ui: &mut Ui) -> Result<()> {
         if let Some(bench) = &mut self.bench
@@ -102,14 +149,16 @@ impl App for Preview {
         }
         let screen = VaultScreen {
             email: "alex@example.com",
+            server: &self.server,
             index: &self.index,
             index_revision: self.revision,
             open: None,
-            syncing: false,
-            sync_error: None,
+            syncing: self.sync == Some(SyncPreview::Syncing),
+            sync_error: (self.sync == Some(SyncPreview::Offline))
+                .then_some("The server could not be reached."),
             error: None,
             revision: None,
-            synced_at: None,
+            synced_at: Some(self.synced_at),
             device_unlock: false,
             device_enrolling: false,
             device_error: None,
@@ -143,6 +192,18 @@ impl Preview {
             UserAction::Lock => {
                 eprintln!("lock");
                 self.open = false;
+            }
+            UserAction::Sync => {
+                eprintln!("sync");
+                if self.sync != Some(SyncPreview::Syncing) {
+                    self.sync = Some(SyncPreview::Syncing);
+                    let handle = self.handle.clone();
+                    winui_executor::spawn(async move {
+                        winui_executor::sleep(std::time::Duration::from_secs(2)).await;
+                        handle.send(Message::SyncDone);
+                    })
+                    .detach();
+                }
             }
             UserAction::Open(id) => {
                 eprintln!("open {}", id.as_u128());
@@ -469,6 +530,12 @@ fn copyable(view: &CipherView) -> CopyFields {
     .into_iter()
     .filter(|field| copy_text(view, *field).is_some())
     .collect()
+}
+
+fn epoch_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |now| now.as_millis() as u64)
 }
 
 fn secret(text: &str) -> SecretString {
