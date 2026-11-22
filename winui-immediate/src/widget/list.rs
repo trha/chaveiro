@@ -6,6 +6,7 @@ use crate::{
         HorizontalAlignment, IElementFactory, IElementFactory_Impl, ItemsRepeater, ScrollViewer,
         UIElement,
     },
+    events::{self, EventKind},
     pass::{ChildKind, ControlNode, Payload, Ui},
     runner,
     tree::{Key, NodeId, Visit},
@@ -122,11 +123,37 @@ impl Ui {
     /// the row first if it does not exist. An index past the end does
     /// nothing.
     pub fn bring_into_view(&mut self, list: ListId, index: usize) {
+        self.reveal(list, index, false);
+    }
+
+    /// [`bring_into_view`](Self::bring_into_view), then moves keyboard
+    /// focus to the row's control, as the arrow keys would, so its focus
+    /// rectangle shows.
+    pub fn focus_row(&mut self, list: ListId, index: usize) {
+        self.reveal(list, index, true);
+    }
+
+    /// The [`Key`](events::Key)s the user pressed while focus was in `list`, such as on
+    /// one of its rows, since the last pass, in order. The first call
+    /// subscribes the list, so its first result is empty.
+    pub fn list_keys(&mut self, list: ListId) -> Result<impl Iterator<Item = events::Key>> {
+        let control = self.control_mut(list.0);
+        let element = control.element.clone();
+        let mut subscribed = control.subscribed;
+        // The list's scroll area sees each key on its way down to the
+        // focused row.
+        self.events
+            .subscribe(list.0, &mut subscribed, &element, EventKind::Key)?;
+        self.control_mut(list.0).subscribed = subscribed;
+        Ok(self.events.keys(list.0))
+    }
+
+    fn reveal(&mut self, list: ListId, index: usize, focus: bool) {
         let Control::List { repeater, data } = &self.control(list.0).control else {
             unreachable!("list ids name lists")
         };
         if index < data.len {
-            self.reveals.push((repeater.clone(), index));
+            self.reveals.push((repeater.clone(), index, focus));
         }
     }
 

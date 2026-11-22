@@ -198,9 +198,16 @@ impl<A: App> Runner<A> {
         }
         self.ui.borrow_mut().sources = sources;
         let mut reveals = std::mem::take(&mut self.ui.borrow_mut().reveals);
-        for (repeater, index) in reveals.drain(..) {
+        for (repeater, index, focus) in reveals.drain(..) {
             let index = i32::try_from(index).expect("a list has fewer than 2^31 rows");
-            repeater.GetOrCreateElement(index)?.StartBringIntoView()?;
+            let row = repeater.GetOrCreateElement(index)?;
+            row.StartBringIntoView()?;
+            // The row is the list's shell, which takes no focus, so focus
+            // goes to the first control in it that does. A row with none
+            // leaves focus where it was.
+            if focus && let Ok(target) = FocusManager::FindFirstFocusableElement(&row) {
+                target.cast::<UIElement>()?.Focus(FocusState::Keyboard)?;
+            }
         }
         self.ui.borrow_mut().reveals = reveals;
         Ok(())

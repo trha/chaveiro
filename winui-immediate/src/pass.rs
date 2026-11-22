@@ -25,9 +25,10 @@ pub struct Ui {
     /// Item sources to set after the pass, with no borrow held, because
     /// WinUI may ask for rows inside `SetItemsSource`.
     pub(crate) sources: Vec<(ItemsRepeater, usize)>,
-    /// Rows to scroll into view after the sources are set, for the same
-    /// reason: WinUI builds a row that does not exist yet.
-    pub(crate) reveals: Vec<(ItemsRepeater, usize)>,
+    /// Rows to scroll into view after the sources are set, and whether to
+    /// focus them, for the same reason: WinUI builds a row that does not
+    /// exist yet.
+    pub(crate) reveals: Vec<(ItemsRepeater, usize, bool)>,
     /// Set by [`request_pass`](Self::request_pass) during a pass.
     pass_requested: bool,
 }

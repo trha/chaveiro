@@ -205,3 +205,5 @@ Microsoft.UI.Xaml.Input.IKeyboardAcceleratorFactory::CreateInstance
 Microsoft.UI.Xaml.Input.KeyboardAcceleratorInvokedEventArgs::{put_Handled}
 Microsoft.UI.Xaml.UIElement::{get_KeyboardAccelerators, put_KeyboardAcceleratorPlacementMode, StartBringIntoView}
 Microsoft.UI.Xaml.Controls.ItemsRepeater::{GetOrCreateElement}
+Microsoft.UI.Xaml.Input.FocusManager::{FindFirstFocusableElement}
+Microsoft.UI.Xaml.Input.IFocusManagerStatics::FindFirstFocusableElement
