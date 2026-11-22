@@ -1,0 +1,28 @@
+[package]
+name = "dom-immediate"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+publish = false
+description = "A spike: an immediate-mode UI over the browser DOM, on immediate-tree"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+immediate-tree = { path = "../immediate-tree" }
+js-sys = "0.3"
+wasm-bindgen = "0.2"
+web-sys = { version = "0.3", features = [
+  "Document",
+  "Element",
+  "Event",
+  "EventTarget",
+  "HtmlCollection",
+  "HtmlElement",
+  "HtmlInputElement",
+  "Node",
+  "Window",
+] }
+
+# The spike app, loaded by `spike/index.html`.
+[[example]]
+name = "spike"
+crate-type = ["cdylib"]

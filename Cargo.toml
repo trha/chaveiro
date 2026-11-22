@@ -5,6 +5,8 @@ members = [
   "winui-spikes",
   "chaveiro-core",
   "winui-executor",
+  "immediate-tree",
+  "dom-immediate",
   "winui-immediate",
   "appkit-immediate",
   "chaveiro-appkit",
