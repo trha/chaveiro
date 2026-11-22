@@ -192,8 +192,10 @@ impl<A: App> Runner<A> {
         let (consumed, windows) = self.view();
         // A pass that took nothing new in and asked for no rewrite has
         // caught up, so the same view again must write nothing.
-        let invalidated = self.ui.borrow().invalidated;
-        if cfg!(debug_assertions) && !consumed && !drained && !invalidated && windows > 0 {
+        let ui = self.ui.borrow();
+        let settled = !ui.invalidated && !ui.requested.get();
+        drop(ui);
+        if cfg!(debug_assertions) && !consumed && !drained && settled && windows > 0 {
             write_check::begin();
             let (consumed, windows) = self.view();
             let writes = write_check::end();

@@ -17,7 +17,7 @@ use objc2_app_kit::{
     NSVisualEffectView, NSWindow,
 };
 use objc2_foundation::{NSArray, NSString};
-use std::{any::Any, hash::Hash, rc::Rc};
+use std::{any::Any, cell::Cell, hash::Hash, rc::Rc};
 
 /// Builds the UI. The app gets it in [`App::view`](crate::App::view).
 pub struct Ui {
@@ -42,6 +42,10 @@ pub struct Ui {
     /// Whether this pass called [`Response::invalidate`](crate::Response::invalidate),
     /// so the next pass writes by request and is no idle pass.
     pub(crate) invalidated: bool,
+    /// Whether this pass called [`Ui::request_pass`], which says the view
+    /// changed state after declaring controls that show it, so the pass is
+    /// no idle pass.
+    pub(crate) requested: Cell<bool>,
     /// The header column's width while the body of a [`Ui::form`] runs.
     pub(crate) form_header_width: Option<f64>,
     /// The control to focus when the pass ends, once new views are in
@@ -64,6 +68,7 @@ impl Ui {
             reloads: Vec::new(),
             selections: Vec::new(),
             invalidated: false,
+            requested: Cell::new(false),
             form_header_width: None,
             focus: None,
             wake,
@@ -75,6 +80,7 @@ impl Ui {
         debug_assert!(self.frames.is_empty(), "the last pass closed its frames");
         self.tables.clear();
         self.invalidated = false;
+        self.requested.set(false);
         self.tree.begin_pass();
         let consumed = self.events.begin_pass(&mut self.tree);
         let root = self.tree.root();
@@ -123,6 +129,7 @@ impl Ui {
     /// Runs another pass after this one, for a view that declared controls
     /// before a later control changed the state they show.
     pub fn request_pass(&self) {
+        self.requested.set(true);
         (self.wake)();
     }
 
