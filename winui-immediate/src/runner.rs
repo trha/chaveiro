@@ -64,6 +64,17 @@ pub fn run<A: App>(make: impl 'static + FnOnce(Handle<A::Message>) -> Result<A>)
         // A message sent from `make` waits in the mailbox: its wake finds
         // the runner through the thread local, which is set below.
         let app = make(Handle::new(Arc::clone(&mailbox)))?;
+        let timer = dispatcher.CreateTimer()?;
+        timer.SetIsRepeating(false)?;
+        // The tick finds the runner through the thread local, as a message's
+        // wake does, so the timer and the runner hold no cycle.
+        let tick = timer.Tick(|_, _| {
+            CURRENT.with(|current| {
+                if let Some(current) = current.borrow().as_ref() {
+                    current.turn();
+                }
+            })
+        })?;
         let runner = Rc::new_cyclic(|weak: &Weak<Runner<A>>| {
             let wake = {
                 let weak = weak.clone();
@@ -90,6 +101,8 @@ pub fn run<A: App>(make: impl 'static + FnOnce(Handle<A::Message>) -> Result<A>)
                 missed: Cell::new(false),
                 dispatcher,
                 turn,
+                timer,
+                _tick: tick,
                 failure: launch_failure,
             }
         });
@@ -118,6 +131,11 @@ struct Runner<A: App> {
     dispatcher: DispatcherQueue,
     /// Built once and queued again for every turn.
     turn: DispatcherQueueHandler,
+    /// Runs a turn when the time a pass asked for with
+    /// [`Ui::request_pass_after`] is up. Each turn sets it again or stops it.
+    timer: DispatcherQueueTimer,
+    /// Dropping it ends the tick subscription.
+    _tick: windows_core::EventRevoker,
     failure: Rc<RefCell<Option<Error>>>,
 }
 
@@ -181,6 +199,21 @@ impl<A: App> Runner<A> {
         }
         if self.missed.take() {
             self.schedule();
+        }
+        let wake = self.ui.borrow_mut().take_wake();
+        // A timer that fails to start leaves the window as it is until the
+        // next event, which is all the app can see of it.
+        let armed = self.timer.Stop().and_then(|()| match wake {
+            Some(after) => {
+                let after = windows_time::TimeSpan::try_from(after)
+                    .unwrap_or(windows_time::TimeSpan { duration: i64::MAX });
+                self.timer.SetInterval(after)?;
+                self.timer.Start()
+            }
+            None => Ok(()),
+        });
+        if let Err(error) = armed {
+            tracing::warn!(%error, "the timed pass did not start");
         }
     }
 

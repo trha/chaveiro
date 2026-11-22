@@ -31,6 +31,9 @@ pub struct Ui {
     pub(crate) reveals: Vec<(ItemsRepeater, usize, bool)>,
     /// Set by [`request_pass`](Self::request_pass) during a pass.
     pass_requested: bool,
+    /// The shortest wait asked for by
+    /// [`request_pass_after`](Self::request_pass_after) this turn.
+    wake: Option<std::time::Duration>,
 }
 
 impl Ui {
@@ -44,6 +47,7 @@ impl Ui {
             sources: Vec::new(),
             reveals: Vec::new(),
             pass_requested: false,
+            wake: None,
         }
     }
 
@@ -53,6 +57,19 @@ impl Ui {
     /// window shows the old state until the next event or message.
     pub fn request_pass(&mut self) {
         self.pass_requested = true;
+    }
+
+    /// Asks for a pass `after` from the end of this turn, for state that
+    /// changes with time, such as a countdown. The shortest wait asked for in
+    /// a turn wins, and a turn that asks for none cancels the wait, so ask
+    /// on every pass while the state shows.
+    pub fn request_pass_after(&mut self, after: std::time::Duration) {
+        self.wake = Some(self.wake.map_or(after, |wake| wake.min(after)));
+    }
+
+    /// The wait asked for this turn, and forgets it.
+    pub(crate) fn take_wake(&mut self) -> Option<std::time::Duration> {
+        self.wake.take()
     }
 
     /// Whether this pass asked for another one, and forgets it.
