@@ -13,6 +13,7 @@
 
 mod bindings;
 mod copy;
+mod edit;
 mod io;
 mod login;
 mod route;

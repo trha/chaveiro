@@ -15,6 +15,8 @@
 #![cfg(windows)]
 #![allow(dead_code, reason = "shares modules with the app")]
 
+#[path = "../src/edit.rs"]
+mod edit;
 #[path = "../src/vault.rs"]
 mod vault;
 
@@ -114,7 +116,6 @@ struct Preview {
     synced_at: u64,
 }
 
-
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum SyncPreview {
     Syncing,
@@ -152,6 +153,7 @@ impl App for Preview {
             sync_error: (self.sync == Some(SyncPreview::Offline))
                 .then_some("The server could not be reached."),
             error: None,
+            creating: false,
             revision: None,
             synced_at: Some(self.synced_at),
             device_unlock: false,
@@ -230,8 +232,41 @@ impl Preview {
                 eprintln!("close");
                 self.opened = None;
             }
+            // A new item: add it with the next free id and open it, as the
+            // core does once the server stores it.
+            UserAction::Save(mut view) if view.id.is_none() => {
+                let id = Uuid::from_u128(1000 + self.views.len() as u128);
+                eprintln!(
+                    "create {} name={} kind={:?}",
+                    id.as_u128(),
+                    view.name.as_str(),
+                    view.kind
+                );
+                view.id = Some(id);
+                let subtitle = match &view.content {
+                    CipherContent::Login(login) => login.username.clone().unwrap_or_default(),
+                    _ => SecretString::default(),
+                };
+                self.index.ciphers.push(CipherSummary {
+                    id,
+                    kind: view.kind,
+                    name: view.name.clone(),
+                    subtitle,
+                    uris: Vec::new(),
+                    folder_id: view.folder_id,
+                    organization_id: None,
+                    favorite: view.favorite,
+                    reprompt: view.reprompt,
+                    copyable: copyable(&view),
+                    deleted: false,
+                    readable: true,
+                });
+                self.views.push(*view);
+                self.opened = Some(id);
+                self.revision += 1;
+            }
             UserAction::Save(view) => {
-                let id = view.id.expect("the preview saves only existing items");
+                let id = view.id.expect("a save without an id is a create, above");
                 eprintln!("save {} favorite={}", id.as_u128(), view.favorite);
                 let position = self.position(id);
                 self.index.ciphers[position].favorite = view.favorite;
@@ -563,44 +598,62 @@ fn secret(text: &str) -> SecretString {
 /// Counts the UI thread's allocations between the starts of two passes.
 struct Bench {
     passes: u32,
+    /// Passes before measuring: the window opens and the rows are realized.
+    /// A UI script that drives the window first, such as opening the New
+    /// form, sets a longer one.
+    warm_up: u32,
+    measured: usize,
     /// The allocation count at the start of the last pass.
     last: usize,
     allocations: Vec<usize>,
 }
 
 impl Bench {
-    /// Passes before measuring: the window opens and the rows are realized.
-    const WARM_UP: u32 = 30;
-    const MEASURED: usize = 200;
-
-    /// Reserves every buffer up front, so the bench itself allocates nothing
-    /// while it measures.
+    /// `VAULT_BENCH` as `<warm-up passes>,<measured passes>`; any other
+    /// value, such as `1`, keeps 30 and 200.
     fn new() -> Self {
+        let setting = std::env::var("VAULT_BENCH").unwrap_or_default();
+        let (warm_up, measured) = setting
+            .split_once(',')
+            .and_then(|(warm_up, measured)| Some((warm_up.parse().ok()?, measured.parse().ok()?)))
+            .unwrap_or((30, 200));
+        // Reserved up front, so the bench itself allocates nothing while it
+        // measures.
         Bench {
             passes: 0,
+            warm_up,
+            measured,
             last: 0,
-            allocations: Vec::with_capacity(Self::MEASURED),
+            allocations: Vec::with_capacity(measured),
         }
     }
 
     /// Records the pass that starts now. Returns true when the bench is done.
     fn measure(&mut self) -> bool {
-        if self.allocations.len() == Self::MEASURED {
+        if self.allocations.len() == self.measured {
             return true;
         }
         let count = ALLOCATIONS.get();
         self.passes += 1;
-        if self.passes > Self::WARM_UP {
+        if self.passes > self.warm_up {
             self.allocations.push(count - self.last);
         }
         self.last = count;
-        if self.allocations.len() < Self::MEASURED {
+        if self.passes == self.warm_up {
+            // For a UI script, which starts its keys on this line. Read
+            // again after, so the print's own allocations do not count.
+            eprintln!("bench: measuring");
+            self.last = ALLOCATIONS.get();
+        }
+        if self.allocations.len() < self.measured {
             return false;
         }
         let total: usize = self.allocations.iter().sum();
         let most = self.allocations.iter().max().copied().unwrap_or(0);
+        let allocating = self.allocations.iter().filter(|&&count| count > 0).count();
         eprintln!(
-            "bench: {} steady passes, {total} UI-thread allocations in all, at most {most} in one",
+            "bench: {} steady passes, {total} UI-thread allocations in all, at most {most} in one, \
+             {allocating} passes allocated",
             self.allocations.len()
         );
         true

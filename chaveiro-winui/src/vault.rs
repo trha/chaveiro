@@ -1,12 +1,14 @@
 //! The vault window, from the VaultScreen design: the navigation pane of
 //! filters with their item counts, the list of the chosen filter's items,
-//! and the open item's details. Editing comes later.
+//! and the open item's details, or the form for a new item. Editing an
+//! existing item comes later.
 //!
 //! The window stays open for most of the app's life, so a pass that finds
 //! the index and filter unchanged allocates nothing for the pane or the
 //! list: the counts, the pane's entries and the list's rows are rebuilt
 //! only when [`VaultScreen::index_revision`] or the filter changes.
 
+use crate::edit::{self, Draft, EditPass};
 use chaveiro_core::{
     core::{ItemError, UserAction, VaultScreen},
     crypto::SecretString,
@@ -23,8 +25,8 @@ use url::Url;
 use uuid::Uuid;
 use windows_core::Result;
 use winui_immediate::{
-    Align, App, Key, Length, ListId, MenuAnchor, NavigationEntry, NavigationSelection, Orientation,
-    Overflow, Severity, Ui,
+    Align, App, DialogAnswer, Key, Length, ListId, MenuAnchor, NavigationEntry,
+    NavigationSelection, Orientation, Overflow, Severity, Ui,
 };
 use zeroize::{Zeroize, Zeroizing};
 
@@ -55,10 +57,81 @@ pub struct VaultForm {
     opened: Option<Uuid>,
     /// The row clicked since the last pass, which the next pass opens.
     clicked: Option<Uuid>,
-    /// The secrets of the selected item shown in clear. Emptied when
-    /// another item is selected.
-    revealed: Vec<FieldId>,
+    revealed: Revealed,
     menus: ItemMenus,
+    /// The new item being filled in, whose form takes the details pane's
+    /// place.
+    editing: Option<Editing>,
+    /// How many discard dialogs opened, so each one is a dialog of its own,
+    /// which shows.
+    dialogs: u64,
+}
+
+/// The secrets shown in clear, which belong to one item.
+#[derive(Default)]
+struct Revealed {
+    /// The item `fields` belong to.
+    item: Option<Uuid>,
+    fields: Vec<FieldId>,
+}
+
+impl Revealed {
+    /// The fields shown for `item`. A different item than last time starts
+    /// with none, so another item's secrets never show.
+    fn of(&mut self, item: Option<Uuid>) -> &mut Vec<FieldId> {
+        if self.item != item {
+            self.item = item;
+            self.fields.clear();
+        }
+        &mut self.fields
+    }
+}
+
+/// A new item being filled in, with the action the discard dialog holds
+/// back while it asks.
+struct Editing {
+    draft: Draft,
+    leaving: Option<Leaving>,
+}
+
+/// An action held back by the discard dialog.
+struct Leaving {
+    to: LeaveTo,
+    /// The dialog's title, which names the item.
+    title: String,
+    /// The value of [`VaultForm::dialogs`] when the dialog opened.
+    serial: u64,
+}
+
+/// Holds `to` behind the discard dialog when the form has changes, and
+/// returns whether it did. While a dialog is open, a second ask is
+/// dropped.
+fn should_hold(editing: &mut Option<Editing>, dialogs: &mut u64, to: LeaveTo) -> bool {
+    let Some(editing) = editing.as_mut().filter(|editing| editing.draft.changed()) else {
+        return false;
+    };
+    if editing.leaving.is_none() {
+        *dialogs += 1;
+        editing.leaving = Some(Leaving {
+            to,
+            title: editing.draft.discard_title(),
+            serial: *dialogs,
+        });
+    }
+    true
+}
+
+/// Where the user asked to go from a form with changes.
+#[derive(Clone, Copy)]
+enum LeaveTo {
+    /// Open this item, as a row click does.
+    Open(Uuid),
+    /// Start a new item of this kind.
+    New(CipherKind),
+    /// Lock, from Lock or Ctrl+L.
+    Lock,
+    /// Close the window.
+    Close,
 }
 
 impl Default for VaultForm {
@@ -72,8 +145,10 @@ impl Default for VaultForm {
             selected: None,
             opened: None,
             clicked: None,
-            revealed: Vec::new(),
+            revealed: Revealed::default(),
             menus: ItemMenus::default(),
+            editing: None,
+            dialogs: 0,
         }
     }
 }
@@ -98,17 +173,11 @@ impl VaultForm {
         self.selected = None;
         self.opened = None;
         self.clicked = None;
-        self.revealed.clear();
+        self.revealed.of(None);
         self.menus.open = None;
         self.menus.account = None;
-    }
-
-    /// Selects `id`, hiding the secrets of the item selected before.
-    fn select(&mut self, id: Option<Uuid>) {
-        if self.selected != id {
-            self.selected = id;
-            self.revealed.clear();
-        }
+        // Its text wipes itself on drop.
+        self.editing = None;
     }
 }
 
@@ -259,27 +328,42 @@ pub fn view<A: VaultApp>(
         });
         sidebar.revision = Some(revision);
     }
+
     // The core opened another item, such as a reopen after a sync. A row
     // clicked since wins, so this comes first.
+    // An item the core opened that the user did not pick in the list, such
+    // as a new item that saved: the list scrolls to its row if it has one.
+    let mut reveal = None;
     let opened = open.and_then(|view| view.id);
     if opened != form.opened {
         form.opened = opened;
         if opened.is_some() {
-            form.select(opened);
+            if form.selected != opened {
+                reveal = opened;
+            }
+            form.selected = opened;
         }
     }
+
     let mut action = None;
+
     // A row clicked or moved to last pass: open it, or for an item that
     // cannot be read, close the open one, because its details come from
     // the list.
-    if let Some(id) = form.clicked.take() {
-        form.select(Some(id));
-        let readable = index
-            .ciphers
-            .iter()
-            .any(|cipher| cipher.id == id && cipher.readable);
-        let opened = open.and_then(|view| view.id);
-        action = match (readable, opened) {
+    if let Some(id) = form.clicked.take()
+        && !should_hold(&mut form.editing, &mut form.dialogs, LeaveTo::Open(id))
+    {
+        // A row click leaves the form and drops what it held.
+        form.editing = None;
+        form.selected = Some(id);
+        // The item's readability, and the core's open item.
+        action = match (
+            index
+                .ciphers
+                .iter()
+                .any(|cipher| cipher.id == id && cipher.readable),
+            opened,
+        ) {
             (true, opened) if opened != Some(id) => Some(VaultAction::User(UserAction::Open(id))),
             (false, Some(_)) => Some(VaultAction::User(UserAction::Close)),
             _ => None,
@@ -290,42 +374,54 @@ pub fn view<A: VaultApp>(
     // after the pass draws, so `open` is still the item before.
     let opening = matches!(action, Some(VaultAction::User(UserAction::Open(_))));
 
-    let sidebar = &form.sidebar;
+    let VaultForm {
+        filter: form_filter,
+        settings,
+        sidebar,
+        search,
+        list,
+        selected: selected_field,
+        clicked,
+        revealed,
+        menus,
+        editing,
+        dialogs,
+        ..
+    } = &mut *form;
     let position = |filter| {
         sidebar
             .filters
             .iter()
             .position(|slot| *slot == Some(filter))
     };
-    if !form.settings && position(form.filter).is_none() {
-        form.filter = Filter::All;
+    if !*settings && position(*form_filter).is_none() {
+        *form_filter = Filter::All;
     }
-    let mut selected = match form.settings {
+    let shown_filter = *form_filter;
+    let mut selected = match settings {
         true => Some(NavigationSelection::Settings),
-        false => position(form.filter).map(NavigationSelection::Entry),
+        false => position(shown_filter).map(NavigationSelection::Entry),
     };
 
-    let search = &mut form.search;
     search.placeholder.clear();
-    match form.filter {
-        Filter::Folder(_) => {
-            let name = label(form.filter, index);
-            write!(search.placeholder, "Search {name}")
-        }
+    match shown_filter {
+        Filter::Folder(_) => write!(search.placeholder, "Search {}", label(shown_filter, index)),
         filter => search.placeholder.write_str(search_label(filter)),
     }
     .expect("writing to a String does not fail");
     search.placeholder.push_str(" (Ctrl+F)");
-    let list = &mut form.list;
-    let clicked = &mut form.clicked;
-    let revealed = &mut form.revealed;
-    let menus = &mut form.menus;
-    let selected_item = form.selected;
+
+    // A new form started this pass, so no row stays selected.
+    let mut started = false;
+    let selected_item = *selected_field;
+    // The details pane shows only this item's revealed secrets.
+    let revealed = revealed.of(selected_item);
     let initials = Initials::of(screen.email);
     let mut window = ui.window("vault", "Chaveiro", |ui| {
         ui.grid("window", &[Length::Auto, Length::Star(1.0)], |ui| {
             // Rows that Up and Down in the search box move the selection by.
             let mut step = 0isize;
+
             // The design's title bar: the name with the Offline tag right
             // after it, the search box centered on the window, and Lock
             // and the account button at the right end. The search box is
@@ -388,16 +484,16 @@ pub fn view<A: VaultApp>(
                 })?;
                 Ok(())
             })?;
-            let push = |entries: &mut Vec<_>| {
-                pane(index, &sidebar.counts, |_, entry| entries.push(entry));
-            };
+
             ui.overlay("panes and progress", |ui| {
+                let push = |entries: &mut Vec<_>| {
+                    pane(index, &sidebar.counts, |_, entry| entries.push(entry));
+                };
                 ui.navigation_view("pane", revision, push, &mut selected, |ui, selected| {
-                    let shown = match selected {
+                    let Some(filter) = (match selected {
                         Some(NavigationSelection::Entry(entry)) => sidebar.filters[entry],
                         Some(NavigationSelection::Settings) | None => None,
-                    };
-                    let Some(filter) = shown else {
+                    }) else {
                         ui.stack("settings", Orientation::Vertical, 8.0, |ui| {
                             if selected == Some(NavigationSelection::Settings) {
                                 title(ui, "Settings")?;
@@ -415,25 +511,49 @@ pub fn view<A: VaultApp>(
                         &[Length::Pixels(LIST_WIDTH), Length::Star(1.0)],
                         0.0,
                         |ui| {
-                            let heading = ListHeading {
-                                title: label(filter, index),
-                                count: match searching {
-                                    true => list.rows.len(),
-                                    false => sidebar.counts.get(filter),
+                            let pane = list_pane::<A>(
+                                ui,
+                                list,
+                                ListHeading {
+                                    title: label(filter, index),
+                                    count: match searching {
+                                        true => list.rows.len(),
+                                        false => sidebar.counts.get(filter),
+                                    },
+                                    empty: match filter {
+                                        _ if searching => "No items match your search.",
+                                        Filter::Trash => "Trash is empty.",
+                                        _ => "No items here yet.",
+                                    },
                                 },
-                                empty: match filter {
-                                    _ if searching => "No items match your search.",
-                                    Filter::Trash => "Trash is empty.",
-                                    _ => "No items here yet.",
-                                },
-                            };
-                            let pane = list_pane::<A>(ui, list, heading)?;
+                                filter,
+                            )?;
+                            // The form replaces any form before it. The
+                            // details pane comes next, so this pass draws it.
+                            if let Some(kind) = pane.new
+                                && !should_hold(editing, dialogs, LeaveTo::New(kind))
+                            {
+                                *editing = Some(Editing {
+                                    draft: Draft::new(kind, filter, index),
+                                    leaving: None,
+                                });
+                                started = true;
+                            }
 
                             // Up and Down move the selection, from the search box
                             // or from the list. The next pass opens the row they
                             // moved to, as a click would. From the list, focus
                             // follows the selection.
                             if let Some(items) = pane.items {
+                                // An item outside the filter has no row, so
+                                // the list stays where it is.
+                                if let Some(position) = reveal.and_then(|id| {
+                                    list.rows
+                                        .iter()
+                                        .position(|&row| index.ciphers[row].id == id)
+                                }) {
+                                    ui.bring_into_view(items, position);
+                                }
                                 for (step, focus) in [(step, false), (pane.step, true)] {
                                     let Some(position) =
                                         moved(&list.rows, index, selected_item, step)
@@ -448,14 +568,37 @@ pub fn view<A: VaultApp>(
                                     }
                                 }
                             }
-                            let details = Details {
-                                index,
-                                selected: selected_item,
-                                open,
-                                opening,
-                                error: screen.error,
-                            };
-                            let pass = details_pane(ui, details, revealed)?;
+                            if let Some(filling) = editing {
+                                match edit::edit_pane(
+                                    ui,
+                                    &mut filling.draft,
+                                    index,
+                                    screen.creating,
+                                    screen.error,
+                                )? {
+                                    EditPass::Stay => {}
+                                    EditPass::Save(view) => {
+                                        action = Some(VaultAction::User(UserAction::Save(view)));
+                                    }
+                                    // Its dialog, if one is open, goes with it.
+                                    EditPass::Close => {
+                                        *editing = None;
+                                        ui.request_pass();
+                                    }
+                                }
+                                return Ok(());
+                            }
+                            let pass = details_pane(
+                                ui,
+                                Details {
+                                    index,
+                                    selected: selected_item,
+                                    open,
+                                    opening,
+                                    error: screen.error,
+                                },
+                                revealed,
+                            )?;
                             if let Some(asked) = pass.asked {
                                 action = Some(VaultAction::User(asked));
                             }
@@ -475,6 +618,7 @@ pub fn view<A: VaultApp>(
                 }
                 Ok(())
             })?;
+
             // The copy keys act on the selected item, as its menu would.
             if let Some(summary) =
                 selected_item.and_then(|id| index.ciphers.iter().find(|cipher| cipher.id == id))
@@ -491,6 +635,7 @@ pub fn view<A: VaultApp>(
                     }
                 }
             }
+
             if let Some((anchor, serial)) = menus.account {
                 let mut asked = false;
                 let flyout = ui.flyout(("account", serial), anchor, |ui| {
@@ -504,6 +649,41 @@ pub fn view<A: VaultApp>(
                     action = Some(VaultAction::User(UserAction::Sync));
                 }
             }
+
+            if let Some(filling) = editing.as_mut()
+                && let Some(held) = &filling.leaving
+            {
+                let dialog = ui.dialog(
+                    ("discard", held.serial),
+                    &held.title,
+                    "Your changes are not saved.",
+                    "Discard",
+                    "Keep editing",
+                )?;
+                match dialog.answer() {
+                    None => {}
+                    Some(DialogAnswer::Close) => filling.leaving = None,
+                    Some(DialogAnswer::Primary) => {
+                        let to = held.to;
+                        *editing = None;
+                        match to {
+                            // The next pass opens it, as a click would.
+                            LeaveTo::Open(id) => *clicked = Some(id),
+                            LeaveTo::New(kind) => {
+                                *editing = Some(Editing {
+                                    draft: Draft::new(kind, shown_filter, index),
+                                    leaving: None,
+                                });
+                                started = true;
+                            }
+                            LeaveTo::Lock => action = Some(VaultAction::User(UserAction::Lock)),
+                            LeaveTo::Close => action = Some(VaultAction::Close),
+                        }
+                        ui.request_pass();
+                    }
+                }
+            }
+
             if let Some(open_menu) = menus.open {
                 match index
                     .ciphers
@@ -514,8 +694,7 @@ pub fn view<A: VaultApp>(
                     None => menus.open = None,
                     Some(summary) => {
                         let mut picked = None;
-                        let id = ("item menu", open_menu.serial);
-                        let menu = ui.menu(id, open_menu.anchor, |ui| {
+                        let menu = ui.menu(("item menu", open_menu.serial), open_menu.anchor, |ui| {
                             item_menu(ui, index, summary, &mut picked)
                         })?;
                         if menu.closed() {
@@ -527,10 +706,12 @@ pub fn view<A: VaultApp>(
                     }
                 }
             }
+
             Ok(())
         })?;
         Ok(())
     })?;
+
     window
         .mica()?
         .extends_into_title_bar()?
@@ -539,6 +720,22 @@ pub fn view<A: VaultApp>(
         action = Some(VaultAction::Close);
     }
     let window = window.id()?;
+
+    if started {
+        // The rows build after this pass's view, so they show it at once.
+        *selected_field = None;
+    }
+    // Lock and closing the window ask first when the form holds changes. A
+    // timeout lock never comes here, so it drops them without asking.
+    if let Some(to) = match action {
+        Some(VaultAction::User(UserAction::Lock)) => Some(LeaveTo::Lock),
+        Some(VaultAction::Close) => Some(LeaveTo::Close),
+        _ => None,
+    } && should_hold(editing, dialogs, to)
+    {
+        action = None;
+        ui.request_pass();
+    }
     // The caller applies the action after this pass drew the window, and
     // a row click reaches here a pass after its event, so ask for a pass
     // that shows the result.
@@ -546,20 +743,21 @@ pub fn view<A: VaultApp>(
         ui.request_pass();
     }
     match selected {
-        Some(NavigationSelection::Settings) => form.settings = true,
+        Some(NavigationSelection::Settings) => *settings = true,
         Some(NavigationSelection::Entry(entry)) => {
             if let Some(filter) = sidebar.filters[entry] {
-                if filter != form.filter {
+                if filter != *form_filter {
                     // The search box came before the pane in this pass, so
                     // its placeholder names the old filter until the next.
                     ui.request_pass();
                 }
-                form.filter = filter;
-                form.settings = false;
+                *form_filter = filter;
+                *settings = false;
             }
         }
         None => {}
     }
+
     Ok(VaultPass { action, window })
 }
 
@@ -595,19 +793,40 @@ struct ListPane {
     items: Option<ListId>,
     /// Rows that Up and Down in the list move the selection by.
     step: isize,
+    /// New, its menu or Ctrl+N asked for a new item of this kind.
+    new: Option<CipherKind>,
 }
 
-/// Draws the list pane: the filter's name and count over its items.
+/// Draws the list pane: the filter's name and count and the New button
+/// over its items.
 fn list_pane<A: VaultApp>(
     ui: &mut Ui,
     list: &ItemList,
     heading: ListHeading<'_>,
+    filter: Filter,
 ) -> Result<ListPane> {
     let mut items = None;
     let mut step = 0;
+    let mut new = None;
     ui.grid("list pane", &[Length::Auto, Length::Star(1.0)], |ui| {
         ui.stack("heading", Orientation::Vertical, 0.0, |ui| {
-            title(ui, heading.title)?;
+            // The title takes the width the New button leaves and trims
+            // with "…": a star column next to an auto one, since WinUI has
+            // no compression priority to squeeze a label.
+            ui.columns(
+                "title and new",
+                &[Length::Star(1.0), Length::Auto],
+                12.0,
+                |ui| {
+                    title(ui, heading.title)?;
+                    // Trash holds deleted items, so it offers no New, and
+                    // Ctrl+N does nothing there.
+                    if filter != Filter::Trash {
+                        new = new_button(ui, filter)?;
+                    }
+                    Ok(())
+                },
+            )?;
             let count = heading.count;
             let plural = if count == 1 { "" } else { "s" };
             ui.label("count", format_args!("{count} item{plural}"))?
@@ -638,7 +857,52 @@ fn list_pane<A: VaultApp>(
     })?
     // The line between the list and the details.
     .dividers([false, false, true, false])?;
-    Ok(ListPane { items, step })
+    Ok(ListPane { items, step, new })
+}
+
+/// The New split button: its main part or Ctrl+N asks for the kind
+/// [`edit::default_kind`] gives for `filter`, and its menu for any kind with
+/// a form. Gives the kind asked for.
+fn new_button(ui: &mut Ui, filter: Filter) -> Result<Option<CipherKind>> {
+    let mut new = None;
+    let kind = edit::default_kind(filter);
+    let mut button = ui.split_button("new", '\u{E710}', "New", |ui| {
+        for kind in KINDS {
+            let mut item = ui.menu_item(
+                ("new", kind_glyph(kind) as u32),
+                kind_glyph(kind),
+                new_label(kind),
+            )?;
+            item.enabled(edit::has_form(kind))?;
+            if item.clicked()? {
+                new = Some(kind);
+            }
+        }
+        Ok(())
+    })?;
+    button
+        .accent(true)?
+        .tooltip(match kind {
+            CipherKind::SecureNote => "New note (Ctrl+N)",
+            _ => "New login (Ctrl+N)",
+        })?
+        .valign(Align::Center)?;
+    if button.clicked()? || ui.shortcut("new shortcut", false, 'N')? {
+        new = Some(kind);
+    }
+    Ok(new)
+}
+
+/// The New menu's entry for `kind`, from the design.
+fn new_label(kind: CipherKind) -> &'static str {
+    match kind {
+        CipherKind::Login => "Login",
+        CipherKind::Card => "Card",
+        CipherKind::Identity => "Identity",
+        CipherKind::SecureNote => "Secure note",
+        CipherKind::SshKey => "SSH key",
+        CipherKind::Unknown(_) => unreachable!("the menu lists only KINDS"),
+    }
 }
 
 /// The account's initial, the first letter of its email in uppercase, kept
