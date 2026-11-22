@@ -198,6 +198,10 @@ impl Chaveiro {
         if !matches!(screen, Screen::SecondFactor { .. }) {
             self.second_factor = None;
         }
+        // Leaving the vault means it locked or logged out.
+        if showed_vault && !self.showed_vault {
+            self.io.clear_pasteboard();
+        }
         match &screen {
             Screen::Vault(vault) => {
                 // The vault starts on All Items each time it opens.
@@ -207,6 +211,10 @@ impl Chaveiro {
                 let open = vault.open.map(|item| &item.view);
                 match vault::view::<Self>(ui, &mut self.vault, vault, open, now_ms())? {
                     VaultAction::User(action) => Some(Next::User(action)),
+                    VaultAction::Copy(text) => {
+                        self.io.copy(&text);
+                        None
+                    }
                     VaultAction::Close => Some(Next::Quit),
                 }
             }

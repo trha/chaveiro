@@ -8,6 +8,7 @@
 //! readable on disk.
 
 mod http;
+mod pasteboard;
 mod settings;
 
 use appkit_executor::off_thread;
@@ -18,7 +19,7 @@ use chaveiro_core::{
 use objc2::rc::Retained;
 use objc2_foundation::NSURLSession;
 pub use settings::{Settings, SettingsError};
-use std::{future::Future, path::PathBuf, pin::Pin};
+use std::{future::Future, path::PathBuf, pin::Pin, time::Duration};
 
 /// Holds the effects of the core as futures for the view to run. Answers
 /// may come in any order.
@@ -31,7 +32,13 @@ pub struct Io {
     /// taken. The future is [`None`] once a pass started it.
     pending: Vec<(TaskId, Option<Work>)>,
     next_task: u64,
+    /// The last copy while it may still be on the pasteboard, and the task
+    /// that clears it.
+    copied: Option<(TaskId, pasteboard::Copied)>,
 }
+
+/// How long a copy stays on the pasteboard.
+const CLEAR_PASTEBOARD_AFTER: Duration = Duration::from_secs(30);
 
 /// Names one task of [`Io`], so its answer can end it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -55,6 +62,7 @@ impl Io {
             folder,
             pending: Vec::new(),
             next_task: 0,
+            copied: None,
         }
     }
 
@@ -88,17 +96,19 @@ impl Io {
                 password,
                 email,
                 kdf,
-            } => self.pend(async move {
-                let result = off_thread(move || {
-                    let result = derive_master_key(&password, &email, kdf);
-                    drop(password);
-                    result
-                })
-                .await;
-                // A panic is on stderr, and the core keeps waiting, as it
-                // does for a lost request.
-                result.map(|result| Input::Derived { id, result })
-            }),
+            } => {
+                self.pend(async move {
+                    let result = off_thread(move || {
+                        let result = derive_master_key(&password, &email, kdf);
+                        drop(password);
+                        result
+                    })
+                    .await;
+                    // A panic is on stderr, and the core keeps waiting, as it
+                    // does for a lost request.
+                    result.map(|result| Input::Derived { id, result })
+                });
+            }
             // Dropped until the Keychain store lands; see the module doc.
             Effect::Store { id, .. } => {
                 self.pend(async move { Some(Input::Stored { id, result: Ok(()) }) });
@@ -106,9 +116,7 @@ impl Io {
             Effect::Clear { .. } => {}
             // A pass runs after each answer, so there is nothing to do.
             Effect::Rerender => {}
-            // Dropped until the vault panes offer copy, because nothing here
-            // sends the copy action yet.
-            Effect::Copy { .. } => {}
+            Effect::Copy { text } => self.copy(&text),
             Effect::DeviceSecret { id, .. } => {
                 // Touch ID lands with the lock screen.
                 self.pend(async move {
@@ -120,6 +128,34 @@ impl Io {
             }
             Effect::PasskeyReply { .. } | Effect::PasskeyCatalog { .. } => {}
             Effect::SshAgentReply { .. } => {}
+        }
+    }
+
+    /// Puts `text` on the pasteboard and clears it after
+    /// [`CLEAR_PASTEBOARD_AFTER`]. A later copy replaces this one and ends
+    /// its clear, because that copy's own clear runs.
+    pub fn copy(&mut self, text: &str) {
+        if let Some((task, _)) = self.copied.take() {
+            self.answered(task);
+        }
+        let Some(copied) = pasteboard::copy(text) else {
+            tracing::warn!("nothing was copied");
+            return;
+        };
+        let task = self.pend(async move {
+            appkit_executor::sleep(CLEAR_PASTEBOARD_AFTER).await;
+            pasteboard::clear(copied);
+            None
+        });
+        self.copied = Some((task, copied));
+    }
+
+    /// Empties the pasteboard if it still holds the last copy, and ends
+    /// that copy's clear. Call it when the vault locks.
+    pub fn clear_pasteboard(&mut self) {
+        if let Some((task, copied)) = self.copied.take() {
+            self.answered(task);
+            pasteboard::clear(copied);
         }
     }
 
@@ -147,13 +183,15 @@ impl Io {
     /// derivation already on the pool runs to its end, and its result drops
     /// there. Call it when the app closes.
     pub fn close(&mut self) {
+        self.clear_pasteboard();
         self.pending.clear();
     }
 
     /// Adds `future` as a pending effect for the view to run.
-    fn pend(&mut self, future: impl 'static + Future<Output = Option<Input>>) {
+    fn pend(&mut self, future: impl 'static + Future<Output = Option<Input>>) -> TaskId {
         let task = TaskId(self.next_task);
         self.next_task += 1;
         self.pending.push((task, Some(Box::pin(future))));
+        task
     }
 }

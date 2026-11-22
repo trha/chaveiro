@@ -28,14 +28,15 @@ use chaveiro_core::{
     core::{UserAction, VaultScreen},
     crypto::SecretString,
     vault::{
-        CardView, CipherContent, CipherKind, CipherSummary, CipherView, CustomField, FolderSummary,
-        IdentityView, LoginView, SshKeyView, UriView, VaultIndex,
+        CardView, CipherContent, CipherKind, CipherSummary, CipherView, CopyField, CustomField,
+        FolderSummary, IdentityView, LoginView, SshKeyView, UriView, VaultIndex,
     },
 };
 use objc2::{MainThreadMarker, Message, rc::Retained, sel};
 use objc2_app_kit::{
-    NSApplication, NSButton, NSSearchToolbarItem, NSSplitView, NSTableView, NSTableViewStyle,
-    NSTextField, NSTextInputClient, NSTextView, NSToolbarItem, NSToolbarItemGroup, NSView,
+    NSApplication, NSButton, NSEvent, NSEventModifierFlags, NSEventType, NSMenuDelegate,
+    NSSearchToolbarItem, NSSplitView, NSTableView, NSTableViewStyle, NSTextField,
+    NSTextInputClient, NSTextView, NSToolbarItem, NSToolbarItemGroup, NSView,
 };
 use objc2_foundation::{NSIndexSet, NSNotFound, NSRange, NSString};
 use std::{
@@ -79,6 +80,9 @@ enum Step {
     Search(&'static str),
     /// Presses Down in the search field.
     SearchDown,
+    /// Right-clicks the list row with this name, prints the menu's items
+    /// and chooses the one with this title.
+    Menu(&'static str, &'static str),
     /// Starts counting allocations.
     Measure,
     /// A message that changes nothing, so its pass is a steady one.
@@ -141,6 +145,15 @@ const SCRIPT: &[Step] = &[
     Step::Tick,
     Step::Tick,
     Step::Report,
+    Step::Search(""),
+    Step::Menu("GitHub", "Copy Verification Code"),
+    Step::Menu("Mail server", "Copy Password"),
+    Step::PickRow("GitHub"),
+    Step::Click("Copy verification code"),
+    Step::Menu("Personal Visa", "Move to Trash"),
+    Step::PickFilter("Trash"),
+    Step::Menu("Personal Visa", "Put Back"),
+    Step::PickFilter("All Items"),
     Step::Search("zzz"),
     Step::Dump,
     Step::Search(""),
@@ -239,6 +252,11 @@ impl Preview {
                 }
                 println!("-- searched {text:?}");
             }
+            // AppKit opens a menu between passes, and the step plays inside
+            // one, which could not run the pass that fills the menu.
+            Step::Menu(name, title) => {
+                dispatch2::DispatchQueue::main().exec_async(move || open_menu(name, title));
+            }
             Step::SearchDown => {
                 unsafe { search_editor(&content).doCommandBySelector(sel!(moveDown:)) };
                 println!("-- pressed Down in the search field");
@@ -305,6 +323,8 @@ impl App for Preview {
         match action {
             None => {}
             Some(VaultAction::Close) => self.open = false,
+            // The preview leaves the pasteboard alone.
+            Some(VaultAction::Copy(text)) => eprintln!("copy {}", text.as_str()),
             Some(VaultAction::User(action)) => self.act(action),
         }
     }
@@ -321,6 +341,7 @@ impl Preview {
     fn act(&mut self, action: UserAction) {
         match action {
             UserAction::Sync => eprintln!("sync"),
+            UserAction::Copy { id, field } => eprintln!("copy {field:?} of {}", id.as_u128()),
             UserAction::Lock => {
                 eprintln!("lock");
                 self.open = false;
@@ -362,6 +383,56 @@ impl Preview {
     }
 }
 
+/// Right-clicks the list row `name`, prints the menu's items and chooses
+/// the one titled `title`, as [`Step::Menu`] says.
+fn open_menu(name: &str, title: &str) {
+    let mtm = MainThreadMarker::new().expect("blocks on the main queue run on the main thread");
+    let content = content(mtm);
+    let list = &tables(&content)[1];
+
+    let row = row_named(list, name);
+    let rect = list.rectOfRow(row);
+    let point = list.convertPoint_toView(
+        objc2_foundation::NSPoint::new(rect.origin.x + 20.0, rect.origin.y + 10.0),
+        None,
+    );
+    let window = list.window().expect("the list is in the window");
+    let event = NSEvent::mouseEventWithType_location_modifierFlags_timestamp_windowNumber_context_eventNumber_clickCount_pressure(
+        NSEventType::RightMouseDown,
+        point,
+        NSEventModifierFlags::empty(),
+        0.0,
+        window.windowNumber(),
+        None,
+        0,
+        1,
+        1.0,
+    )
+    .expect("a mouse event");
+    // Sets the clicked row, as a right click does.
+    let menu = list.menuForEvent(&event).expect("the list has a menu");
+    // Asks the delegate, as AppKit does each time before it shows the
+    // menu. `NSMenu::update` asks only once.
+    // The last menu's node is gone, and its items with it.
+    assert_eq!(menu.numberOfItems(), 0, "a closed menu left its items");
+    let delegate = menu.delegate().expect("the crate's menus have a delegate");
+    delegate.menuNeedsUpdate(&menu);
+    let titles: Vec<String> = menu
+        .itemArray()
+        .iter()
+        .map(|item| item.title().to_string())
+        .collect();
+    println!("-- menu of {name}: {titles:?}");
+    let position = titles
+        .iter()
+        .position(|item| item == title)
+        .unwrap_or_else(|| panic!("the menu has {title}"));
+    // AppKit closes the menu before it sends the item's action.
+    delegate.menuDidClose(&menu);
+    menu.performActionForItemAtIndex(position as isize);
+    println!("-- chose {title}");
+}
+
 fn content(mtm: MainThreadMarker) -> Retained<NSView> {
     NSApplication::sharedApplication(mtm)
         .windows()
@@ -374,15 +445,20 @@ fn content(mtm: MainThreadMarker) -> Retained<NSView> {
 /// Selects the row of `table` whose first text is `first`, as a click
 /// would.
 fn pick(table: &NSTableView, first: &str) {
-    let row = (0..table.numberOfRows())
+    let row = row_named(table, first);
+    table
+        .selectRowIndexes_byExtendingSelection(&NSIndexSet::indexSetWithIndex(row as usize), false);
+}
+
+/// The row of `table` whose first text is `first`.
+fn row_named(table: &NSTableView, first: &str) -> isize {
+    (0..table.numberOfRows())
         .find(|&row| {
             table
                 .viewAtColumn_row_makeIfNecessary(0, row, false)
                 .is_some_and(|cell| texts(&cell).first().is_some_and(|text| text == first))
         })
-        .unwrap_or_else(|| panic!("the table has a row {first}"));
-    table
-        .selectRowIndexes_byExtendingSelection(&NSIndexSet::indexSetWithIndex(row as usize), false);
+        .unwrap_or_else(|| panic!("the table has a row {first}"))
 }
 
 /// The sidebar's table view and the list's, told apart by their style.
@@ -568,7 +644,16 @@ fn sample() -> VaultIndex {
             organization_id: None,
             favorite,
             reprompt: false,
-            copyable: Default::default(),
+            // The logins: GitHub has a verification code too.
+            copyable: match (kind, id) {
+                (_, 11) => [CopyField::Username, CopyField::Password, CopyField::Totp]
+                    .into_iter()
+                    .collect(),
+                (CipherKind::Login, _) => [CopyField::Username, CopyField::Password]
+                    .into_iter()
+                    .collect(),
+                _ => Default::default(),
+            },
             deleted,
             readable: true,
         };
@@ -665,7 +750,7 @@ fn view_of(summary: &CipherSummary) -> CipherView {
         (11, _) => CipherContent::Login(LoginView {
             username: some("alex-dev"),
             password: some("Tr0ub4dor&3-xK9"),
-            totp: None,
+            totp: some("JBSWY3DPEHPK3PXP"),
             password_revision_date: Some("2026-10-14T09:12:00.000Z".to_owned()),
             uris: vec![
                 UriView {

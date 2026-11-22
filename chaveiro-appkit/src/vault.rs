@@ -11,15 +11,17 @@
 //! details are drawn from the open item in place.
 
 use appkit_immediate::{
-    Align, App, Key, Length, Orientation, SourceListEntries, Style, TableViewId, TextColor, Ui,
+    Align, App, Key, Length, MenuAnchor, Orientation, SourceListEntries, Style, TableViewId,
+    TextColor, Ui,
 };
 use chaveiro_core::{
     core::{ItemError, UserAction, VaultScreen},
     crypto::SecretString,
     filter::{Counts, Filter, KINDS},
     search::{Query, Tier},
+    totp,
     vault::{
-        CardView, CipherContent, CipherKind, CipherSummary, CipherView, FolderSummary,
+        CardView, CipherContent, CipherKind, CipherSummary, CipherView, CopyField, FolderSummary,
         IdentityView, LoginView, SshKeyView, VaultIndex,
     },
 };
@@ -52,6 +54,10 @@ pub struct VaultForm {
     /// The item Up or Down in the search field moved to last pass, which
     /// this pass opens as a pick in the list would.
     moved: Option<Uuid>,
+    /// A row's context menu while it is open.
+    menu: Option<ItemMenu>,
+    /// How many menus opened, so each one is a menu node of its own.
+    menus_opened: u64,
     /// The secrets of the selected item shown in clear. Emptied when
     /// another item is selected.
     revealed: Vec<FieldId>,
@@ -70,6 +76,8 @@ impl Default for VaultForm {
             selected: None,
             opened: None,
             moved: None,
+            menu: None,
+            menus_opened: 0,
             revealed: Vec::new(),
             subtitle: String::new(),
         }
@@ -95,8 +103,18 @@ impl VaultForm {
         self.selected = None;
         self.opened = None;
         self.moved = None;
+        self.menu = None;
         self.revealed.clear();
     }
+}
+
+/// An open context menu of a row.
+struct ItemMenu {
+    /// The item it acts on, even when the rows change while it is open.
+    item: Uuid,
+    anchor: MenuAnchor,
+    /// The value of [`VaultForm::menus_opened`] when it opened.
+    serial: u64,
 }
 
 /// Selects `id` in `selected`, hiding the secrets of the item selected
@@ -201,13 +219,16 @@ type FieldId = (&'static str, usize);
 /// What the user asked for in a pass.
 pub enum VaultAction {
     User(UserAction),
+    /// A Copy button in the details: the value it copies, as the details
+    /// show it.
+    Copy(SecretString),
     /// The window's close button.
     Close,
 }
 
 /// Draws the vault window. `open` is the core's open item, from
 /// [`VaultScreen::open`]. `now_ms` is our clock (epoch ms), for how long
-/// ago the last sync was.
+/// ago the last sync was and for the open login's verification code.
 pub fn view<A: VaultApp>(
     ui: &mut Ui,
     form: &mut VaultForm,
@@ -245,6 +266,8 @@ pub fn view<A: VaultApp>(
         selected: selected_item,
         opened: _,
         moved: moved_item,
+        menu,
+        menus_opened,
         revealed,
         subtitle,
     } = form;
@@ -298,7 +321,10 @@ pub fn view<A: VaultApp>(
                 Filter::Trash => "Trash is empty.",
                 _ => "No items here yet.",
             };
-            let pane = list_pane::<A>(ui, list, index, *selected_item, empty);
+            let pane = list_pane::<A>(ui, list, index, *selected_item, (menu, menus_opened), empty);
+            if let Some(asked) = pane.asked {
+                action = Some(VaultAction::User(asked));
+            }
 
             // A pick opens its item, or for an item that cannot be read,
             // closes the open one, because its details come from the list.
@@ -329,7 +355,9 @@ pub fn view<A: VaultApp>(
                 opening,
                 error: screen.error,
             };
-            details_pane(ui, details, revealed);
+            if let Some(text) = details_pane(ui, details, revealed, now_ms) {
+                action = Some(VaultAction::Copy(text));
+            }
             drawn = Some(details);
         });
 
@@ -410,18 +438,23 @@ pub fn view<A: VaultApp>(
 struct ListPane {
     /// The item the user picked in the list.
     picked: Option<Uuid>,
+    /// What the user chose in a row's context menu.
+    asked: Option<UserAction>,
 }
 
 /// Draws the list pane: the filter's items, with the row of `selected`
 /// selected, or `empty` when there are none. The toolbar names the filter.
+/// `menus` is the open context menu and the count of menus opened.
 fn list_pane<A: VaultApp>(
     ui: &mut Ui,
     list: &ItemList,
     index: &VaultIndex,
     selected: Option<Uuid>,
+    (menu, opened): (&mut Option<ItemMenu>, &mut u64),
     empty: &str,
 ) -> ListPane {
     let mut picked = None;
+    let mut asked = None;
 
     // The pane reaches under the toolbar; only scroll views inset their
     // content below it, so the note scrolls too.
@@ -451,10 +484,80 @@ fn list_pane<A: VaultApp>(
         {
             picked = Some(index.ciphers[rows[row]].id);
         }
+
+        if let Some(anchor) = table.context_requested() {
+            // A click below the last row opens no menu.
+            *menu = anchor.row().map(|row| {
+                *opened += 1;
+                ItemMenu {
+                    item: index.ciphers[rows[row]].id,
+                    anchor,
+                    serial: *opened,
+                }
+            });
+        }
+
+        // An item that left the vault closes its menu.
+        let shown = menu.as_ref().and_then(|open| {
+            let summary = index.ciphers.iter().find(|cipher| cipher.id == open.item)?;
+            Some((open, summary))
+        });
+        let closed = shown.is_none_or(|(open, summary)| {
+            ui.menu(("item menu", open.serial), open.anchor.clone(), |ui| {
+                asked = context_menu(ui, summary);
+            })
+            .closed()
+        });
+        if closed {
+            *menu = None;
+        }
     })
     .width(LIST_WIDTH);
 
-    ListPane { picked }
+    ListPane { picked, asked }
+}
+
+/// The items of a row's context menu, from the "Vault — list context
+/// menu" board: the copies the item offers, then Move to Trash, or Put
+/// Back for an item in the trash. Returns what the user chose.
+fn context_menu(ui: &mut Ui, summary: &CipherSummary) -> Option<UserAction> {
+    let id = summary.id;
+    if summary.deleted {
+        let restore = ui.menu_item("restore", "Put Back");
+        return restore.clicked().then_some(UserAction::Restore(id));
+    }
+
+    let mut asked = None;
+    let mut copies = false;
+    for (field, title) in COPIES {
+        if copyable(summary, field) {
+            copies = true;
+            if ui.menu_item(("copy", field as u8), title).clicked() {
+                asked = Some(UserAction::Copy { id, field });
+            }
+        }
+    }
+    if copies {
+        ui.menu_separator("copies");
+    }
+    if ui.menu_item("trash", "Move to Trash").clicked() {
+        asked = Some(UserAction::Trash(id));
+    }
+    asked
+}
+
+/// The copy items of the context menu, in order.
+const COPIES: [(CopyField, &str); 3] = [
+    (CopyField::Username, "Copy User Name"),
+    (CopyField::Password, "Copy Password"),
+    (CopyField::Totp, "Copy Verification Code"),
+];
+
+/// Whether the context menu offers to copy `field` of `summary`: the item
+/// holds it, decrypted, and the master password re-prompt, which Chaveiro
+/// cannot ask yet, does not guard it.
+fn copyable(summary: &CipherSummary, field: CopyField) -> bool {
+    summary.readable && summary.copyable.contains(field) && !(field.guarded() && summary.reprompt)
 }
 
 /// One row of the item list: the type icon, the name over the subtitle,
@@ -533,10 +636,17 @@ impl<'a> Details<'a> {
     }
 }
 
-/// Draws the shown item's details in a scroll view.
-fn details_pane(ui: &mut Ui, details: Details<'_>, revealed: &mut Vec<FieldId>) {
+/// Draws the shown item's details in a scroll view. Returns the value of
+/// the field whose Copy button was clicked.
+fn details_pane(
+    ui: &mut Ui,
+    details: Details<'_>,
+    revealed: &mut Vec<FieldId>,
+    now_ms: u64,
+) -> Option<SecretString> {
     let index = details.index;
     let (summary, view) = details.shown();
+    let mut copied = None;
 
     ui.scroll_view("details", |ui| {
         ui.stack_view("details", Orientation::Vertical, 18.0, |ui| {
@@ -590,11 +700,12 @@ fn details_pane(ui: &mut Ui, details: Details<'_>, revealed: &mut Vec<FieldId>) 
                 return;
             }
 
-            fields(ui, view, revealed);
+            copied = fields(ui, view, revealed, now_ms);
             footer(ui, folder, view);
         })
         .padding([28.0, 8.0, 28.0, 28.0]);
     });
+    copied
 }
 
 /// A message in the details: an error line for `title` when there is one,
@@ -682,9 +793,17 @@ fn commands(
 }
 
 /// The field groups of `view`'s type, then its custom fields and notes.
-fn fields(ui: &mut Ui, view: &CipherView, revealed: &mut Vec<FieldId>) {
+/// Returns the value of the field whose Copy button was clicked.
+fn fields(
+    ui: &mut Ui,
+    view: &CipherView,
+    revealed: &mut Vec<FieldId>,
+    now_ms: u64,
+) -> Option<SecretString> {
+    let mut copied = None;
+    let mut copy = |text| copied = copied.take().or(text);
     match &view.content {
-        CipherContent::Login(login) => login_fields(ui, login, revealed),
+        CipherContent::Login(login) => copy(login_fields(ui, login, revealed, now_ms)),
         CipherContent::SecureNote => {}
         CipherContent::Unknown => notice(
             ui,
@@ -693,9 +812,9 @@ fn fields(ui: &mut Ui, view: &CipherView, revealed: &mut Vec<FieldId>) {
             "Chaveiro can’t show this type of item yet. It stays safe in your vault; \
              open it in another app to see or edit it.",
         ),
-        CipherContent::Card(card) => card_fields(ui, card, revealed),
-        CipherContent::Identity(identity) => identity_fields(ui, identity, revealed),
-        CipherContent::SshKey(ssh_key) => ssh_key_fields(ui, ssh_key, revealed),
+        CipherContent::Card(card) => copy(card_fields(ui, card, revealed)),
+        CipherContent::Identity(identity) => copy(identity_fields(ui, identity, revealed)),
+        CipherContent::SshKey(ssh_key) => copy(ssh_key_fields(ui, ssh_key, revealed)),
     }
 
     let custom = view.fields.iter().enumerate().map(|(position, field)| {
@@ -723,22 +842,52 @@ fn fields(ui: &mut Ui, view: &CipherView, revealed: &mut Vec<FieldId>) {
             _ => Field::text(id, caption, value),
         }
     });
-    group(ui, "custom fields", Some("Custom fields"), custom, revealed);
+    copy(group(
+        ui,
+        "custom fields",
+        Some("Custom fields"),
+        custom,
+        revealed,
+    ));
 
     let caption = match view.kind {
         CipherKind::SecureNote => "Note",
         _ => "Notes",
     };
     let note = Field::lines(("notes", 0), caption, text(&view.notes));
-    group(ui, "notes", None, [note].into_iter(), revealed);
+    copy(group(ui, "notes", None, [note].into_iter(), revealed));
+    copied
 }
 
-fn login_fields(ui: &mut Ui, login: &LoginView, revealed: &mut Vec<FieldId>) {
+fn login_fields(
+    ui: &mut Ui,
+    login: &LoginView,
+    revealed: &mut Vec<FieldId>,
+    now_ms: u64,
+) -> Option<SecretString> {
+    let now_s = now_ms / 1000;
+    let code = text(&login.totp).and_then(|secret| totp::now(secret, now_s));
+    // The countdown changes each second, so the pane draws again then.
+    if code.is_some() {
+        let deadline = std::time::UNIX_EPOCH + std::time::Duration::from_secs(now_s + 1);
+        ui.task(("next second", deadline), move || {
+            appkit_executor::sleep_until_clock(deadline)
+        });
+    }
     let account = [
         Field::text(("username", 0), "User name", text(&login.username)),
         Field::secret(("password", 0), "Password", text(&login.password)),
-    ];
-    group(ui, "account", None, account.into_iter(), revealed);
+    ]
+    .into_iter()
+    .chain(code.as_ref().map(|code| Field {
+        id: ("totp", 0),
+        caption: "Verification code",
+        value: Value::Code(code),
+        kind: Kind::Code {
+            seconds_left: code.seconds_left(now_s),
+        },
+    }));
+    let mut copied = group(ui, "account", None, account, revealed);
 
     let passkeys = login
         .fido2_credentials
@@ -751,7 +900,7 @@ fn login_fields(ui: &mut Ui, login: &LoginView, revealed: &mut Vec<FieldId>) {
             },
             ..Field::text(("passkey", position), "Passkey", None)
         });
-    group(ui, "passkeys", Some("Passkeys"), passkeys, revealed);
+    copied = copied.or(group(ui, "passkeys", Some("Passkeys"), passkeys, revealed));
 
     let websites = login.uris.iter().enumerate().map(|(position, uri)| {
         let caption = match uri.match_rule {
@@ -765,10 +914,10 @@ fn login_fields(ui: &mut Ui, login: &LoginView, revealed: &mut Vec<FieldId>) {
         };
         Field::text(("website", position), caption, text(&uri.uri))
     });
-    group(ui, "websites", Some("Websites"), websites, revealed);
+    copied.or(group(ui, "websites", Some("Websites"), websites, revealed))
 }
 
-fn card_fields(ui: &mut Ui, card: &CardView, revealed: &mut Vec<FieldId>) {
+fn card_fields(ui: &mut Ui, card: &CardView, revealed: &mut Vec<FieldId>) -> Option<SecretString> {
     let mut number = Field::secret(("number", 0), "Number", text(&card.number));
     if let Some(digits) = text(&card.number) {
         number.value = Value::CardNumber(digits);
@@ -805,10 +954,14 @@ fn card_fields(ui: &mut Ui, card: &CardView, revealed: &mut Vec<FieldId>) {
         },
         Field::secret(("code", 0), "Security code", text(&card.code)),
     ];
-    group(ui, "card", None, fields.into_iter(), revealed);
+    group(ui, "card", None, fields.into_iter(), revealed)
 }
 
-fn identity_fields(ui: &mut Ui, identity: &IdentityView, revealed: &mut Vec<FieldId>) {
+fn identity_fields(
+    ui: &mut Ui,
+    identity: &IdentityView,
+    revealed: &mut Vec<FieldId>,
+) -> Option<SecretString> {
     fn part(value: &Option<SecretString>) -> Value<'_> {
         Value::Text(text(value))
     }
@@ -840,7 +993,7 @@ fn identity_fields(ui: &mut Ui, identity: &IdentityView, revealed: &mut Vec<Fiel
         Field::text(("username", 0), "User name", text(&identity.username)),
         Field::text(("company", 0), "Company", text(&identity.company)),
     ];
-    group(
+    let personal = group(
         ui,
         "personal",
         Some("Personal"),
@@ -861,7 +1014,7 @@ fn identity_fields(ui: &mut Ui, identity: &IdentityView, revealed: &mut Vec<Fiel
             text(&identity.license_number),
         ),
     ];
-    group(
+    let identification = group(
         ui,
         "identification",
         Some("Identification"),
@@ -877,16 +1030,21 @@ fn identity_fields(ui: &mut Ui, identity: &IdentityView, revealed: &mut Vec<Fiel
             ..Field::lines(("address", 0), "Address", None)
         },
     ];
-    group(
+    let contact = group(
         ui,
         "contact",
         Some("Contact"),
         contact.into_iter(),
         revealed,
     );
+    personal.or(identification).or(contact)
 }
 
-fn ssh_key_fields(ui: &mut Ui, ssh_key: &SshKeyView, revealed: &mut Vec<FieldId>) {
+fn ssh_key_fields(
+    ui: &mut Ui,
+    ssh_key: &SshKeyView,
+    revealed: &mut Vec<FieldId>,
+) -> Option<SecretString> {
     let fields = [
         Field::monospace(("public key", 0), "Public key", text(&ssh_key.public_key)),
         Field::monospace(
@@ -900,7 +1058,7 @@ fn ssh_key_fields(ui: &mut Ui, ssh_key: &SshKeyView, revealed: &mut Vec<FieldId>
             text(&ssh_key.private_key),
         ),
     ];
-    group(ui, "ssh key", None, fields.into_iter(), revealed);
+    let copied = group(ui, "ssh key", None, fields.into_iter(), revealed);
 
     notice(
         ui,
@@ -908,6 +1066,7 @@ fn ssh_key_fields(ui: &mut Ui, ssh_key: &SshKeyView, revealed: &mut Vec<FieldId>
         None,
         "The SSH agent offers this key. Chaveiro asks you before each use.",
     );
+    copied
 }
 
 /// The line under the fields: the folder, when the password last changed,
@@ -984,14 +1143,37 @@ enum Value<'a> {
     Expiration(&'a str, &'a str),
     /// The parts that are not empty, joined by the separator.
     Joined(&'a [Value<'a>], &'a str),
+    /// A verification code, in two halves.
+    Code(&'a totp::Code),
 }
 
 impl Value<'_> {
+    /// What a Copy button puts on the pasteboard: the text as the item
+    /// holds it, so a card number or a code copies without its spaces.
+    fn copied(&self) -> SecretString {
+        let raw = match self {
+            Value::Text(text) => text.unwrap_or(""),
+            Value::Code(code) => code.as_str(),
+            Value::CardNumber(number) => {
+                return SecretString::new(
+                    number
+                        .chars()
+                        .filter(|char| !char.is_whitespace())
+                        .collect(),
+                );
+            }
+            _ => return SecretString::new(self.to_string()),
+        };
+        SecretString::new(raw.to_owned())
+    }
+
     fn is_empty(&self) -> bool {
         match self {
             Value::Text(text) => text.is_none_or(str::is_empty),
             Value::CardNumber(number) => number.trim().is_empty(),
-            Value::Passkey { .. } | Value::Masked(_) | Value::Expiration(..) => false,
+            Value::Passkey { .. } | Value::Masked(_) | Value::Expiration(..) | Value::Code(_) => {
+                false
+            }
             Value::Joined(parts, _) => parts.iter().all(Value::is_empty),
         }
     }
@@ -1020,6 +1202,7 @@ impl std::fmt::Display for Value<'_> {
                 let pad = if month.len() == 1 { "0" } else { "" };
                 write!(formatter, "{pad}{month} / {year}")
             }
+            Value::Code(code) => write!(formatter, "{code}"),
             Value::Joined(parts, separator) => {
                 let mut first = true;
                 for part in parts.iter().filter(|part| !part.is_empty()) {
@@ -1045,6 +1228,10 @@ enum Kind<'a> {
     /// reveals it.
     Secret {
         hidden: Value<'a>,
+    },
+    /// A verification code, with the seconds until the next one.
+    Code {
+        seconds_left: u64,
     },
 }
 
@@ -1083,19 +1270,21 @@ impl<'a> Field<'a> {
 }
 
 /// Draws the fields of `fields` that have a value, in a group box under
-/// `header`. Draws nothing when none has a value.
+/// `header`. Draws nothing when none has a value. Returns the value of the
+/// field whose Copy button was clicked.
 fn group<'a>(
     ui: &mut Ui,
     id: &'static str,
     header: Option<&str>,
     fields: impl Clone + Iterator<Item = Field<'a>>,
     revealed: &mut Vec<FieldId>,
-) {
+) -> Option<SecretString> {
     let filled = fields.filter(|field| !field.value.is_empty());
 
     if filled.clone().next().is_none() {
-        return;
+        return None;
     }
+    let mut copied = None;
 
     ui.stack_view(id, Orientation::Vertical, 6.0, |ui| {
         if let Some(header) = header {
@@ -1109,21 +1298,27 @@ fn group<'a>(
                 if position > 0 {
                     ui.separator(("separator", field.id));
                 }
-                field_row(ui, &field, revealed);
+                if field_row(ui, &field, revealed) {
+                    copied = Some(field.value.copied());
+                }
             }
         });
     })
     .padding([0.0; 4]);
+    copied
 }
 
-/// One row: the caption beside the value, and a Show button for a secret.
-fn field_row(ui: &mut Ui, field: &Field<'_>, revealed: &mut Vec<FieldId>) {
+/// One row: the caption beside the value, a Show button for a secret, and
+/// a Copy button for any value but a passkey. Returns whether Copy was
+/// clicked.
+fn field_row(ui: &mut Ui, field: &Field<'_>, revealed: &mut Vec<FieldId>) -> bool {
     let shown = revealed.contains(&field.id);
+    let mut copied = false;
 
     // A note's caption stays at its first line.
     let align = match field.kind {
         Kind::Lines => Align::Start,
-        Kind::Text | Kind::Monospace | Kind::Secret { .. } => Align::Center,
+        Kind::Text | Kind::Monospace | Kind::Secret { .. } | Kind::Code { .. } => Align::Center,
     };
 
     ui.stack_view(field.id, Orientation::Horizontal, 12.0, |ui| {
@@ -1145,6 +1340,7 @@ fn field_row(ui: &mut Ui, field: &Field<'_>, revealed: &mut Vec<FieldId>) {
         label
             .style(match field.kind {
                 Kind::Monospace | Kind::Secret { .. } => Style::Monospace,
+                Kind::Code { .. } => Style::Title2,
                 Kind::Text | Kind::Lines => Style::Body,
             })
             .flexible_width()
@@ -1152,6 +1348,13 @@ fn field_row(ui: &mut Ui, field: &Field<'_>, revealed: &mut Vec<FieldId>) {
 
         if let Kind::Lines = field.kind {
             label.wraps();
+        }
+
+        if let Kind::Code { seconds_left } = field.kind {
+            ui.label("seconds left", format_args!("{seconds_left} s"))
+                .style(Style::Caption)
+                .text_color(TextColor::Secondary)
+                .align(Align::Center);
         }
 
         if let Kind::Secret { .. } = field.kind {
@@ -1173,8 +1376,19 @@ fn field_row(ui: &mut Ui, field: &Field<'_>, revealed: &mut Vec<FieldId>) {
                 ui.request_pass();
             }
         }
+
+        if !matches!(field.value, Value::Passkey { .. }) {
+            let label = match field.kind {
+                Kind::Code { .. } => "Copy verification code",
+                _ => "Copy",
+            };
+            let mut copy = ui.icon_button("copy", "doc.on.doc", label);
+            copy.align(Align::Center);
+            copied = copy.clicked();
+        }
     })
     .padding([12.0, 9.0, 12.0, 9.0]);
+    copied
 }
 
 fn text(secret: &Option<SecretString>) -> Option<&str> {
