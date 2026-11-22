@@ -27,6 +27,7 @@ mod check_box;
 mod code_boxes;
 mod combo_box;
 mod command_bar;
+mod drag_bar;
 mod font_icon;
 mod grid;
 mod icon_button;
@@ -45,6 +46,7 @@ mod search_box;
 mod settings_card;
 pub(crate) mod shortcut;
 mod stack;
+mod status;
 mod text_box;
 mod title_bar;
 mod window;
@@ -71,6 +73,7 @@ pub use pressable::PressableResponse;
 pub use search_box::SearchBoxResponse;
 pub use settings_card::{ContentAlignment, SettingsCard, SettingsCardResponse};
 pub use stack::Orientation;
+pub use status::ContentButtonResponse;
 pub use text_box::TextBoxResponse;
 pub use title_bar::TitleBarResponse;
 pub use window::WindowResponse;
@@ -155,6 +158,25 @@ impl Response<'_> {
                     Align::Stretch => HorizontalAlignment::Stretch,
                 })?;
             control.align = Some(align);
+        }
+        Ok(self)
+    }
+
+    /// Where the control sits down the space its container gives it, such
+    /// as centered beside a taller button.
+    pub fn valign(&mut self, align: Align) -> Result<&mut Self> {
+        let control = self.ui.control_mut(self.node);
+        if control.valign != Some(align) {
+            control
+                .element
+                .cast::<FrameworkElement>()?
+                .SetVerticalAlignment(match align {
+                    Align::Start => crate::bindings::VerticalAlignment::Top,
+                    Align::Center => crate::bindings::VerticalAlignment::Center,
+                    Align::End => crate::bindings::VerticalAlignment::Bottom,
+                    Align::Stretch => crate::bindings::VerticalAlignment::Stretch,
+                })?;
+            control.valign = Some(align);
         }
         Ok(self)
     }
@@ -678,6 +700,36 @@ pub(crate) enum Control {
         back: Option<bool>,
         /// The control in the bar's middle, from the body.
         content: Option<NodeId>,
+        /// The control at the bar's right end, from the body.
+        right: Option<NodeId>,
+    },
+    /// From [`Ui::drag_bar`].
+    DragBar {
+        children: UIElementCollection,
+        clickable: std::rc::Rc<std::cell::RefCell<drag_bar::Clickable>>,
+        _layout: windows_core::EventRevoker,
+    },
+    /// From [`Ui::content_button`]: a subtle button whose content is the
+    /// one control its body declares.
+    ContentButton {
+        label: String,
+        content: Option<NodeId>,
+    },
+    PersonPicture {
+        picture: crate::bindings::PersonPicture,
+        initials: String,
+        /// NaN until first written.
+        size: f64,
+    },
+    ProgressBar,
+    ProgressRing,
+    /// From [`Ui::tag`].
+    Tag {
+        text: TextBlock,
+        icon: FontIcon,
+        label: String,
+        glyph: Option<char>,
+        tooltip: String,
     },
     FontIcon {
         icon: FontIcon,
@@ -718,7 +770,9 @@ impl Control {
     /// The child collection of a panel, or [`None`] for other controls.
     pub(crate) fn children(&self) -> Option<&UIElementCollection> {
         match self {
-            Control::Stack { children, .. } | Control::Grid { children, .. } => Some(children),
+            Control::Stack { children, .. }
+            | Control::Grid { children, .. }
+            | Control::DragBar { children, .. } => Some(children),
             Control::SettingsCard(parts) => Some(&parts.children),
             _ => None,
         }
@@ -726,9 +780,30 @@ impl Control {
 
     /// The one content control of a `ContentControl` this layer fills with
     /// the control its body declares, or [`None`] for other controls.
+    /// The control takes clicks or typing, so a drag bar keeps it clickable.
+    pub(crate) fn takes_input(&self) -> bool {
+        matches!(
+            self,
+            Control::Button { .. }
+                | Control::IconButton { .. }
+                | Control::ContentButton { .. }
+                | Control::AppBarButton { .. }
+                | Control::TextBox { .. }
+                | Control::SearchBox { .. }
+                | Control::PasswordBox { .. }
+                | Control::ComboBox { .. }
+                | Control::CheckBox { .. }
+                | Control::Link { .. }
+                | Control::Pressable(_)
+                | Control::Tag { .. }
+        )
+    }
+
     pub(crate) fn content_slot(&mut self) -> Option<&mut Option<NodeId>> {
         match self {
-            Control::Row { content, .. } | Control::Scroll { content } => Some(content),
+            Control::Row { content, .. }
+            | Control::Scroll { content }
+            | Control::ContentButton { content, .. } => Some(content),
             Control::NavigationView(parts) => Some(&mut parts.content),
             _ => None,
         }

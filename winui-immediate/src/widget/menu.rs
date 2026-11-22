@@ -8,19 +8,20 @@
 use super::{Control, Response, must_write, resource};
 use crate::{
     bindings::{
-        Brush, Control as XamlControl, DependencyObject, FlyoutBase, FlyoutPlacementMode,
-        FlyoutShowOptions, FontIcon, IconElement, MenuFlyout, MenuFlyoutItem, MenuFlyoutSeparator,
-        MenuFlyoutSubItem, Point, ToggleMenuFlyoutItem,
+        Brush, Control as XamlControl, DependencyObject, DesktopAcrylicBackdrop, Flyout,
+        FlyoutBase, FlyoutPlacementMode, FlyoutShowOptions, FontIcon, IconElement, MenuFlyout,
+        MenuFlyoutItem, MenuFlyoutSeparator, MenuFlyoutSubItem, Point, Setter, SetterBase, Style,
+        ToggleMenuFlyoutItem, TypeKind, TypeName,
     },
     events::EventKind,
-    pass::{ChildKind, ControlNode, MenuNode, Payload, Ui},
+    pass::{ChildKind, ControlNode, FlyoutNode, MenuNode, Payload, Ui},
     tree::NodeId,
 };
 use std::{
     hash::Hash,
     ops::{Deref, DerefMut},
 };
-use windows_core::{Interface, Result};
+use windows_core::{IInspectable, Interface, Result};
 
 impl Ui {
     /// A menu of the items `body` declares, opened at `anchor` on the pass
@@ -62,24 +63,8 @@ impl Ui {
             unreachable!("menu keys hold menus")
         };
         if !menu.shown {
-            let target = match self.tree.get(anchor.node).map(|node| &node.payload) {
-                Some(Payload::Control(control)) => Some(control.element.clone()),
-                _ => None,
-            };
-            match target {
-                None => closed = true,
-                Some(target) => {
-                    let options = FlyoutShowOptions::new()?;
-                    match anchor.position {
-                        // At the pointer, as a right-click menu opens.
-                        Some(position) => options.SetPosition(Some(position))?,
-                        // Under the control, as a button's menu opens.
-                        None => options.SetPlacement(FlyoutPlacementMode::BottomEdgeAlignedLeft)?,
-                    }
-                    flyout
-                        .cast::<FlyoutBase>()?
-                        .ShowAtWithOptions(&target.cast::<DependencyObject>()?, &options)?;
-                }
+            if !self.show_at(&flyout.cast()?, anchor)? {
+                closed = true;
             }
             let Payload::Menu(menu) = &mut self.tree.node_mut(node).payload else {
                 unreachable!("menu keys hold menus")
@@ -87,6 +72,81 @@ impl Ui {
             menu.shown = true;
         }
         Ok(MenuResponse { closed })
+    }
+
+    /// A flyout around the one control `body` declares, such as an account
+    /// card, opened at `anchor` on the pass that first declares it. It
+    /// opens and closes as [`menu`](Self::menu) does.
+    pub fn flyout(
+        &mut self,
+        id: impl Hash,
+        anchor: MenuAnchor,
+        body: impl FnOnce(&mut Ui) -> Result<()>,
+    ) -> Result<MenuResponse> {
+        let (node, _) = self.visit(id, ChildKind::Logical, || {
+            let flyout = Flyout::new()?;
+            let base = flyout.cast::<FlyoutBase>()?;
+            base.SetAreOpenCloseAnimationsEnabled(false)?;
+            // Acrylic, as a menu has by default. A system backdrop draws
+            // only on a popup of its own window, and the presenter's own fill
+            // would cover it, so its style makes the fill transparent.
+            base.SetShouldConstrainToRootBounds(false)?;
+            base.cast::<crate::bindings::IFlyoutBase2>()?
+                .SetSystemBackdrop(&DesktopAcrylicBackdrop::new()?)?;
+            flyout.SetFlyoutPresenterStyle(&transparent_presenter()?)?;
+            Ok(Payload::Flyout(Box::new(FlyoutNode {
+                flyout,
+                content: None,
+                shown: false,
+                subscribed: Default::default(),
+            })))
+        })?;
+        let Payload::Flyout(popup) = &mut self.tree.node_mut(node).payload else {
+            unreachable!("flyout keys hold flyouts")
+        };
+        let flyout = popup.flyout.clone();
+        self.events.subscribe(
+            node,
+            &mut popup.subscribed,
+            &flyout,
+            EventKind::FlyoutClosed,
+        )?;
+        self.open(node);
+        body(self)?;
+        self.close()?;
+        let mut closed = self.events.happened(node, EventKind::FlyoutClosed);
+        let Payload::Flyout(popup) = &self.tree.node(node).payload else {
+            unreachable!("flyout keys hold flyouts")
+        };
+        if !popup.shown {
+            if !self.show_at(&flyout.cast()?, anchor)? {
+                closed = true;
+            }
+            let Payload::Flyout(popup) = &mut self.tree.node_mut(node).payload else {
+                unreachable!("flyout keys hold flyouts")
+            };
+            popup.shown = true;
+        }
+        Ok(MenuResponse { closed })
+    }
+
+    /// Shows `flyout` at `anchor`. Gives false when the anchor's control
+    /// is gone, and nothing shows.
+    fn show_at(&self, flyout: &FlyoutBase, anchor: MenuAnchor) -> Result<bool> {
+        let Some(Payload::Control(control)) = self.tree.get(anchor.node).map(|node| &node.payload)
+        else {
+            return Ok(false);
+        };
+        let options = FlyoutShowOptions::new()?;
+        match (anchor.position, anchor.right) {
+            // At the pointer, as a right-click menu opens.
+            (Some(position), _) => options.SetPosition(Some(position))?,
+            // Under the control, as a button's menu opens.
+            (None, false) => options.SetPlacement(FlyoutPlacementMode::BottomEdgeAlignedLeft)?,
+            (None, true) => options.SetPlacement(FlyoutPlacementMode::BottomEdgeAlignedRight)?,
+        }
+        flyout.ShowAtWithOptions(&control.element.cast::<DependencyObject>()?, &options)?;
+        Ok(true)
     }
 
     /// A menu item: `glyph`, a Segoe Fluent Icons glyph, and `label`.
@@ -207,6 +267,24 @@ impl Ui {
     }
 }
 
+/// A `FlyoutPresenter` style with a transparent background, so a system
+/// backdrop shows through it.
+fn transparent_presenter() -> Result<Style> {
+    let style = Style::CreateInstance(&TypeName {
+        name: "Microsoft.UI.Xaml.Controls.FlyoutPresenter".into(),
+        kind: TypeKind::Metadata,
+    })?;
+    let setter = Setter::CreateInstance(
+        &XamlControl::BackgroundProperty()?,
+        &resource::<IInspectable>("SubtleFillColorTransparentBrush")?,
+    )?;
+    style
+        .Setters()?
+        .cast::<windows_collections::IVector<SetterBase>>()?
+        .Append(&setter.cast::<SetterBase>()?)?;
+    Ok(style)
+}
+
 /// Where a [`Ui::menu`] opens: from [`Response::context_requested`], at the
 /// pointer, or from [`Response::anchor`], under a control.
 #[derive(Clone, Copy)]
@@ -214,6 +292,8 @@ pub struct MenuAnchor {
     node: NodeId,
     /// In the control's element; [`None`] opens under it.
     position: Option<Point>,
+    /// Under the control, line up the right edges instead of the left.
+    right: bool,
 }
 
 impl Response<'_> {
@@ -239,6 +319,7 @@ impl Response<'_> {
             .map(|position| MenuAnchor {
                 node: self.node,
                 position,
+                right: false,
             }))
     }
 
@@ -247,6 +328,16 @@ impl Response<'_> {
         MenuAnchor {
             node: self.node,
             position: None,
+            right: false,
+        }
+    }
+
+    /// As [`anchor`](Self::anchor), with the right edges lined up, for a
+    /// control at a window's right end.
+    pub fn anchor_right(&self) -> MenuAnchor {
+        MenuAnchor {
+            right: true,
+            ..self.anchor()
         }
     }
 }

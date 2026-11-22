@@ -9,9 +9,12 @@ use windows_core::{Interface, Result};
 
 impl Ui {
     /// The window's title bar: `title`, a back button while `back` is true,
-    /// and in its middle the one control `body` declares, if any, such as a
-    /// search box. It becomes the window's drag area, with the back button
-    /// and the middle control left clickable, so use it in a window made
+    /// and the controls `body` declares: the first in its middle, such as a
+    /// search box, which the bar centers, and the second at its right end,
+    /// such as account buttons. For a layout of the app's own, use
+    /// [`drag_bar`](Self::drag_bar).
+    /// It becomes the window's drag area, with the back button and those
+    /// controls left clickable, so use it in a window made
     /// [`compact`] or [`extends_into_title_bar`], and declare at most one
     /// per window.
     ///
@@ -36,6 +39,7 @@ impl Ui {
                     title: String::new(),
                     back: None,
                     content: None,
+                    right: None,
                 },
             ))
         })?;

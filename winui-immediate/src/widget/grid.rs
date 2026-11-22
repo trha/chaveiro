@@ -37,6 +37,21 @@ impl Ui {
         Ok(Response { ui: self, node })
     }
 
+    /// A grid of one cell: the controls `body` declares all fill it, each
+    /// drawn over the ones before, such as a progress bar over the content
+    /// it belongs to. Give an overlaid control an alignment, so it covers
+    /// only its part.
+    pub fn overlay(
+        &mut self,
+        id: impl Hash,
+        body: impl FnOnce(&mut Ui) -> Result<()>,
+    ) -> Result<Response<'_>> {
+        // A grid with no rows puts each child, whatever row it is given,
+        // in its one implicit row.
+        let node = self.grid_node(id, false, &[], |_| Ok(()), body)?;
+        Ok(Response { ui: self, node })
+    }
+
     /// Visits a grid whose children fill its columns when `across`, or its
     /// rows. `create` runs once, on the new grid.
     pub(crate) fn grid_node(

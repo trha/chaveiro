@@ -287,14 +287,16 @@ impl Ui {
             }
             Payload::Control(ControlNode {
                 control:
-                    control
-                    @ (Control::Row { .. } | Control::NavigationView(_) | Control::Scroll { .. }),
+                    control @ (Control::Row { .. }
+                    | Control::NavigationView(_)
+                    | Control::Scroll { .. }
+                    | Control::ContentButton { .. }),
                 element,
                 ..
             }) => {
                 assert!(
                     declared.len() <= 1,
-                    "a list row, navigation view or scroll area declares one control"
+                    "a list row, navigation view, scroll area or content button declares one control"
                 );
                 let content = control.content_slot().expect("matched above");
                 let declared_content = declared.first().copied();
@@ -313,23 +315,33 @@ impl Ui {
             Payload::Control(ControlNode {
                 control:
                     Control::TitleBar {
-                        title_bar, content, ..
+                        title_bar,
+                        content,
+                        right,
+                        ..
                     },
                 ..
             }) => {
-                assert!(declared.len() <= 1, "a title bar declares one control");
+                assert!(
+                    declared.len() <= 2,
+                    "a title bar declares a middle control and a right one"
+                );
                 let declared_content = declared.first().copied();
-                if *content == declared_content {
-                    return Ok(());
-                }
+                let declared_right = declared.get(1).copied();
+                let content_changed = *content != declared_content;
+                let right_changed = *right != declared_right;
                 *content = declared_content;
+                *right = declared_right;
                 let title_bar = title_bar.clone();
-                match declared_content {
-                    Some(declared_content) => {
-                        title_bar.SetContent(&self.control(declared_content).element)
-                    }
-                    None => title_bar.SetContent(None::<&UIElement>),
+                let element =
+                    |node: Option<NodeId>| node.map(|node| self.control(node).element.clone());
+                if content_changed {
+                    title_bar.SetContent(element(declared_content).as_ref())?;
                 }
+                if right_changed {
+                    title_bar.SetRightHeader(element(declared_right).as_ref())?;
+                }
+                Ok(())
             }
             Payload::Control(ControlNode {
                 control: Control::Pressable(parts),
@@ -386,6 +398,19 @@ impl Ui {
                     unreachable!("matched above")
                 };
                 self.apply_menu_items(&items, declared, &control.visual)
+            }
+            Payload::Flyout(popup) => {
+                assert!(declared.len() <= 1, "a flyout declares one control");
+                let declared_content = declared.first().copied();
+                if popup.content == declared_content {
+                    return Ok(());
+                }
+                popup.content = declared_content;
+                let flyout = popup.flyout.clone();
+                match declared_content {
+                    Some(content) => flyout.SetContent(&self.control(content).element),
+                    None => flyout.SetContent(None::<&UIElement>),
+                }
             }
             Payload::Menu(menu) => {
                 let items = menu.items.clone();
@@ -518,6 +543,17 @@ pub(crate) enum Payload {
     Menu(Box<MenuNode>),
     /// From [`Ui::shortcut`].
     Shortcut(ShortcutNode),
+    /// From [`Ui::flyout`].
+    Flyout(Box<FlyoutNode>),
+}
+
+/// A flyout, shown on its first pass and hidden when its node drops.
+pub(crate) struct FlyoutNode {
+    pub(crate) flyout: Flyout,
+    /// The control set as its content.
+    pub(crate) content: Option<NodeId>,
+    pub(crate) shown: bool,
+    pub(crate) subscribed: EventSet,
 }
 
 /// A key held by `owner` from the first pass until the node drops.
@@ -608,6 +644,8 @@ pub(crate) struct ControlNode {
     pub(crate) style: String,
     /// The horizontal alignment last written.
     pub(crate) align: Option<crate::widget::Align>,
+    /// The vertical alignment last written.
+    pub(crate) valign: Option<crate::widget::Align>,
     /// The width last written; `NaN` until first written.
     pub(crate) width: f64,
     /// The padding last written.
@@ -638,6 +676,7 @@ impl ControlNode {
             access_key: String::new(),
             style: String::new(),
             align: None,
+            valign: None,
             width: f64::NAN,
             padding: None,
             margin: None,
@@ -664,6 +703,14 @@ fn release(events: &mut Events, payload: Payload) {
         Payload::Shortcut(shortcut) => {
             events.forget(&shortcut.accelerator);
             crate::widget::shortcut::release(&shortcut);
+        }
+        Payload::Flyout(popup) => {
+            events.forget(&popup.flyout);
+            // As for a menu below.
+            let _ = popup
+                .flyout
+                .cast::<FlyoutBase>()
+                .and_then(|flyout| flyout.Hide());
         }
         Payload::Menu(menu) => {
             events.forget(&menu.flyout);

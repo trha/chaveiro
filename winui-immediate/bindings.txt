@@ -228,3 +228,33 @@ Microsoft.UI.Xaml.Controls.Primitives.FlyoutBase::{ShowAtWithOptions}
 Microsoft.UI.Xaml.Controls.Control::{get_ForegroundProperty}
 Microsoft.UI.Xaml.Controls.IControlStatics::get_ForegroundProperty
 Microsoft.UI.Xaml.Controls.Primitives.FlyoutBase::{put_AreOpenCloseAnimationsEnabled}
+Microsoft.UI.Xaml.Controls.TitleBar::{put_RightHeader}
+Microsoft.UI.Xaml.Controls.Flyout::{put_Content}
+Microsoft.UI.Xaml.Controls.IFlyoutFactory::CreateInstance
+Microsoft.UI.Xaml.Controls.PersonPicture::{put_Initials}
+Microsoft.UI.Xaml.Controls.IPersonPictureFactory::CreateInstance
+Microsoft.UI.Xaml.Controls.ProgressBar::{put_IsIndeterminate}
+Microsoft.UI.Xaml.Controls.IProgressBarFactory::CreateInstance
+Microsoft.UI.Xaml.Controls.ProgressRing::{put_IsIndeterminate}
+Microsoft.UI.Input.InputNonClientPointerSource::{GetForWindowId, SetRegionRects}
+Microsoft.UI.Input.IInputNonClientPointerSourceStatics::GetForWindowId
+Microsoft.UI.Input.NonClientRegionKind
+Windows.Graphics.RectInt32
+Microsoft.UI.Windowing.AppWindow::{get_TitleBar}
+Microsoft.UI.Windowing.AppWindowTitleBar::{get_RightInset, get_LeftInset, put_PreferredHeightOption}
+Microsoft.UI.Windowing.TitleBarHeightOption
+Microsoft.UI.Xaml.UIElement::{TransformToVisual}
+Microsoft.UI.Xaml.Media.GeneralTransform::{TransformBounds}
+Microsoft.UI.Xaml.FrameworkElement::{add_LayoutUpdated, remove_LayoutUpdated}
+Microsoft.UI.Xaml.Controls.Primitives.FlyoutBase::{put_SystemBackdrop, put_ShouldConstrainToRootBounds}
+Microsoft.UI.Xaml.Media.DesktopAcrylicBackdrop::{}
+Microsoft.UI.Xaml.Media.IDesktopAcrylicBackdropFactory::CreateInstance
+Microsoft.UI.Xaml.Controls.Flyout::{put_FlyoutPresenterStyle}
+Microsoft.UI.Xaml.Style::{get_Setters}
+Microsoft.UI.Xaml.IStyleFactory::CreateInstance
+Microsoft.UI.Xaml.SetterBaseCollection
+Microsoft.UI.Xaml.SetterBase
+Microsoft.UI.Xaml.Setter
+Microsoft.UI.Xaml.ISetterFactory::CreateInstance
+Windows.UI.Xaml.Interop.TypeName
+Windows.UI.Xaml.Interop.TypeKind
