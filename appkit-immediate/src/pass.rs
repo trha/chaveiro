@@ -161,6 +161,17 @@ impl Ui {
             .node
     }
 
+    /// The controls the open window's body declared so far, while a
+    /// container directly inside the window, such as its toolbar, is open.
+    pub(crate) fn window_controls(&self) -> &[NodeId] {
+        let window = &self.frames[self.frames.len() - 2];
+        debug_assert!(
+            matches!(self.tree.node(window.node).payload, Payload::Window(_)),
+            "the container's parent is a window"
+        );
+        &window.visual
+    }
+
     /// Opens `node` as the container for the widgets declared next.
     pub(crate) fn open(&mut self, node: NodeId) {
         let key = self.tree.node(node).key();

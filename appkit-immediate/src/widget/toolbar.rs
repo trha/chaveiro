@@ -1,4 +1,4 @@
-use super::must_write;
+use super::{Control, must_write};
 use crate::{
     events::EventKind,
     pass::{ChildKind, Payload, ToolbarItemNode, ToolbarNode, Ui},
@@ -12,9 +12,10 @@ use objc2_app_kit::{
     NSImage, NSToolbar, NSToolbarDelegate, NSToolbarDisplayMode,
     NSToolbarFlexibleSpaceItemIdentifier, NSToolbarItem, NSToolbarItemGroup,
     NSToolbarItemGroupControlRepresentation, NSToolbarItemGroupSelectionMode,
-    NSToolbarItemIdentifier, NSToolbarSidebarTrackingSeparatorItemIdentifier, NSWindowToolbarStyle,
+    NSToolbarItemIdentifier, NSToolbarSidebarTrackingSeparatorItemIdentifier,
+    NSToolbarToggleSidebarItemIdentifier, NSTrackingSeparatorToolbarItem, NSWindowToolbarStyle,
 };
-use objc2_foundation::{NSArray, NSCopying, NSObject, NSObjectProtocol, NSString};
+use objc2_foundation::{NSArray, NSCopying, NSInteger, NSObject, NSObjectProtocol, NSString};
 use std::{cell::RefCell, hash::Hash};
 
 impl Ui {
@@ -186,12 +187,57 @@ impl Ui {
         self.toolbar_space(id, unsafe { NSToolbarFlexibleSpaceItemIdentifier });
     }
 
+    /// The system's button that hides and shows the window's
+    /// [`split_view`](Self::split_view) sidebar. Put it before the
+    /// [`toolbar_sidebar_separator`](Self::toolbar_sidebar_separator), so
+    /// it sits over the sidebar.
+    pub fn toolbar_toggle_sidebar(&mut self, id: impl Hash) {
+        self.toolbar_space(id, unsafe { NSToolbarToggleSidebarItemIdentifier });
+    }
+
     /// A divider that follows the edge of the window's
     /// [`split_view`](Self::split_view) sidebar, so the items after it sit
     /// over the other panes.
     pub fn toolbar_sidebar_separator(&mut self, id: impl Hash) {
         self.toolbar_space(id, unsafe {
             NSToolbarSidebarTrackingSeparatorItemIdentifier
+        });
+    }
+
+    /// A divider that follows divider `divider` of the window's
+    /// [`split_view`](Self::split_view), counted from the leading edge, the
+    /// sidebar's included, so the items after it sit over the panes past
+    /// that divider. The window's title stays before it and truncates
+    /// there, so put it after a list pane that the title names.
+    ///
+    /// Panics when the window's body declared no split view before the
+    /// toolbar.
+    pub fn toolbar_divider_separator(&mut self, id: &'static str, divider: usize) {
+        // The window's control was declared before the toolbar, and joins
+        // the window only when the window's body ends.
+        let split_view = self
+            .window_controls()
+            .iter()
+            .find_map(|&node| match &self.control(node).control {
+                Control::SplitView { controller, .. } => Some(controller.splitView()),
+                _ => None,
+            })
+            .expect("the window's control is a split view, declared before the toolbar");
+        self.visit(id, ChildKind::Visual, |_| {
+            let identifier = NSString::from_str(id);
+            let item = NSTrackingSeparatorToolbarItem::trackingSeparatorToolbarItemWithIdentifier_splitView_dividerIndex(
+                &identifier,
+                &split_view,
+                divider as NSInteger,
+            );
+            Payload::ToolbarItem(ToolbarItemNode {
+                item: Some(item.into_super()),
+                identifier,
+                symbol: String::new(),
+                label: String::new(),
+                enabled: None,
+                subitems: Vec::new(),
+            })
         });
     }
 
@@ -333,6 +379,7 @@ define_class!(
                 items.iter().map(|(identifier, _)| &**identifier).collect();
             identifiers.push(unsafe { NSToolbarFlexibleSpaceItemIdentifier });
             identifiers.push(unsafe { NSToolbarSidebarTrackingSeparatorItemIdentifier });
+            identifiers.push(unsafe { NSToolbarToggleSidebarItemIdentifier });
             NSArray::from_slice(&identifiers)
         }
     }

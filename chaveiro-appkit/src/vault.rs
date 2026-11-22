@@ -276,7 +276,10 @@ pub fn view<A: VaultApp>(
         // The split view came first, so the toolbar acts on the item the
         // details show this pass.
         ui.toolbar(|ui| {
+            ui.toolbar_toggle_sidebar("toggle sidebar");
             ui.toolbar_sidebar_separator("sidebar");
+            // The title names the list, so it stays over the list pane.
+            ui.toolbar_divider_separator("list", 1);
             ui.toolbar_flexible_space("space");
             let (summary, view) =
                 drawn.map_or((None, None), |details: Details<'_>| details.shown());
