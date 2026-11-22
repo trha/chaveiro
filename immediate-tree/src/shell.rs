@@ -23,7 +23,10 @@ pub trait Shell: 'static + Sized {
 
     /// Makes `declared` the native children of the native node `node`, and
     /// leaves the previous list in `declared`. Called only for
-    /// [`Node::Native`] nodes, from [`close`].
+    /// [`Node::Native`] nodes, from [`close`], and only when the node's
+    /// children differ from the last pass's: a node added, dropped or
+    /// moved, or a cache or flow inside that ran its body. A call that fails
+    /// is not repeated until the children change again.
     fn apply_visual(&mut self, node: NodeId, declared: &mut Vec<NodeId>)
     -> Result<(), Self::Error>;
 
@@ -136,6 +139,7 @@ impl<N> Core<N> {
             key,
             logical,
             visual,
+            changed: false,
         });
     }
 
@@ -168,23 +172,36 @@ impl<N> Core<N> {
             .expect("widgets are declared inside a pass");
         let key = Key::child(frame.key, id);
         let parent = frame.node;
+        let found = self.tree.find_child(parent, frame.logical.len(), key);
         // Created before the tree is touched, so a failure changes nothing.
-        let created = match self.tree.find(key) {
+        let created = match found {
             Some(_) => None,
             None => Some(create()?),
         };
-        let (node, visit) = self.tree.visit(parent, key, || {
+        let (node, visit) = self.tree.visit_found(parent, key, found, || {
             created.expect("a payload was created because the key was missing")
         });
         let frame = self
             .frames
             .last_mut()
             .expect("widgets are declared inside a pass");
+        // A child that is not the one at its place in the last pass's list
+        // changes the container, so `close` applies its children.
+        if self.tree.children(parent).get(frame.logical.len()) != Some(&node) {
+            frame.changed = true;
+        }
         frame.logical.push(node);
         if kind == ChildKind::Visual {
             frame.visual.push(node);
         }
         Ok((node, visit))
+    }
+
+    /// Makes the open container apply its children when it closes.
+    fn mark_changed(&mut self) {
+        if let Some(frame) = self.frames.last_mut() {
+            frame.changed = true;
+        }
     }
 
     /// Adds the controls the cache or flow `node` declared on its last run
@@ -209,19 +226,33 @@ impl<N> Core<N> {
 pub fn close<S: Shell>(shell: &mut S) -> Result<(), S::Error> {
     let core = shell.core();
     let mut frame = core.frames.pop().expect("close matches open");
+    // Every child matched its place, so only a shorter list is left to
+    // tell a change.
+    if core.tree.children(frame.node).len() != frame.logical.len() {
+        frame.changed = true;
+    }
     let applied = match &mut core.tree.node_mut(frame.node).payload {
         Node::Root => Ok(()),
+        // The same children in the same order give the same native
+        // children, so the shell has nothing to apply.
+        Node::Native(_) if !frame.changed => Ok(()),
         Node::Native(_) => shell.apply_visual(frame.node, &mut frame.visual),
         // A cache or a flow has no element: its controls belong to the
-        // parent.
+        // parent, which changes with them.
         Node::Cache(CacheNode { emitted, .. }) => {
             std::mem::swap(emitted, &mut frame.visual);
             core.emit_cached(frame.node);
+            if frame.changed {
+                core.mark_changed();
+            }
             Ok(())
         }
         Node::Flow(flow) => {
             std::mem::swap(&mut flow.emitted, &mut frame.visual);
             core.emit_cached(frame.node);
+            if frame.changed {
+                core.mark_changed();
+            }
             Ok(())
         }
         Node::State(_) | Node::Task(_) | Node::Stream(_) => {
@@ -288,4 +319,7 @@ struct Frame {
     logical: Vec<NodeId>,
     /// The subset of `logical` that are native children.
     visual: Vec<NodeId>,
+    /// `logical` differs from the last pass's children so far, or a cache or
+    /// flow inside changed what it emits.
+    changed: bool,
 }

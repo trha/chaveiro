@@ -81,8 +81,33 @@ impl<P> Tree<P> {
         key: Key,
         create: impl FnOnce() -> P,
     ) -> (NodeId, Visit) {
+        let found = self.find(key);
+        self.visit_found(parent, key, found, create)
+    }
+
+    /// The live node `key`, a child of `parent`. Checks first the child at
+    /// `position` in `parent`'s children from the last pass, where a
+    /// child declared in the same order sits, which skips the key map.
+    pub fn find_child(&self, parent: NodeId, position: usize, key: Key) -> Option<NodeId> {
+        if let Some(&id) = self.node(parent).children.get(position)
+            && self.node(id).key == key
+        {
+            return Some(id);
+        }
+        self.find(key)
+    }
+
+    /// [`visit`](Self::visit) with `found`, the result of
+    /// [`find`](Self::find) or [`find_child`](Self::find_child) for `key`.
+    pub fn visit_found(
+        &mut self,
+        parent: NodeId,
+        key: Key,
+        found: Option<NodeId>,
+        create: impl FnOnce() -> P,
+    ) -> (NodeId, Visit) {
         let pass = self.pass;
-        match self.by_key.get(&key).copied() {
+        match found {
             Some(id) => {
                 let node = self.node_mut(id);
                 assert!(
