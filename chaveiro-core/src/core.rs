@@ -2590,6 +2590,7 @@ impl Core {
             },
             State::Unlocked(unlocked) => Screen::Vault(VaultScreen {
                 email: &unlocked.account.email,
+                server: &unlocked.account.server.url,
                 index: &unlocked.index,
                 index_revision: self.index_revision,
                 open: unlocked.open.as_ref(),
@@ -3043,6 +3044,8 @@ pub enum Screen<'a> {
 
 pub struct VaultScreen<'a> {
     pub email: &'a str,
+    /// The server the account logs in to, as the user typed it.
+    pub server: &'a Url,
     pub index: &'a VaultIndex,
     /// Changes whenever [`index`](Self::index) changes: an item or folder
     /// comes or goes, or any summary differs. Equal numbers mean an equal

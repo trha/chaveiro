@@ -260,8 +260,10 @@ impl App for Preview {
             return;
         }
         let now_ms = 1_800_000_000_000;
+        let server = url::Url::parse("https://vault.bitwarden.com").expect("a valid URL");
         let screen = VaultScreen {
             email: "alex@example.com",
+            server: &server,
             index: &self.index,
             index_revision: self.revision,
             open: None,
