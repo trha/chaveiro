@@ -188,84 +188,89 @@ impl Chaveiro {
     /// The window for the current screen.
     fn body(&mut self, ui: &mut Ui) -> Option<Next> {
         let screen = self.core.screen();
-        if let Screen::Vault(vault) = &screen {
-            // The vault starts on All Items each time it opens.
-            if !std::mem::replace(&mut self.showed_vault, true) {
-                self.vault.reset();
-            }
-            self.showed_login = false;
+        // Each form keeps its state only while its screen stays up.
+        let showed_vault =
+            std::mem::replace(&mut self.showed_vault, matches!(screen, Screen::Vault(_)));
+        let showed_login = std::mem::replace(
+            &mut self.showed_login,
+            matches!(screen, Screen::Login { .. }),
+        );
+        if !matches!(screen, Screen::SecondFactor { .. }) {
             self.second_factor = None;
-            let open = vault.open.map(|item| &item.view);
-            return match vault::view::<Self>(ui, &mut self.vault, vault, open, now_ms())? {
-                VaultAction::User(action) => Some(Next::User(action)),
-                VaultAction::Close => Some(Next::Quit),
-            };
         }
-        self.showed_vault = false;
-        if let Screen::SecondFactor {
-            email,
-            challenge,
-            error,
-            busy,
-            sending,
-        } = &screen
-        {
-            self.showed_login = false;
-            let form = self.second_factor.get_or_insert_default();
-            let message = error.map(login_error);
-            let state = SecondFactorState {
-                challenge,
-                email,
-                error: message.as_deref(),
-                refused: second_factor::refused(*error),
-                busy: *busy,
-                sending: *sending,
-            };
-            return match second_factor::view(ui, form, state)? {
-                SecondFactorAction::User(action) => Some(Next::User(action)),
-                SecondFactorAction::Back => Some(Next::User(UserAction::Cancel)),
-            };
-        }
-        self.second_factor = None;
-        let (busy, error) = match &screen {
-            Screen::Starting => (false, None),
-            Screen::Login {
-                server,
-                busy,
-                error,
-                email,
-            } => {
-                // Fill in the last account once, when the core first shows
-                // the form.
-                if !self.showed_login {
-                    if self.login.email.is_empty() {
-                        (*email).clone_into(&mut self.login.email);
-                    }
-                    if let Some(server) = server {
-                        self.login.set_server(server);
-                    }
+        match &screen {
+            Screen::Vault(vault) => {
+                // The vault starts on All Items each time it opens.
+                if !showed_vault {
+                    self.vault.reset();
                 }
-                (*busy, error.map(login_error))
+                let open = vault.open.map(|item| &item.view);
+                match vault::view::<Self>(ui, &mut self.vault, vault, open, now_ms())? {
+                    VaultAction::User(action) => Some(Next::User(action)),
+                    VaultAction::Close => Some(Next::Quit),
+                }
             }
-            other => {
-                self.showed_login = false;
-                return placeholder(ui, other);
+            Screen::SecondFactor {
+                email,
+                challenge,
+                error,
+                busy,
+                sending,
+            } => {
+                let form = self.second_factor.get_or_insert_default();
+                let message = error.map(login_error);
+                let state = SecondFactorState {
+                    challenge,
+                    email,
+                    error: message.as_deref(),
+                    refused: second_factor::refused(*error),
+                    busy: *busy,
+                    sending: *sending,
+                };
+                match second_factor::view(ui, form, state)? {
+                    SecondFactorAction::User(action) => Some(Next::User(action)),
+                    SecondFactorAction::Back => Some(Next::User(UserAction::Cancel)),
+                }
             }
-        };
-        self.showed_login = matches!(screen, Screen::Login { .. });
-        let state = LoginState {
-            busy,
-            error: error.as_deref(),
-            warning: self.settings_error.as_deref(),
-        };
-        match login::view(ui, &mut self.login, state)? {
-            LoginAction::Submit(submit) => Some(Next::User(UserAction::Login {
-                server: submit.server,
-                email: submit.email,
-                password: submit.password,
-            })),
-            LoginAction::Cancel => Some(Next::User(UserAction::Cancel)),
-            LoginAction::Quit => Some(Next::Quit),
+            Screen::Starting | Screen::Login { .. } => {
+                let (busy, error) = match &screen {
+                    Screen::Login {
+                        server,
+                        busy,
+                        error,
+                        email,
+                    } => {
+                        // Fill in the last account once, when the core first
+                        // shows the form.
+                        if !showed_login {
+                            if self.login.email.is_empty() {
+                                (*email).clone_into(&mut self.login.email);
+                            }
+                            if let Some(server) = server {
+                                self.login.set_server(server);
+                            }
+                        }
+                        (*busy, error.map(login_error))
+                    }
+                    Screen::Starting => (false, None),
+                    _ => unreachable!("the outer arm matched Starting or Login"),
+                };
+                let state = LoginState {
+                    busy,
+                    error: error.as_deref(),
+                    warning: self.settings_error.as_deref(),
+                };
+                match login::view(ui, &mut self.login, state)? {
+                    LoginAction::Submit(submit) => Some(Next::User(UserAction::Login {
+                        server: submit.server,
+                        email: submit.email,
+                        password: submit.password,
+                    })),
+                    LoginAction::Cancel => Some(Next::User(UserAction::Cancel)),
+                    LoginAction::Quit => Some(Next::Quit),
+                }
+            }
+            other => placeholder(ui, other),
         }
     }
 }
