@@ -18,6 +18,7 @@ pub use events::Key;
 pub use pass::Ui;
 pub use runner::{App, run};
 pub use widget::{
+    Flow, FlowResponse, Frame, Lend, Lent, Owned, OwnedFamily, owned,
     Align, AppBarButtonResponse, ButtonResponse, CODE_LENGTH, CheckBoxResponse, CodeBoxes,
     CodeDigits, ComboBoxResponse, ContentAlignment, ContentButtonResponse, FieldHandle,
     FontIconResponse, IconButtonResponse, LabelResponse, Length, LinkResponse, ListId, MenuAnchor,

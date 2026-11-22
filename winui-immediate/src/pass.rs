@@ -6,7 +6,7 @@ use crate::{
     children::{Edit, edits},
     events::{EventSet, Events},
     tree::{Key, NodeId, Tree, Visit},
-    widget::{Control, StreamNode, TaskNode, TaskWakes},
+    widget::{Control, FlowNode, StreamNode, TaskNode, TaskWakes},
 };
 use std::{any::Any, hash::Hash, rc::Rc};
 use windows_core::{IInspectable, Interface, Result};
@@ -469,17 +469,11 @@ impl Ui {
                 }
                 Ok(())
             }
-            Payload::Cache(cache) => {
-                // A cache has no element: its controls belong to the parent.
-                std::mem::swap(&mut cache.emitted, declared);
-                let Payload::Cache(cache) = &self.tree.node(node).payload else {
-                    unreachable!("matched above")
-                };
-                self.frames
-                    .last_mut()
-                    .expect("a cache is declared inside a container")
-                    .visual
-                    .extend_from_slice(&cache.emitted);
+            // A cache or a flow has no element: its controls belong to the
+            // parent.
+            Payload::Cache(_) | Payload::Flow(_) => {
+                std::mem::swap(self.emitted_mut(node), declared);
+                self.emit_cached(node);
                 Ok(())
             }
             Payload::State(_) => unreachable!("state nodes are never opened"),
@@ -493,14 +487,25 @@ impl Ui {
     /// Adds the controls a cache emitted on its last run to the open
     /// container, for a pass that skips the cache's body.
     pub(crate) fn emit_cached(&mut self, node: NodeId) {
-        let Payload::Cache(cache) = &self.tree.node(node).payload else {
-            unreachable!("cache keys hold caches")
+        let emitted = match &self.tree.node(node).payload {
+            Payload::Cache(cache) => &cache.emitted,
+            Payload::Flow(flow) => flow.emitted(),
+            _ => unreachable!("only caches and flows emit controls"),
         };
         self.frames
             .last_mut()
-            .expect("a cache is declared inside a container")
+            .expect("a cache or a flow is declared inside a container")
             .visual
-            .extend_from_slice(&cache.emitted);
+            .extend_from_slice(emitted);
+    }
+
+    /// The controls a cache or a flow declared on its last run.
+    fn emitted_mut(&mut self, node: NodeId) -> &mut Vec<NodeId> {
+        match &mut self.tree.node_mut(node).payload {
+            Payload::Cache(cache) => &mut cache.emitted,
+            Payload::Flow(flow) => flow.emitted_mut(),
+            _ => unreachable!("only caches and flows emit controls"),
+        }
     }
 
     /// Puts each child of the grid `node` in the row, or for a grid of
@@ -558,6 +563,8 @@ pub(crate) enum Payload {
     Task(TaskNode),
     /// From [`Ui::stream`]. Dropping it drops the stream.
     Stream(StreamNode),
+    /// From [`Ui::flow`]. Dropping it drops the future and its controls.
+    Flow(Box<FlowNode>),
 }
 
 /// A flyout, shown on its first pass and hidden when its node drops.
@@ -716,7 +723,8 @@ fn release(events: &mut Events, payload: Payload) {
         | Payload::Cache(_)
         | Payload::State(_)
         | Payload::Task(_)
-        | Payload::Stream(_) => {}
+        | Payload::Stream(_)
+        | Payload::Flow(_) => {}
         Payload::Shortcut(shortcut) => {
             events.forget(&shortcut.accelerator);
             crate::widget::shortcut::release(&shortcut);

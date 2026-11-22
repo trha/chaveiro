@@ -139,7 +139,21 @@ impl Ui {
             match self.tree.get(node).map(|node| &node.payload) {
                 Some(Payload::Task(_)) => self.poll_task(node),
                 Some(Payload::Stream(_)) => self.poll_stream(node),
-                _ => {}
+                // A flow draws, so it runs only where the view declares it;
+                // its wake only asked for this turn.
+                Some(Payload::Flow(_)) => {}
+                // The node dropped after its wake.
+                None => {}
+                Some(
+                    Payload::Root
+                    | Payload::Window(_)
+                    | Payload::Control(_)
+                    | Payload::Cache(_)
+                    | Payload::State(_)
+                    | Payload::Menu(_)
+                    | Payload::Shortcut(_)
+                    | Payload::Flyout(_),
+                ) => unreachable!("only task, stream and flow nodes have wakers"),
             }
         }
         // Handed back to reuse its capacity, unless a wake already put a
@@ -365,7 +379,7 @@ impl TaskWakes {
 }
 
 /// The waker of one task.
-struct TaskWake {
+pub(crate) struct TaskWake {
     node: NodeId,
     /// The task is in `shared.woken` and has not been polled since.
     queued: AtomicBool,
@@ -383,6 +397,15 @@ impl Wake for TaskWake {
 }
 
 impl TaskWake {
+    /// The waker of the node `node`, which wakes through `shared`.
+    pub(crate) fn new(node: NodeId, shared: &Arc<TaskWakes>) -> Arc<Self> {
+        Arc::new(TaskWake {
+            node,
+            queued: AtomicBool::new(false),
+            shared: Arc::clone(shared),
+        })
+    }
+
     /// Lists the task for the next turn's poll, unless it is listed and
     /// not polled yet. Runs on any thread.
     fn signal(&self) {
@@ -409,7 +432,7 @@ impl TaskWake {
     /// Unlists the task right before a poll, so a wake during the poll
     /// lists it again. A swap, because a plain store would read no wake:
     /// the swap reads the last one and acquires the writes before it.
-    fn begin_poll(&self) {
+    pub(crate) fn begin_poll(&self) {
         self.queued.swap(false, Ordering::Acquire);
     }
 }

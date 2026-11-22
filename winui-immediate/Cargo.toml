@@ -21,6 +21,8 @@ zeroize = "1"
 proptest = "1"
 # The examples sleep in task nodes. A cycle through dev-dependencies only.
 winui-executor = { path = "../winui-executor" }
+# The flow example races work against a Cancel frame.
+futures = { version = "0.3", default-features = false, features = ["std", "async-await"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 
 # The wake protocol of task nodes runs on loom's atomics under
