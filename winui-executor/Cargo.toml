@@ -6,10 +6,12 @@ publish = false
 description = "Runs !Send futures on the WinUI dispatcher of the current thread"
 
 [target.'cfg(windows)'.dependencies]
+futures-core = "0.3"
 windows-core = "0.100.0"
+windows-future = "0.100.0"
+windows-sys = { version = "0.61", features = ["Win32_System_Threading", "Win32_UI_WindowsAndMessaging"] }
 
 [target.'cfg(windows)'.dev-dependencies]
-windows-future = "0.100.0"
 winui-immediate = { path = "../winui-immediate" }
 
 [build-dependencies]
