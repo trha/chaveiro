@@ -87,6 +87,7 @@ pub fn run<A: App>(make: impl 'static + FnOnce(Handle<A::Message>) -> Result<A>)
                 mailbox,
                 messages: RefCell::new(Vec::new()),
                 scheduled: Cell::new(false),
+                missed: Cell::new(false),
                 dispatcher,
                 turn,
                 failure: launch_failure,
@@ -112,6 +113,8 @@ struct Runner<A: App> {
     messages: RefCell<Vec<A::Message>>,
     /// Whether `turn` is queued on the dispatcher and has not run yet.
     scheduled: Cell<bool>,
+    /// A turn ran inside this one and did nothing, so another is due.
+    missed: Cell<bool>,
     dispatcher: DispatcherQueue,
     /// Built once and queued again for every turn.
     turn: DispatcherQueueHandler,
@@ -142,6 +145,14 @@ impl<A: App> Runner<A> {
         if self.failure.borrow().is_some() {
             return;
         }
+        // A call that pumps messages inside a pass, such as ShellExecuteW,
+        // runs this turn inside the running one. It waits for that one to
+        // end, which queues it then; queuing it now would spin while the
+        // call waits.
+        if self.app.try_borrow_mut().is_err() || self.ui.try_borrow_mut().is_err() {
+            self.missed.set(true);
+            return;
+        }
         let mut messages = self.messages.take();
         self.mailbox.drain(&mut messages);
         {
@@ -166,6 +177,10 @@ impl<A: App> Runner<A> {
             *self.failure.borrow_mut() = Some(error);
             self.ui.borrow_mut().close_all();
             self.finish();
+            return;
+        }
+        if self.missed.take() {
+            self.schedule();
         }
     }
 
