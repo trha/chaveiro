@@ -4,6 +4,7 @@ use crate::{
     events::{EventKind, Key},
     pass::{ChildKind, ControlNode, Ui},
     tree::NodeId,
+    tree::Visit,
 };
 use std::{
     hash::Hash,
@@ -27,7 +28,7 @@ impl Ui {
         value: &mut String,
     ) -> Result<TextBoxResponse<'_>> {
         let capacity = value.capacity();
-        let (node, _) = self.visit(id, ChildKind::Visual, || {
+        let (node, visit) = self.visit(id, ChildKind::Visual, || {
             let text_box = TextBox::new()?;
             Ok(ControlNode::new(
                 text_box.cast()?,
@@ -45,6 +46,7 @@ impl Ui {
         Ok(TextBoxResponse {
             response: Response { ui: self, node },
             changed,
+            created: visit == Visit::Created,
         })
     }
 
@@ -59,7 +61,7 @@ impl Ui {
         value: &mut String,
     ) -> Result<TextBoxResponse<'_>> {
         let capacity = value.capacity();
-        let (node, _) = self.visit(id, ChildKind::Visual, || {
+        let (node, visit) = self.visit(id, ChildKind::Visual, || {
             let text_box = TextBox::new()?;
             text_box.SetAcceptsReturn(true)?;
             text_box.SetTextWrapping(TextWrapping::Wrap)?;
@@ -80,6 +82,7 @@ impl Ui {
         Ok(TextBoxResponse {
             response: Response { ui: self, node },
             changed,
+            created: visit == Visit::Created,
         })
     }
 
@@ -93,22 +96,18 @@ impl Ui {
         placeholder: &str,
         value: &mut String,
     ) -> Result<bool> {
-        let control = self.control_mut(node);
-        let (Control::TextBox { text_box, .. } | Control::SearchBox { text_box, .. }) =
-            &control.control
-        else {
-            unreachable!("text keys hold text boxes")
-        };
-        let text_box = text_box.clone();
-        let mut subscribed = control.subscribed;
-        for kind in [
-            EventKind::TextChanged,
-            EventKind::CompositionStarted,
-            EventKind::CompositionEnded,
-        ] {
-            self.events
-                .subscribe(node, &mut subscribed, &text_box, kind)?;
-        }
+        self.subscribe(
+            node,
+            &[
+                EventKind::TextChanged,
+                EventKind::CompositionStarted,
+                EventKind::CompositionEnded,
+            ],
+            |control| match &control.control {
+                Control::TextBox { text_box, .. } | Control::SearchBox { text_box, .. } => text_box,
+                _ => unreachable!("text keys hold text boxes"),
+            },
+        )?;
         let typed = self.events.happened(node, EventKind::TextChanged);
         let composition = self.events.last_of(
             node,
@@ -116,15 +115,16 @@ impl Ui {
             EventKind::CompositionEnded,
         );
         let control = self.control_mut(node);
-        control.subscribed = subscribed;
         let stale = std::mem::take(&mut control.stale);
         let (Control::TextBox {
+            text_box,
             text,
             placeholder: written_placeholder,
             composing,
             ..
         }
         | Control::SearchBox {
+            text_box,
             text,
             placeholder: written_placeholder,
             composing,
@@ -170,9 +170,15 @@ impl Ui {
 pub struct TextBoxResponse<'u> {
     response: Response<'u>,
     changed: bool,
+    created: bool,
 }
 
 impl TextBoxResponse<'_> {
+    /// Whether this pass made the box.
+    pub(crate) fn created(&self) -> bool {
+        self.created
+    }
+
     /// Whether the user changed the text since the last pass; `value` then
     /// holds the new text.
     pub fn changed(&self) -> bool {
@@ -210,12 +216,7 @@ impl TextBoxResponse<'_> {
     /// result is empty.
     pub fn keys(&mut self) -> Result<impl Iterator<Item = Key> + '_> {
         let Response { ui, node } = &mut self.response;
-        let control = ui.control_mut(*node);
-        let element = control.element.clone();
-        let mut subscribed = control.subscribed;
-        ui.events
-            .subscribe(*node, &mut subscribed, &element, EventKind::Key)?;
-        ui.control_mut(*node).subscribed = subscribed;
+        ui.subscribe(*node, &[EventKind::Key], |control| &control.element)?;
         Ok(ui.events.keys(*node))
     }
 }
@@ -223,12 +224,7 @@ impl TextBoxResponse<'_> {
 /// Subscribes the control of `response` to Enter and reads it.
 pub(crate) fn enter_pressed(response: &mut Response<'_>) -> Result<bool> {
     let Response { ui, node } = response;
-    let control = ui.control_mut(*node);
-    let element = control.element.clone();
-    let mut subscribed = control.subscribed;
-    ui.events
-        .subscribe(*node, &mut subscribed, &element, EventKind::Enter)?;
-    ui.control_mut(*node).subscribed = subscribed;
+    ui.subscribe(*node, &[EventKind::Enter], |control| &control.element)?;
     Ok(ui.events.happened(*node, EventKind::Enter))
 }
 

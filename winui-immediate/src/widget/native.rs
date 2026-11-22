@@ -1,5 +1,8 @@
 use super::{Control, Response};
-use crate::pass::{ChildKind, ControlNode, Ui};
+use crate::{
+    bindings::UIElement,
+    pass::{ChildKind, ControlNode, Ui},
+};
 use std::hash::Hash;
 use windows_core::{IInspectable, Interface, Result};
 
@@ -18,8 +21,11 @@ impl Ui {
         let (node, _) = self.visit(id, ChildKind::Visual, || {
             Ok(ControlNode::new(create()?.cast()?, Control::Native))
         })?;
-        let response = Response { ui: self, node };
-        update(&response.element())?;
-        Ok(response)
+        let element = &self.control(node).element;
+        // SAFETY: both types are a transparent interface pointer, and every
+        // WinRT interface is also an `IInspectable`, so the borrow needs no
+        // QueryInterface and no AddRef.
+        update(unsafe { &*(element as *const UIElement).cast::<IInspectable>() })?;
+        Ok(Response { ui: self, node })
     }
 }

@@ -50,12 +50,10 @@ impl Ui {
                 subscribed: Default::default(),
             })))
         })?;
-        let Payload::Menu(menu) = self.core.tree.native_mut(node) else {
-            unreachable!("menu keys hold menus")
-        };
-        let flyout = menu.flyout.clone();
-        self.events
-            .subscribe(node, &mut menu.subscribed, &flyout, EventKind::FlyoutClosed)?;
+        self.subscribe_native(node, &[EventKind::FlyoutClosed], |payload| match payload {
+            Payload::Menu(menu) => (&menu.flyout, &mut menu.subscribed),
+            _ => unreachable!("menu keys hold menus"),
+        })?;
         self.open(node);
         body(self)?;
         self.close()?;
@@ -64,7 +62,7 @@ impl Ui {
             unreachable!("menu keys hold menus")
         };
         if !menu.shown {
-            if !self.show_at(&flyout.cast()?, anchor)? {
+            if !self.show_at(&menu.flyout.cast()?, anchor)? {
                 closed = true;
             }
             let Payload::Menu(menu) = self.core.tree.native_mut(node) else {
@@ -102,16 +100,10 @@ impl Ui {
                 subscribed: Default::default(),
             })))
         })?;
-        let Payload::Flyout(popup) = self.core.tree.native_mut(node) else {
-            unreachable!("flyout keys hold flyouts")
-        };
-        let flyout = popup.flyout.clone();
-        self.events.subscribe(
-            node,
-            &mut popup.subscribed,
-            &flyout,
-            EventKind::FlyoutClosed,
-        )?;
+        self.subscribe_native(node, &[EventKind::FlyoutClosed], |payload| match payload {
+            Payload::Flyout(popup) => (&popup.flyout, &mut popup.subscribed),
+            _ => unreachable!("flyout keys hold flyouts"),
+        })?;
         self.open(node);
         body(self)?;
         self.close()?;
@@ -120,7 +112,7 @@ impl Ui {
             unreachable!("flyout keys hold flyouts")
         };
         if !popup.shown {
-            if !self.show_at(&flyout.cast()?, anchor)? {
+            if !self.show_at(&popup.flyout.cast()?, anchor)? {
                 closed = true;
             }
             let Payload::Flyout(popup) = self.core.tree.native_mut(node) else {
@@ -175,7 +167,7 @@ impl Ui {
         let Control::MenuItem { item, look, .. } = &mut control.control else {
             unreachable!("menu item keys hold menu items")
         };
-        look.write(stale, &item.clone(), Some(glyph), label)?;
+        look.write(stale, item, Some(glyph), label)?;
         Ok(MenuItemResponse(Response { ui: self, node }))
     }
 
@@ -209,8 +201,8 @@ impl Ui {
         else {
             unreachable!("menu toggle keys hold menu toggles")
         };
-        let item = item.clone();
-        look.write(stale, &item.cast()?, glyph, label)?;
+        look.write(stale, item, glyph, label)?;
+
         if must_write(stale, written, &Some(checked)) {
             item.SetIsChecked(checked)?;
             *written = Some(checked);
@@ -243,7 +235,6 @@ impl Ui {
         let Control::SubMenu { item, look, .. } = &mut control.control else {
             unreachable!("submenu keys hold submenus")
         };
-        let item = item.clone();
         if must_write(stale, &look.glyph, &Some(glyph)) {
             item.SetIcon(&icon(glyph)?)?;
             look.glyph = Some(glyph);
@@ -304,16 +295,10 @@ impl Response<'_> {
     /// the pointer, or under the control from the keyboard. The first call
     /// subscribes the control, so its first result is [`None`].
     pub fn context_requested(&mut self) -> Result<Option<MenuAnchor>> {
-        let control = self.ui.control_mut(self.node);
-        let element = control.element.clone();
-        let mut subscribed = control.subscribed;
-        self.ui.events.subscribe(
-            self.node,
-            &mut subscribed,
-            &element,
-            EventKind::ContextRequested,
-        )?;
-        self.ui.control_mut(self.node).subscribed = subscribed;
+        self.ui
+            .subscribe(self.node, &[EventKind::ContextRequested], |control| {
+                &control.element
+            })?;
         Ok(self
             .ui
             .events
@@ -400,9 +385,10 @@ impl MenuItemResponse<'_> {
     /// Draws the item in the critical color, for an action such as Move to
     /// trash.
     pub fn critical(&mut self, on: bool) -> Result<&mut Self> {
-        let control = self.0.ui.control_mut(self.0.node);
-        let element = control.element.clone();
-        if let Control::MenuItem { critical, .. } = &mut control.control
+        let ControlNode {
+            element, control, ..
+        } = self.0.ui.control_mut(self.0.node);
+        if let Control::MenuItem { critical, .. } = control
             && *critical != on
         {
             let control = element.cast::<XamlControl>()?;
@@ -442,16 +428,20 @@ pub(crate) struct Look {
 }
 
 impl Look {
-    /// Writes `glyph` and `label` where they changed. An item starts with
-    /// no icon, so [`None`] needs no first write.
+    /// Writes `glyph` and `label` where they changed, on `item`, a
+    /// `MenuFlyoutItem` or a subclass. An item starts with no icon, so
+    /// [`None`] needs no first write.
     fn write(
         &mut self,
         stale: bool,
-        item: &MenuFlyoutItem,
+        item: &impl Interface,
         glyph: Option<char>,
         label: &str,
     ) -> Result<()> {
+        // Cast only for a write, because a cast is a COM call.
+        let item = || item.cast::<MenuFlyoutItem>();
         if must_write(stale, &self.glyph, &glyph) {
+            let item = item()?;
             match glyph {
                 Some(glyph) => item.SetIcon(&icon(glyph)?)?,
                 None => item.SetIcon(None::<&IconElement>)?,
@@ -459,7 +449,7 @@ impl Look {
             self.glyph = glyph;
         }
         if must_write(stale, self.label.as_str(), label) {
-            item.SetText(label)?;
+            item()?.SetText(label)?;
             self.label.clear();
             self.label.push_str(label);
         }

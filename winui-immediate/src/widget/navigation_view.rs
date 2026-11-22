@@ -71,16 +71,9 @@ impl Ui {
 
         // Subscribed before any write, so a write's own event comes back
         // and reads as no pick.
-        let control = self.control_mut(node);
-        let element = control.element.clone();
-        let mut subscribed = control.subscribed;
-        self.events.subscribe(
-            node,
-            &mut subscribed,
-            &element,
-            EventKind::NavigationSelectionChanged,
-        )?;
-        self.control_mut(node).subscribed = subscribed;
+        self.subscribe(node, &[EventKind::NavigationSelectionChanged], |control| {
+            &control.element
+        })?;
         let changed = self
             .events
             .happened(node, EventKind::NavigationSelectionChanged);

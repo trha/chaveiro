@@ -76,13 +76,13 @@ impl Ui {
             data.row_address = row as usize;
         }
         let source_changed = !data.sourced || data.len != len || data.revision != revision;
-        let repeater = repeater.clone();
         if source_changed {
             data.sourced = true;
             data.len = len;
             data.revision = revision;
             // WinUI may ask for rows inside `SetItemsSource`, so the runner
             // sets it after the pass, with no borrow held.
+            let repeater = repeater.clone();
             self.sources.push((repeater, len));
         }
         // Keep every row alive: WinUI holds the realized ones, and the free
@@ -138,14 +138,9 @@ impl Ui {
     /// one of its rows, since the last pass, in order. The first call
     /// subscribes the list, so its first result is empty.
     pub fn list_keys(&mut self, list: ListId) -> Result<impl Iterator<Item = events::Key>> {
-        let control = self.control_mut(list.0);
-        let element = control.element.clone();
-        let mut subscribed = control.subscribed;
         // The list's scroll area sees each key on its way down to the
         // focused row.
-        self.events
-            .subscribe(list.0, &mut subscribed, &element, EventKind::Key)?;
-        self.control_mut(list.0).subscribed = subscribed;
+        self.subscribe(list.0, &[EventKind::Key], |control| &control.element)?;
         Ok(self.events.keys(list.0))
     }
 

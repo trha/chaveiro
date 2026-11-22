@@ -88,12 +88,9 @@ impl TitleBarResponse<'_> {
     /// first call subscribes it.
     pub fn back_requested(&mut self) -> Result<bool> {
         let Response { ui, node } = &mut self.0;
-        let control = ui.control_mut(*node);
-        let element = control.element.clone();
-        let mut subscribed = control.subscribed;
-        ui.events
-            .subscribe(*node, &mut subscribed, &element, EventKind::BackRequested)?;
-        ui.control_mut(*node).subscribed = subscribed;
+        ui.subscribe(*node, &[EventKind::BackRequested], |control| {
+            &control.element
+        })?;
         Ok(ui.events.happened(*node, EventKind::BackRequested))
     }
 }

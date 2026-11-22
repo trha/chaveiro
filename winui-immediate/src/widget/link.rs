@@ -26,14 +26,9 @@ impl Ui {
                 },
             ))
         })?;
-        let control = self.control_mut(node);
-        let element = control.element.clone();
-        let mut subscribed = control.subscribed;
-        self.events
-            .subscribe(node, &mut subscribed, &element, EventKind::Click)?;
+        self.subscribe(node, &[EventKind::Click], |control| &control.element)?;
         let clicked = self.events.happened(node, EventKind::Click);
         let control = self.control_mut(node);
-        control.subscribed = subscribed;
         let stale = std::mem::take(&mut control.stale);
         let Control::Link {
             content,

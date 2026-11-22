@@ -44,10 +44,14 @@ impl Ui {
                 },
             ))
         })?;
-        let control = self.control_mut(node);
-        let stale = std::mem::take(&mut control.stale);
-        let element = control.element.clone();
-        let Control::ContentButton { label: written, .. } = &mut control.control else {
+        let ControlNode {
+            element,
+            control,
+            stale,
+            ..
+        } = self.control_mut(node);
+        let stale = std::mem::take(stale);
+        let Control::ContentButton { label: written, .. } = control else {
             unreachable!("content button keys hold content buttons")
         };
         if must_write(stale, written.as_str(), label) {
@@ -191,16 +195,20 @@ impl Ui {
                 },
             ))
         })?;
-        let control = self.control_mut(node);
-        let stale = std::mem::take(&mut control.stale);
-        let element = control.element.clone();
+        let ControlNode {
+            element,
+            control,
+            stale,
+            ..
+        } = self.control_mut(node);
+        let stale = std::mem::take(stale);
         let Control::Tag {
             text,
             icon,
             label: written_label,
             glyph: written_glyph,
             tooltip: written_tooltip,
-        } = &mut control.control
+        } = control
         else {
             unreachable!("tag keys hold tags")
         };

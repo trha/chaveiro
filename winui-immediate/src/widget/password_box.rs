@@ -82,12 +82,9 @@ impl PasswordField<'_> {
     /// call subscribes the box.
     pub fn changed(&mut self) -> Result<bool> {
         let Response { ui, node } = &mut self.0;
-        let control = ui.control_mut(*node);
-        let element = control.element.clone();
-        let mut subscribed = control.subscribed;
-        ui.events
-            .subscribe(*node, &mut subscribed, &element, EventKind::PasswordChanged)?;
-        ui.control_mut(*node).subscribed = subscribed;
+        ui.subscribe(*node, &[EventKind::PasswordChanged], |control| {
+            &control.element
+        })?;
         Ok(ui.events.happened(*node, EventKind::PasswordChanged))
     }
 

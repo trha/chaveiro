@@ -3,7 +3,7 @@
 
 use crate::{
     bindings::*,
-    events::{EventSet, Events},
+    events::{EventKind, EventSet, Events},
     widget::Control,
 };
 use immediate_tree::{Core, Edit, Node, NodeId, Shell, Tree, Visit, edits};
@@ -187,6 +187,47 @@ impl Ui {
             Payload::Control(control) => control,
             _ => unreachable!("visual children and widget keys are controls"),
         }
+    }
+
+    /// Subscribes the control `node` to each of `kinds` it is not subscribed
+    /// to yet, on the object `source` picks from it. A node subscribed to
+    /// every kind costs a bit test per kind and no COM call.
+    pub(crate) fn subscribe<I: Interface>(
+        &mut self,
+        node: NodeId,
+        kinds: &[EventKind],
+        source: impl Fn(&ControlNode) -> &I,
+    ) -> Result<()> {
+        // `self.core` and `self.events` are separate fields, so the control
+        // stays borrowed while the events subscribe its object: no clone,
+        // which would be a COM AddRef and Release on every pass.
+        let Payload::Control(control) = self.core.tree.native_mut(node) else {
+            unreachable!("widget keys hold controls")
+        };
+        let mut subscribed = control.subscribed;
+        for &kind in kinds {
+            if !subscribed.contains(kind) {
+                self.events
+                    .subscribe(node, &mut subscribed, source(control), kind)?;
+            }
+        }
+        control.subscribed = subscribed;
+        Ok(())
+    }
+
+    /// [`subscribe`](Self::subscribe) for any payload: `pick` returns the
+    /// object to subscribe and the payload's record of subscribed kinds.
+    pub(crate) fn subscribe_native<I: Interface>(
+        &mut self,
+        node: NodeId,
+        kinds: &[EventKind],
+        pick: impl FnOnce(&mut Payload) -> (&I, &mut EventSet),
+    ) -> Result<()> {
+        let (source, subscribed) = pick(self.core.tree.native_mut(node));
+        for &kind in kinds {
+            self.events.subscribe(node, subscribed, source, kind)?;
+        }
+        Ok(())
     }
 
     pub(crate) fn control_mut(&mut self, node: NodeId) -> &mut ControlNode {
@@ -400,15 +441,18 @@ impl Ui {
                 navigator.swap(old, entering)
             }
             Payload::Control(control) => {
-                let Some(children) = control.control.children() else {
+                if control.control.children().is_none() {
                     assert!(declared.is_empty(), "only panels have children");
                     return Ok(());
-                };
-                let children = children.clone();
+                }
                 let in_grid = matches!(control.control, Control::Grid { .. });
                 // Afterwards `declared` holds the old list.
                 std::mem::swap(&mut control.visual, declared);
-                for edit in edits(declared, self.control(node).visual.as_slice()) {
+                // Borrowed, not cloned: a clone is a COM AddRef and Release on
+                // every pass, edits or not.
+                let control = self.control(node);
+                let children = control.control.children().expect("checked above");
+                for edit in edits(declared, control.visual.as_slice()) {
                     match edit {
                         Edit::RemoveAt(index) => children.RemoveAt(index)?,
                         Edit::InsertAt(index, child) => {
@@ -533,7 +577,8 @@ pub(crate) struct FlyoutNode {
 /// A key held by `owner` from the first pass until the node drops.
 pub(crate) struct ShortcutNode {
     pub(crate) accelerator: KeyboardAccelerator,
-    pub(crate) owner: UIElement,
+    /// [`None`] until the first pass attaches the key.
+    pub(crate) owner: Option<UIElement>,
     pub(crate) subscribed: EventSet,
 }
 

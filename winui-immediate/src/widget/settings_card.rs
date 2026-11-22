@@ -82,32 +82,34 @@ impl Ui {
                 Control::SettingsCard(Box::new(parts)),
             ))
         })?;
-        let control = self.control_mut(node);
-        let element = control.element.clone();
-        let clickable =
-            matches!(&control.control, Control::SettingsCard(parts) if parts.button.is_some());
-        let mut subscribed = control.subscribed;
+        let clickable = matches!(
+            &self.control(node).control,
+            Control::SettingsCard(parts) if parts.button.is_some()
+        );
         // A width change can cross a wrap threshold, so it needs a pass.
-        self.events
-            .subscribe(node, &mut subscribed, &element, EventKind::SizeChanged)?;
-        if clickable {
-            self.events
-                .subscribe(node, &mut subscribed, &element, EventKind::Click)?;
-        }
-        self.control_mut(node).subscribed = subscribed;
+        let kinds: &[EventKind] = match clickable {
+            true => &[EventKind::SizeChanged, EventKind::Click],
+            false => &[EventKind::SizeChanged],
+        };
+        self.subscribe(node, kinds, |control| &control.element)?;
         let clicked = clickable && self.events.happened(node, EventKind::Click);
 
         self.open(node);
         body(self)?;
         self.close()?;
 
+        let ControlNode {
+            element,
+            control,
+            visual,
+            ..
+        } = self.control_mut(node);
         let width = element.cast::<FrameworkElement>()?.ActualWidth()?;
-        let control = self.control_mut(node);
-        let has_content = !control.visual.is_empty();
-        let Control::SettingsCard(parts) = &mut control.control else {
+        let has_content = !visual.is_empty();
+        let Control::SettingsCard(parts) = control else {
             unreachable!("settings card keys hold settings cards")
         };
-        parts.write(&element, &card)?;
+        parts.write(element, &card)?;
         parts.lay_out(Layout::new(&card, width, has_content))?;
         Ok(SettingsCardResponse {
             response: Response { ui: self, node },

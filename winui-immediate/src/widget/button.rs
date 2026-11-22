@@ -2,7 +2,8 @@ use super::{Control, Response, boxed, must_write, resource};
 use crate::{
     bindings::{
         AutomationProperties, Button, ContentControl, DependencyObject, FontIcon, FrameworkElement,
-        IPanel, Orientation, ProgressRing, StackPanel, Style, TextBlock, ToolTipService, UIElement, Visibility,
+        IPanel, Orientation, ProgressRing, StackPanel, Style, TextBlock, ToolTipService, UIElement,
+        Visibility,
     },
     events::EventKind,
     pass::{ChildKind, ControlNode, Ui},
@@ -66,15 +67,12 @@ impl ButtonResponse<'_> {
     /// registers no handler.
     pub fn clicked(&mut self) -> Result<bool> {
         let Response { ui, node } = &mut self.0;
-        let control = ui.control_mut(*node);
-        let Control::Button { button, .. } = &control.control else {
-            unreachable!("button keys hold buttons")
-        };
-        let button = button.clone();
-        let mut subscribed = control.subscribed;
-        ui.events
-            .subscribe(*node, &mut subscribed, &button, EventKind::Click)?;
-        ui.control_mut(*node).subscribed = subscribed;
+        ui.subscribe(*node, &[EventKind::Click], |control| {
+            match &control.control {
+                Control::Button { button, .. } => button,
+                _ => unreachable!("button keys hold buttons"),
+            }
+        })?;
         Ok(ui.events.happened(*node, EventKind::Click))
     }
 
@@ -136,8 +134,7 @@ impl ButtonResponse<'_> {
         };
         if must_write(stale, written, &Some(glyph)) {
             let row = row_of(button, content, row)?;
-            row.icon
-                .SetGlyph(glyph.encode_utf8(&mut [0; 4]) as &str)?;
+            row.icon.SetGlyph(glyph.encode_utf8(&mut [0; 4]) as &str)?;
             row.icon.cast::<UIElement>()?.SetVisibility(shown(!*busy))?;
             *written = Some(glyph);
         }

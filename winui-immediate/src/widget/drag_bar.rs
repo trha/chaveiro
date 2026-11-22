@@ -31,17 +31,12 @@ impl Ui {
         body: impl FnOnce(&mut Ui) -> Result<()>,
     ) -> Result<Response<'_>> {
         let window = self.enclosing_window();
-        let Payload::Window(window_node) = self.core.tree.native(window) else {
-            unreachable!("enclosing_window returns a window")
-        };
-        let app_window = window_node.app_window.clone();
         let (node, _) = self.visit(id, ChildKind::Visual, || {
             let grid = Grid::new()?;
             grid.cast::<FrameworkElement>()?.SetHeight(HEIGHT)?;
             let children = grid.cast::<Panel>()?.Children()?;
             let state = Rc::new(RefCell::new(Clickable {
-                source: InputNonClientPointerSource::GetForWindowId(app_window.Id()?)?,
-                app_window,
+                window: None,
                 elements: Vec::new(),
                 nodes: Vec::new(),
                 walk: Vec::new(),
@@ -77,17 +72,35 @@ impl Ui {
                 },
             ))
         })?;
+        // The window is read here, not in `visit`'s create, because that
+        // cannot read the tree, and reading it every pass would clone it. An
+        // attach that failed is tried again on the next pass.
+        let Payload::Window(window_node) = self.core.tree.native(window) else {
+            unreachable!("enclosing_window returns a window")
+        };
+        let Control::DragBar { clickable, .. } = &self.control(node).control else {
+            unreachable!("drag bar keys hold drag bars")
+        };
+        if clickable.borrow().window.is_none() {
+            let app_window = window_node.app_window.clone();
+            let source = InputNonClientPointerSource::GetForWindowId(app_window.Id()?)?;
+            clickable.borrow_mut().window = Some((app_window, source));
+        }
         self.open(node);
         body(self)?;
         self.close()?;
         self.collect_clickable(node);
-        let element = self.control(node).element.clone();
-        let Payload::Window(window) = self.core.tree.native_mut(window) else {
+        let Payload::Window(window_node) = self.core.tree.native(window) else {
             unreachable!("enclosing_window returns a window")
         };
-        if window.title_bar != Some(node) {
-            window.window.SetTitleBar(&element)?;
-            window.title_bar = Some(node);
+        if window_node.title_bar != Some(node) {
+            window_node
+                .window
+                .SetTitleBar(&self.control(node).element)?;
+            let Payload::Window(window_node) = self.core.tree.native_mut(window) else {
+                unreachable!("enclosing_window returns a window")
+            };
+            window_node.title_bar = Some(node);
         }
         Ok(Response { ui: self, node })
     }
@@ -98,7 +111,6 @@ impl Ui {
         let Control::DragBar { clickable, .. } = &self.control(bar).control else {
             unreachable!("drag bar keys hold drag bars")
         };
-        let clickable = Rc::clone(clickable);
         let mut clickable = clickable.borrow_mut();
         let Clickable {
             nodes,
@@ -134,8 +146,9 @@ impl Ui {
 ///
 /// Contract: `elements` holds the elements of `nodes`, in the same order.
 pub(crate) struct Clickable {
-    source: InputNonClientPointerSource,
-    app_window: AppWindow,
+    /// The bar's window and its input source, [`None`] until the bar's first
+    /// pass reads them.
+    window: Option<(AppWindow, InputNonClientPointerSource)>,
     nodes: Vec<NodeId>,
     elements: Vec<UIElement>,
     /// Reused by each pass's walk of the bar's nodes.
@@ -159,8 +172,11 @@ impl Clickable {
             // Not in a window yet.
             return Ok(());
         };
+        let Some((app_window, source)) = &self.window else {
+            return Ok(());
+        };
         let scale = root.RasterizationScale()?;
-        let title_bar = self.app_window.TitleBar()?;
+        let title_bar = app_window.TitleBar()?;
         if !self.tall {
             // The caption buttons grow to the bar's 48px, as WinUI's own
             // title bar asks for, so they line up with its controls.
@@ -206,8 +222,7 @@ impl Clickable {
             });
         }
         if self.written.as_deref() != Some(&self.rects[..]) {
-            self.source
-                .SetRegionRects(NonClientRegionKind::Passthrough, &self.rects)?;
+            source.SetRegionRects(NonClientRegionKind::Passthrough, &self.rects)?;
             match &mut self.written {
                 Some(written) => {
                     written.clear();

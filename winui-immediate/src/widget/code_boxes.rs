@@ -55,10 +55,9 @@ impl Ui {
                     }
                     field.width(BOX_WIDTH)?.enabled(enabled)?;
                     fields.push(field.field());
-                    let element = field.cast::<TextBox>()?;
-                    // Each pass sets these again on a new box only, because a
-                    // node keeps its control.
-                    if element.TextAlignment()? != TextAlignment::Center {
+                    // A node keeps its control, so only a new box needs these.
+                    if field.created() {
+                        let element = field.cast::<TextBox>()?;
                         element.SetTextAlignment(TextAlignment::Center)?;
                         ui.events.select_all_on_focus(&element)?;
                         let control = element.cast::<XamlControl>()?;
@@ -84,9 +83,10 @@ impl Ui {
             if slot.is_none() {
                 *slot = Some(Rc::new(RefCell::new(ErrorLine::new()?)));
             }
+            // An `Rc` clone is a count, so it is cheap; the row is cast only
+            // on the pass that makes its node.
             let line = slot.clone().expect("made above");
-            let row = line.borrow().row.clone();
-            ui.native("error", || row.cast(), |_| Ok(()))?;
+            ui.native("error", || line.borrow().row.cast(), |_| Ok(()))?;
             let mut line = line.borrow_mut();
             if line.message.as_deref() != error {
                 line.message = error.map(str::to_owned);

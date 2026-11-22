@@ -22,7 +22,6 @@ impl Ui {
             letter.is_ascii_alphabetic(),
             "a shortcut is Ctrl and a letter"
         );
-        let owner = self.enclosing_control();
         let (node, _) = self.visit(id, ChildKind::Logical, || {
             let accelerator = KeyboardAccelerator::new()?;
             // A virtual key code of a letter is its uppercase ASCII code.
@@ -34,41 +33,49 @@ impl Ui {
                 false => VirtualKeyModifiers::Control,
             };
             accelerator.SetModifiers(modifiers)?;
-            owner.KeyboardAccelerators()?.Append(&accelerator)?;
-            owner.SetKeyboardAcceleratorPlacementMode(KeyboardAcceleratorPlacementMode::Hidden)?;
             Ok(Payload::Shortcut(ShortcutNode {
                 accelerator,
-                owner,
+                owner: None,
                 subscribed: Default::default(),
             }))
         })?;
-        let Payload::Shortcut(shortcut) = self.core.tree.native_mut(node) else {
-            unreachable!("shortcut keys hold shortcuts")
+        // The owner is found here, not in `visit`'s create, because that
+        // cannot read the tree, and finding it every pass would clone its
+        // element. An attach that failed is tried again on the next pass.
+        let attached = match self.core.tree.native(node) {
+            Payload::Shortcut(shortcut) => shortcut.owner.is_some(),
+            _ => unreachable!("shortcut keys hold shortcuts"),
         };
-        let accelerator = shortcut.accelerator.clone();
-        let mut subscribed = shortcut.subscribed;
-        self.events
-            .subscribe(node, &mut subscribed, &accelerator, EventKind::Invoked)?;
-        let Payload::Shortcut(shortcut) = self.core.tree.native_mut(node) else {
-            unreachable!("shortcut keys hold shortcuts")
-        };
-        shortcut.subscribed = subscribed;
+        if !attached {
+            let owner = self.enclosing_control();
+            let Payload::Shortcut(shortcut) = self.core.tree.native_mut(node) else {
+                unreachable!("shortcut keys hold shortcuts")
+            };
+            owner
+                .KeyboardAccelerators()?
+                .Append(&shortcut.accelerator)?;
+            owner.SetKeyboardAcceleratorPlacementMode(KeyboardAcceleratorPlacementMode::Hidden)?;
+            shortcut.owner = Some(owner);
+        }
+        self.subscribe_native(node, &[EventKind::Invoked], |payload| match payload {
+            Payload::Shortcut(shortcut) => (&shortcut.accelerator, &mut shortcut.subscribed),
+            _ => unreachable!("shortcut keys hold shortcuts"),
+        })?;
         Ok(self.events.happened(node, EventKind::Invoked))
     }
 }
 
 /// Takes `shortcut`'s key off its control, whose node is being dropped.
 pub(crate) fn release(shortcut: &ShortcutNode) {
-    let removed = shortcut
-        .owner
-        .KeyboardAccelerators()
-        .and_then(|accelerators| {
-            let mut index = 0;
-            if accelerators.IndexOf(&shortcut.accelerator, &mut index)? {
-                accelerators.RemoveAt(index)?;
-            }
-            Ok(())
-        });
+    // A key never attached is on no control.
+    let Some(owner) = &shortcut.owner else { return };
+    let removed = owner.KeyboardAccelerators().and_then(|accelerators| {
+        let mut index = 0;
+        if accelerators.IndexOf(&shortcut.accelerator, &mut index)? {
+            accelerators.RemoveAt(index)?;
+        }
+        Ok(())
+    });
     if let Err(error) = removed {
         tracing::warn!(%error, "a dropped shortcut still works");
     }

@@ -43,20 +43,19 @@ impl Ui {
                 subscribed: Default::default(),
             })))
         })?;
-        let Payload::Dialog(dialog) = self.core.tree.native_mut(node) else {
-            unreachable!("dialog keys hold dialogs")
-        };
-        let control = dialog.dialog.clone();
-        let mut subscribed = dialog.subscribed;
-        for kind in [EventKind::DialogPrimary, EventKind::DialogClosed] {
-            self.events
-                .subscribe(node, &mut subscribed, &control, kind)?;
-        }
-        let Payload::Dialog(dialog) = self.core.tree.native_mut(node) else {
-            unreachable!("dialog keys hold dialogs")
-        };
-        dialog.subscribed = subscribed;
+        self.subscribe_native(
+            node,
+            &[EventKind::DialogPrimary, EventKind::DialogClosed],
+            |payload| match payload {
+                Payload::Dialog(dialog) => (&dialog.dialog, &mut dialog.subscribed),
+                _ => unreachable!("dialog keys hold dialogs"),
+            },
+        )?;
         if visit == Visit::Created {
+            let Payload::Dialog(dialog) = self.core.tree.native(node) else {
+                unreachable!("dialog keys hold dialogs")
+            };
+            let control = &dialog.dialog;
             // A dialog shows once, with the text of its first pass, so its
             // text is written only here.
             control.SetTitle(&boxed(title))?;

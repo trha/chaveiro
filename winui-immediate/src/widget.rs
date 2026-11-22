@@ -9,9 +9,9 @@ use crate::{
         AppBarButton, Application, AutomationProperties, Brush, Button, ComboBox,
         Control as XamlControl, DependencyObject, FocusState, FontIcon, FrameworkElement, Grid,
         HorizontalAlignment, ICommandBarElement, IPanel, IconElement, InfoBar, ItemsRepeater,
-        MenuFlyoutItem, MenuFlyoutItemBase, MenuFlyoutSubItem, PasswordBox,
-        StackPanel, Style, TextBlock, TextBox, TextWrapping, Thickness, TitleBar,
-        ToggleMenuFlyoutItem, UIElement, UIElementCollection, Visibility,
+        MenuFlyoutItem, MenuFlyoutItemBase, MenuFlyoutSubItem, PasswordBox, StackPanel, Style,
+        TextBlock, TextBox, TextWrapping, Thickness, TitleBar, ToggleMenuFlyoutItem, UIElement,
+        UIElementCollection, Visibility,
     },
     events::EventKind,
     pass::Ui,
@@ -315,13 +315,10 @@ impl Response<'_> {
     /// Whether keyboard focus left the control since the last pass. The
     /// first call subscribes it.
     pub fn left(&mut self) -> Result<bool> {
-        let control = self.ui.control_mut(self.node);
-        let element = control.element.clone();
-        let mut subscribed = control.subscribed;
         self.ui
-            .events
-            .subscribe(self.node, &mut subscribed, &element, EventKind::LostFocus)?;
-        self.ui.control_mut(self.node).subscribed = subscribed;
+            .subscribe(self.node, &[EventKind::LostFocus], |control| {
+                &control.element
+            })?;
         Ok(self.ui.events.happened(self.node, EventKind::LostFocus))
     }
 
@@ -829,13 +826,8 @@ impl Response<'_> {
     /// Whether the control, a `ButtonBase`, was clicked since the last
     /// pass. The first call subscribes it.
     pub(crate) fn button_clicked(&mut self) -> Result<bool> {
-        let control = self.ui.control_mut(self.node);
-        let element = control.element.clone();
-        let mut subscribed = control.subscribed;
         self.ui
-            .events
-            .subscribe(self.node, &mut subscribed, &element, EventKind::Click)?;
-        self.ui.control_mut(self.node).subscribed = subscribed;
+            .subscribe(self.node, &[EventKind::Click], |control| &control.element)?;
         Ok(self.ui.events.happened(self.node, EventKind::Click))
     }
 }

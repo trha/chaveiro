@@ -44,23 +44,12 @@ impl Ui {
                 },
             ))
         })?;
-        let control = self.control_mut(node);
-        let Control::ComboBox { combo_box, .. } = &control.control else {
-            unreachable!("combo box keys hold combo boxes")
-        };
-        let combo_box = combo_box.clone();
-        let mut subscribed = control.subscribed;
-        self.events.subscribe(
-            node,
-            &mut subscribed,
-            &combo_box,
-            EventKind::SelectionChanged,
-        )?;
+        self.subscribe(node, &[EventKind::SelectionChanged], combo_box_of)?;
         let picked = self.events.happened(node, EventKind::SelectionChanged);
         let control = self.control_mut(node);
-        control.subscribed = subscribed;
         let stale = std::mem::take(&mut control.stale);
         let Control::ComboBox {
+            combo_box,
             items: written_items,
             selected: written_selected,
             ..
@@ -68,18 +57,20 @@ impl Ui {
         else {
             unreachable!("combo box keys hold combo boxes")
         };
-        let selector = combo_box.cast::<Selector>()?;
+        let combo_box = &*combo_box;
+        // Cast only when read or written, because a cast is a COM call.
+        let selector = || combo_box.cast::<Selector>();
         // Clearing the items clears the selection, which raises an echo that
         // the read below treats as no pick, since the index is written again
         // right after.
-        let count = write_items(&combo_box, stale, written_items, items, written_selected)?;
+        let count = write_items(combo_box, stale, written_items, items, written_selected)?;
         let declared = i32::try_from(*selected)
             .ok()
             .filter(|&index| (index as usize) < count)
             .unwrap_or(-1);
         let mut changed = false;
         if picked {
-            let current = selector.SelectedIndex()?;
+            let current = selector()?.SelectedIndex()?;
             // An echo of this layer's own write reads back the stored index.
             if current != *written_selected {
                 *written_selected = current;
@@ -90,7 +81,7 @@ impl Ui {
             }
         }
         if !changed && must_write(false, written_selected, &declared) {
-            selector.SetSelectedIndex(declared)?;
+            selector()?.SetSelectedIndex(declared)?;
             *written_selected = declared;
         }
         Ok(ComboBoxResponse {
@@ -129,27 +120,22 @@ impl Ui {
                 },
             ))
         })?;
-        let control = self.control_mut(node);
-        let Control::ComboBox { combo_box, .. } = &control.control else {
-            unreachable!("combo box keys hold combo boxes")
-        };
-        let combo_box = combo_box.clone();
-        let mut subscribed = control.subscribed;
-        for kind in [
-            EventKind::SelectionChanged,
-            EventKind::TextSubmitted,
-            EventKind::DropDownClosed,
-        ] {
-            self.events
-                .subscribe(node, &mut subscribed, &combo_box, kind)?;
-        }
+        self.subscribe(
+            node,
+            &[
+                EventKind::SelectionChanged,
+                EventKind::TextSubmitted,
+                EventKind::DropDownClosed,
+            ],
+            combo_box_of,
+        )?;
         let selection_changed = self.events.happened(node, EventKind::SelectionChanged);
         let submitted = self.events.happened(node, EventKind::TextSubmitted);
         let closed = self.events.happened(node, EventKind::DropDownClosed);
         let control = self.control_mut(node);
-        control.subscribed = subscribed;
         let stale = std::mem::take(&mut control.stale);
         let Control::ComboBox {
+            combo_box,
             items: written_items,
             selected: written_selected,
             text: Some(written_text),
@@ -158,8 +144,9 @@ impl Ui {
         else {
             unreachable!("editable combo box keys hold editable combo boxes")
         };
+        let combo_box = &*combo_box;
         write_items(
-            &combo_box,
+            combo_box,
             stale,
             written_items,
             items.iter().copied(),
@@ -201,6 +188,13 @@ impl Ui {
             picked,
             closed,
         })
+    }
+}
+
+fn combo_box_of(control: &ControlNode) -> &ComboBox {
+    match &control.control {
+        Control::ComboBox { combo_box, .. } => combo_box,
+        _ => unreachable!("combo box keys hold combo boxes"),
     }
 }
 
