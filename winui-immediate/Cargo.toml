@@ -8,6 +8,7 @@ description = "An immediate-mode UI over the WinUI 3 retained tree"
 
 [target.'cfg(windows)'.dependencies]
 ahash = "0.8"
+futures-core = "0.3"
 tracing = "0.1"
 windows-collections = { version = "0.100.0", features = ["std"] }
 windows-core = "0.100.0"
@@ -18,7 +19,17 @@ zeroize = "1"
 
 [target.'cfg(windows)'.dev-dependencies]
 proptest = "1"
+# The examples sleep in task nodes. A cycle through dev-dependencies only.
+winui-executor = { path = "../winui-executor" }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+# The wake protocol of task nodes runs on loom's atomics under
+# `--cfg loom`; see `src/widget/task/loom_tests.rs`.
+[target.'cfg(loom)'.dependencies]
+loom = "0.7"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(loom)'] }
 
 [build-dependencies]
 windows-bindgen = "0.100.0"

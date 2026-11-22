@@ -12,7 +12,7 @@ use windows_core::Result;
 use winui_immediate::{App, Length, ListId, Orientation, Overflow, Ui, run};
 
 fn main() -> Result<()> {
-    run(|_| {
+    run(|| {
         Ok(Notes {
             open: true,
             entries: (1..=200)
@@ -48,10 +48,6 @@ struct Entry {
 }
 
 impl App for Notes {
-    type Message = ();
-
-    fn update(&mut self, (): ()) {}
-
     fn view(&mut self, ui: &mut Ui) -> Result<()> {
         if !self.open {
             return Ok(());

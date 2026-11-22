@@ -24,7 +24,7 @@ use chaveiro_core::{
     core::{Config, Core, Input, LoginError, Screen, UserAction},
     vault::VaultIndex,
 };
-use io::{Answer, Io, Settings, SettingsError, TaskId};
+use io::{Answer, Io, Settings, SettingsError};
 use login::{LoginForm, LoginState, Submit};
 use rand_core::OsRng;
 use route::Route;
@@ -33,7 +33,7 @@ use second_factor::{SecondFactorForm, SecondFactorState};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use vault::{VaultAction, VaultApp, VaultForm};
 use windows_core::Result;
-use winui_immediate::{App, Handle, Orientation, Slide, Ui, run};
+use winui_immediate::{App, Orientation, Slide, Ui, run};
 
 /// Logs go to stderr, filtered by `CHAVEIRO_LOG` (such as `debug` or
 /// `winui_immediate=trace`), warnings and up by default. The app has no
@@ -47,21 +47,19 @@ fn main() -> Result<()> {
         .with_writer(std::io::stderr)
         .init();
     let result = run(Chaveiro::new);
+    // The app dropped its tasks with the tree, which cancelled their WinRT
+    // work; wait a moment for it to end, so none outlives the process
+    // unnoticed.
+    let left = winui_executor::shutdown(SHUTDOWN_LIMIT);
+    if left > 0 {
+        tracing::warn!(left, "async work still ran at exit");
+    }
     if let Err(error) = &result {
         tracing::error!(%error, "Chaveiro stopped");
     }
     result
 }
 
-/// A message to the UI thread.
-pub enum Message {
-    /// The answer of a task of [`Io`]. `task` is [`None`] for file work,
-    /// which [`Io`] does not track per job.
-    Io {
-        task: Option<TaskId>,
-        answer: Answer,
-    },
-}
 
 /// The app.
 ///
@@ -88,6 +86,7 @@ struct Chaveiro {
     /// How the last change of `route` moved.
     slide: Slide,
     vault: VaultForm,
+
 }
 
 /// What the user asked for in a pass, applied after the screen's borrow
@@ -101,31 +100,69 @@ enum Next {
     Close,
 }
 
+/// How often the core gets [`Input::Tick`]. Its timeouts are minutes, so a
+/// lock or a check lands at most this late. The core reads the clock for
+/// each, so a tick after sleep catches up at once.
+const TICK_EVERY: Duration = Duration::from_secs(30);
+
+/// How long exit waits for cancelled async work to end.
+const SHUTDOWN_LIMIT: Duration = Duration::from_secs(2);
+
 /// Lock after this long with no user action.
 const LOCK_AFTER: Duration = Duration::from_secs(15 * 60);
 
 impl App for Chaveiro {
-    type Message = Message;
-
-    fn update(&mut self, message: Message) {
-        match message {
-            Message::Io { task, answer } => {
-                if let Some(task) = task {
-                    self.io.finish(task);
-                }
-                match answer {
-                    Answer::Core(input) => self.handle_input(input),
-                    Answer::Settings(result) => self.settings_loaded(result),
-                    Answer::None => {}
-                }
-            }
-        }
-    }
-
     fn view(&mut self, ui: &mut Ui) -> Result<()> {
         if !self.open {
             return Ok(());
         }
+        // Ticked before the route is read, so this pass shows the tick's
+        // result. One interval for the app's life, from the core's start;
+        // ticks that came together count once, because the core reads the
+        // clock for each.
+        if self.core.is_some() {
+            let mut ticks = ui.stream("tick", || winui_executor::interval(TICK_EVERY));
+            let mut ticked = false;
+            while ticks.next().is_some() {
+                ticked = true;
+            }
+            if ticked {
+                tracing::debug!("tick");
+                self.handle_input(Input::Tick);
+            }
+        }
+
+        // Effects run as tasks at the root, so a route change does not end
+        // them. Answers are applied after the loop, because applying one
+        // may add effects.
+        let mut answers = Vec::new();
+        for (task, work) in self.io.pending() {
+            let answer = ui
+                .task(("io", *task), || {
+                    work.take().expect("a pending effect starts on its first pass")
+                })
+                .take();
+            if let Some(answer) = answer {
+                tracing::debug!(?task, "effect answered");
+                answers.push((*task, answer));
+            }
+        }
+        for (task, answer) in answers {
+            self.io.answered(task);
+            self.answer(answer);
+        }
+        // File work answers in push order. The stream lives as long as the
+        // view runs, like the pending effects.
+        let mut stored = Vec::new();
+        let io = &mut self.io;
+        let mut queue = ui.stream("storage", || io.stored_answers());
+        while let Some(answer) = queue.next() {
+            stored.push(answer);
+        }
+        for answer in stored {
+            self.answer(answer);
+        }
+
         let route = Route::of(self.core.as_ref().map(Core::screen).as_ref(), |challenge| {
             self.second_factor.choosing(challenge)
         });
@@ -216,6 +253,10 @@ impl App for Chaveiro {
                 }
             }
         }
+        // An effect added after the tasks were declared starts next pass.
+        if self.io.unstarted() {
+            ui.request_pass();
+        }
         Ok(())
     }
 }
@@ -232,8 +273,8 @@ impl VaultApp for Chaveiro {
 impl Chaveiro {
     /// Makes the effect runner and starts reading the settings; the core
     /// comes once they load.
-    fn new(handle: Handle<Message>) -> Result<Self> {
-        let mut io = Io::new(handle)?;
+    fn new() -> Result<Self> {
+        let mut io = Io::new()?;
         io.load_settings();
         Ok(Chaveiro {
             open: true,
@@ -247,7 +288,17 @@ impl Chaveiro {
             route: Route::Login,
             slide: Slide::Instant,
             vault: VaultForm::default(),
+
         })
+    }
+
+    /// Applies the answer of an effect.
+    fn answer(&mut self, answer: Answer) {
+        match answer {
+            Answer::Core(input) => self.handle_input(input),
+            Answer::Settings(result) => self.settings_loaded(result),
+            Answer::None => {}
+        }
     }
 
     /// Takes the loaded settings, or fresh ones and a warning, then makes
@@ -278,7 +329,7 @@ impl Chaveiro {
             lock_after: LOCK_AFTER.as_millis() as u64,
         }));
         self.io.boot();
-        self.io.start_ticks();
+
     }
 
     /// Sends `pending` once the core has booted. A stored account that

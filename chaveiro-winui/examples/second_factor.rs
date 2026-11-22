@@ -18,9 +18,9 @@ mod second_factor;
 
 use chaveiro_core::core::{Challenge, LoginError, UserAction};
 use second_factor::{SecondFactorForm, SecondFactorState};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use windows_core::Result;
-use winui_immediate::{App, Handle, Orientation, Ui, run};
+use winui_immediate::{App, Orientation, Ui, run};
 
 fn main() -> Result<()> {
     let challenge = match std::env::var("PREVIEW_METHOD").as_deref() {
@@ -42,9 +42,9 @@ fn main() -> Result<()> {
             masked_email: None,
         },
     };
-    run(|handle: Handle<Answer>| {
+    run(|| {
         Ok(Preview {
-            handle,
+            answer: None,
             challenge,
             form: SecondFactorForm::default(),
             error: None,
@@ -62,7 +62,8 @@ enum Answer {
 }
 
 struct Preview {
-    handle: Handle<Answer>,
+    /// The fake server's next answer and when it arrives.
+    answer: Option<(Instant, Answer)>,
     challenge: Challenge,
     form: SecondFactorForm,
     error: Option<LoginError>,
@@ -72,21 +73,19 @@ struct Preview {
 }
 
 impl App for Preview {
-    type Message = Answer;
-
-    fn update(&mut self, answer: Answer) {
-        match answer {
-            Answer::Code { accepted } => {
-                self.busy = false;
-                self.error = (!accepted).then_some(LoginError::InvalidCode);
-            }
-            Answer::Sent => self.sending = false,
-        }
-    }
-
     fn view(&mut self, ui: &mut Ui) -> Result<()> {
         if !self.open {
             return Ok(());
+        }
+        // Applied before the screen reads the state, so this pass shows it.
+        if self.answer.as_ref().is_some_and(|(due, _)| Instant::now() >= *due) {
+            match self.answer.take().expect("checked above").1 {
+                Answer::Code { accepted } => {
+                    self.busy = false;
+                    self.error = (!accepted).then_some(LoginError::InvalidCode);
+                }
+                Answer::Sent => self.sending = false,
+            }
         }
         let mut asked = None;
         let mut main = ui.window("main", "Chaveiro preview", |ui| {
@@ -116,41 +115,43 @@ impl App for Preview {
                 remember,
             }) => {
                 eprintln!("submitted provider {provider} remember {remember}");
-                self.answer_later(code.as_str() == "123456" || code.as_str() == "cccc");
+                self.answer_code(code.as_str() == "123456" || code.as_str() == "cccc");
             }
             Some(UserAction::SubmitNewDeviceOtp { code }) => {
                 eprintln!("submitted new device code");
-                self.answer_later(code.as_str() == "123456");
+                self.answer_code(code.as_str() == "123456");
             }
             Some(UserAction::SendEmailCode) => {
                 eprintln!("send email");
                 self.sending = true;
-                let handle = self.handle.clone();
-                std::thread::spawn(move || {
-                    std::thread::sleep(Duration::from_secs(1));
-                    // The window may be gone, which needs no answer.
-                    let _ = handle.send(Answer::Sent);
-                });
+                self.answer_later(Answer::Sent);
             }
             _ => {}
+        }
+        // Declared after the actions, so an answer asked for in this pass
+        // starts its wait now. Keyed by the deadline, so each answer waits
+        // in its own task.
+        if let Some((due, _)) = &self.answer {
+            let due = *due;
+            ui.task(("answer", due), move || winui_executor::sleep_until(due));
         }
         Ok(())
     }
 }
 
 impl Preview {
-    fn answer_later(&mut self, accepted: bool) {
+    fn answer_code(&mut self, accepted: bool) {
         if accepted {
             eprintln!("accepted");
         }
         self.busy = true;
         self.error = None;
-        let handle = self.handle.clone();
-        std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_secs(1));
-            // The window may be gone, which needs no answer.
-            let _ = handle.send(Answer::Code { accepted });
-        });
+        self.answer_later(Answer::Code { accepted });
+    }
+
+    /// The fake server answers with `answer` a second from now.
+    fn answer_later(&mut self, answer: Answer) {
+        self.answer = Some((Instant::now() + Duration::from_secs(1), answer));
     }
 }
 

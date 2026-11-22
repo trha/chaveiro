@@ -33,20 +33,11 @@ use std::{
 use uuid::Uuid;
 use vault::{VaultAction, VaultApp, VaultForm};
 use windows_core::Result;
-use winui_immediate::{App, Handle, Ui, run};
+use winui_immediate::{App, Ui, run};
 
 fn main() -> Result<()> {
     let bench = std::env::var_os("VAULT_BENCH").map(|_| Bench::new());
-    let ticking = bench.is_some();
-    run(move |handle: Handle<Message>| {
-        if ticking {
-            let handle = handle.clone();
-            std::thread::spawn(move || {
-                while handle.send(Message::Tick) {
-                    std::thread::sleep(std::time::Duration::from_millis(10));
-                }
-            });
-        }
+    run(move || {
         let mut index = sample();
         let views: Vec<CipherView> = index.ciphers.iter().map(view_of).collect();
         // The index holds a login's addresses for search and the reprompt
@@ -70,7 +61,8 @@ fn main() -> Result<()> {
             form: VaultForm::default(),
             open: true,
             bench,
-            handle,
+
+            sync_running: false,
             syncs: 0,
             server: url::Url::parse("https://vault.bitwarden.com").expect("a valid URL"),
             sync: match std::env::var("VAULT_SYNC").as_deref() {
@@ -96,7 +88,9 @@ struct Preview {
     form: VaultForm,
     open: bool,
     bench: Option<Bench>,
-    handle: Handle<Message>,
+
+    /// Sync now started a made-up sync, which runs as a task.
+    sync_running: bool,
     /// Syncs finished, which alternate between success and offline.
     syncs: u32,
     server: url::Url,
@@ -108,12 +102,6 @@ struct Preview {
     synced_at: u64,
 }
 
-enum Message {
-    /// A bench pass.
-    Tick,
-    /// The made-up sync ended.
-    SyncDone,
-}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum SyncPreview {
@@ -122,31 +110,21 @@ enum SyncPreview {
 }
 
 impl App for Preview {
-    type Message = Message;
-
-    fn update(&mut self, message: Message) {
-        if let Message::SyncDone = message {
-            // Every second sync fails, so both results show.
-            self.syncs += 1;
-            self.sync = match self.syncs % 2 {
-                1 => None,
-                _ => Some(SyncPreview::Offline),
-            };
-            if self.sync.is_none() {
-                self.synced_at = epoch_ms();
-            }
-        }
-    }
-
     fn view(&mut self, ui: &mut Ui) -> Result<()> {
-        if let Some(bench) = &mut self.bench
-            && bench.measure()
-        {
-            self.open = false;
+        if let Some(bench) = &mut self.bench {
+            if bench.measure() {
+                self.open = false;
+            }
+            // A steady pass every 10 ms for the bench to count.
+            let mut ticks = ui.stream("tick", || {
+                winui_executor::interval(std::time::Duration::from_millis(10))
+            });
+            while ticks.next().is_some() {}
         }
         if !self.open {
             return Ok(());
         }
+
         let screen = VaultScreen {
             email: "alex@example.com",
             server: &self.server,
@@ -175,6 +153,29 @@ impl App for Preview {
             // The preview opens no browser, so a test can check the address.
             Some(VaultAction::OpenWebsite(url)) => eprintln!("website {url}"),
         }
+        // Declared after the actions, so a sync starts in the pass that
+        // asked for it. Each sync is a new task, so its id names the sync.
+        if self.sync_running
+            && ui
+                .task(("sync", self.syncs), || {
+                    winui_executor::sleep(std::time::Duration::from_secs(2))
+                })
+                .take()
+                .is_some()
+        {
+            self.sync_running = false;
+            // Every second sync fails, so both results show.
+            self.syncs += 1;
+            self.sync = match self.syncs % 2 {
+                1 => None,
+                _ => Some(SyncPreview::Offline),
+            };
+            if self.sync.is_none() {
+                self.synced_at = epoch_ms();
+            }
+            // The screen above still shows the sync running.
+            ui.request_pass();
+        }
         Ok(())
     }
 }
@@ -197,12 +198,7 @@ impl Preview {
                 eprintln!("sync");
                 if self.sync != Some(SyncPreview::Syncing) {
                     self.sync = Some(SyncPreview::Syncing);
-                    let handle = self.handle.clone();
-                    winui_executor::spawn(async move {
-                        winui_executor::sleep(std::time::Duration::from_secs(2)).await;
-                        handle.send(Message::SyncDone);
-                    })
-                    .detach();
+                    self.sync_running = true;
                 }
             }
             UserAction::Open(id) => {

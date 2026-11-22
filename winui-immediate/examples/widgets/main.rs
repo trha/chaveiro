@@ -1,6 +1,6 @@
 //! Every widget in one window, for the UI Automation scripts in `tests/ui`.
 //!
-//! `WIDGETS_TICK=<ms>` sends a message on a timer, so passes run while you
+//! `WIDGETS_TICK=<ms>` runs a timed pass on that period, so passes run while you
 //! type. `WIDGETS_IME=vi` switches this process to Vietnamese Telex.
 
 // The program is Windows only. On other targets it is empty, so it checks
@@ -12,7 +12,7 @@ mod ime;
 
 use std::time::Duration;
 use windows_core::{HSTRING, IInspectable, Interface, Result};
-use winui_immediate::{App, Handle, Length, Orientation, Severity, Ui, run};
+use winui_immediate::{App, Length, Orientation, Severity, Ui, run};
 
 fn main() -> Result<()> {
     let tick = std::env::var("WIDGETS_TICK")
@@ -20,15 +20,9 @@ fn main() -> Result<()> {
         .and_then(|text| text.parse().ok())
         .map(Duration::from_millis);
     let ime = std::env::var("WIDGETS_IME").as_deref() == Ok("vi");
-    run(move |handle: Handle<Tick>| {
-        if let Some(tick) = tick {
-            std::thread::spawn(move || {
-                while handle.send(Tick) {
-                    std::thread::sleep(tick);
-                }
-            });
-        }
+    run(move || {
         Ok(Widgets {
+            tick,
             open: true,
             filter: String::new(),
             edits: 0,
@@ -42,9 +36,9 @@ fn main() -> Result<()> {
     })
 }
 
-struct Tick;
-
 struct Widgets {
+    /// The tick period.
+    tick: Option<Duration>,
     open: bool,
     filter: String,
     edits: u32,
@@ -62,15 +56,15 @@ struct Widgets {
 const COLORS: [&str; 3] = ["Red", "Green", "Blue"];
 
 impl App for Widgets {
-    type Message = Tick;
-
-    fn update(&mut self, _: Tick) {
-        self.ticks += 1;
-    }
-
     fn view(&mut self, ui: &mut Ui) -> Result<()> {
         if !self.open {
             return Ok(());
+        }
+        if let Some(every) = self.tick {
+            let mut ticks = ui.stream("tick", || winui_executor::interval(every));
+            while ticks.next().is_some() {
+                self.ticks += 1;
+            }
         }
         let window = ui.window("main", "winui-immediate widgets", |ui| {
             ui.grid("rows", &[Length::Auto; 6], |ui| {

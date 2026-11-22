@@ -76,9 +76,9 @@ async fn exchange(client: &HttpClient, request: HttpRequest) -> windows_core::Re
             .TryAppendWithoutValidation("Content-Type", content_type)?;
         message.SetContent(&content.cast::<IHttpContent>()?)?;
     }
-    let response = client.SendRequestAsync(&message)?.await?;
+    let response = winui_executor::winrt(client.SendRequestAsync(&message)?).await?;
     let status = u16::try_from(response.StatusCode()?.0).unwrap_or(0);
-    let buffer = response.Content()?.ReadAsBufferAsync()?.await?;
+    let buffer = winui_executor::winrt(response.Content()?.ReadAsBufferAsync()?).await?;
     let mut array = Array::<u8>::new();
     CryptographicBuffer::CopyToByteArray(&buffer, &mut array)?;
     // `Array` frees its block with CoTaskMemFree, which the wiping allocator

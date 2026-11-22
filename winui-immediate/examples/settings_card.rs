@@ -7,10 +7,10 @@
 #![cfg_attr(not(windows), no_main)]
 #![cfg(windows)]
 
-use winui_immediate::{App, ContentAlignment, Handle, Orientation, SettingsCard, Ui, run};
+use winui_immediate::{App, ContentAlignment, Orientation, SettingsCard, Ui, run};
 
 fn main() -> windows_core::Result<()> {
-    run(|_: Handle<()>| {
+    run(|| {
         Ok(Gallery {
             clicks: 0,
             checked: false,
@@ -28,10 +28,6 @@ struct Gallery {
 }
 
 impl App for Gallery {
-    type Message = ();
-
-    fn update(&mut self, (): ()) {}
-
     fn view(&mut self, ui: &mut Ui) -> windows_core::Result<()> {
         if !self.open {
             return Ok(());

@@ -1,13 +1,13 @@
-//! The effect runner. Every effect is a task on the UI thread's
-//! `DispatcherQueue` that [`Io`] owns, and CPU-bound or blocking work inside
-//! a task runs on the process thread pool through [`off_thread`].
+//! The effect runner. Every effect is a future that the view runs as a
+//! task node, and CPU-bound or blocking work inside it runs on the process
+//! thread pool through [`off_thread`].
 
 mod clipboard;
 mod device_key;
 mod http;
 mod storage;
 
-use crate::{Message, bindings::HttpClient};
+use crate::bindings::HttpClient;
 use chaveiro_core::{
     core::{Effect, Input, StorageError, StoredAccount},
     crypto::derive_master_key,
@@ -29,17 +29,15 @@ use std::{
 pub use storage::{Settings, SettingsError};
 use windows_future::IAsyncAction;
 use winui_executor::SpawnHandle;
-use winui_immediate::Handle;
 use zeroize::Zeroizing;
 
-/// Runs the effects of the core and answers each through the app's
-/// [`Handle`] with a [`Message::Io`].
+/// Holds the effects of the core as futures for the view to run, and the
+/// answers of file work until the view takes them.
 ///
 /// HTTP, key derivation and Windows Hello may answer in any order. File work
 /// runs one job at a time in the order it was asked for, so two writes of
 /// one slot never race and a boot read sees every earlier write.
 pub struct Io {
-    handle: Handle<Message>,
     client: HttpClient,
     /// `%LOCALAPPDATA%\chaveiro`, or `CHAVEIRO_DATA_DIR` when set.
     folder: PathBuf,
@@ -48,29 +46,29 @@ pub struct Io {
     /// The main window's `AppWindow.Id`, which owns the Hello prompt.
     /// [`None`] before the first pass.
     window: Option<u64>,
-    /// One entry per running effect. Dropping an entry aborts its task.
-    tasks: Vec<(TaskId, SpawnHandle)>,
+    /// Effects that run as task nodes of the view, until their answer is
+    /// taken. The future is [`None`] once a pass started it.
+    pending: Vec<(TaskId, Option<Work>)>,
     next_task: u64,
     storage: Storage,
-    /// The last copy to the clipboard, until it is cleared.
     /// The last copy, until it is cleared. The copy task writes it.
     copied: Rc<Cell<Option<clipboard::Copied>>>,
     /// The task of the last copy: its retries, then its clear.
     copy: Option<SpawnHandle>,
-    /// The task that sends [`Input::Tick`].
-    ticks: Option<SpawnHandle>,
+    /// The stream of file work answers until the view starts it.
+    stored: Option<StoredAnswers>,
 }
 
 /// Names one task of [`Io`], so its answer can end it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct TaskId(u64);
 
-/// How often the core gets [`Input::Tick`]. Its timeouts are minutes,
-/// so a lock or a check lands at most this late.
-const TICK_EVERY: Duration = Duration::from_secs(30);
 
 /// How long a copy stays on the clipboard.
 const CLEAR_CLIPBOARD_AFTER: Duration = Duration::from_secs(30);
+
+/// The future of one effect that runs as a task node.
+pub type Work = std::pin::Pin<Box<dyn Future<Output = Answer>>>;
 
 /// What a task of [`Io`] sends back.
 pub enum Answer {
@@ -84,7 +82,7 @@ pub enum Answer {
 impl Io {
     /// Panics if this thread has no `DispatcherQueue`, so call it from the
     /// app's start.
-    pub fn new(handle: Handle<Message>) -> windows_core::Result<Self> {
+    pub fn new() -> windows_core::Result<Self> {
         let folder = match std::env::var_os("CHAVEIRO_DATA_DIR") {
             Some(folder) => PathBuf::from(folder),
             None => {
@@ -92,19 +90,20 @@ impl Io {
                 PathBuf::from(local).join("chaveiro")
             }
         };
-        Ok(Io {
+        let (storage, stored) = Storage::new();
+        let io = Io {
             client: http::client()?,
-            storage: Storage::new(handle.clone()),
-            handle,
+            storage,
             account: folder.join("account").into(),
             folder,
             window: None,
-            tasks: Vec::new(),
+            pending: Vec::new(),
             next_task: 0,
             copied: Rc::default(),
             copy: None,
-            ticks: None,
-        })
+            stored: Some(stored),
+        };
+        Ok(io)
     }
 
     /// Sets the window that owns the Hello prompt: the one the last pass
@@ -130,23 +129,6 @@ impl Io {
             }
             Answer::None
         });
-    }
-
-    /// Sends [`Input::Tick`] every [`TICK_EVERY`] until [`close`](Self::close).
-    /// The core then locks after the idle time, checks the server for
-    /// changes, and ends prompts that waited too long, each when it is due
-    /// by the clock, so a tick after sleep catches up at once.
-    pub fn start_ticks(&mut self) {
-        let handle = self.handle.clone();
-        self.ticks = Some(winui_executor::spawn(async move {
-            loop {
-                winui_executor::sleep(TICK_EVERY).await;
-                handle.send(Message::Io {
-                    task: None,
-                    answer: Answer::Core(Input::Tick),
-                });
-            }
-        }));
     }
 
     /// Reads every slot and answers with [`Input::Started`]. A slot that
@@ -179,7 +161,7 @@ impl Io {
         match effect {
             Effect::Http { id, request } => {
                 let client = self.client.clone();
-                self.spawn(async move {
+                self.pend(async move {
                     let response = http::send(&client, request).await;
                     Answer::Core(Input::Http { id, response })
                 });
@@ -189,7 +171,7 @@ impl Io {
                 password,
                 email,
                 kdf,
-            } => self.spawn(async move {
+            } => self.pend(async move {
                 let result = off_thread(move || {
                     let result = derive_master_key(&password, &email, kdf);
                     drop(password);
@@ -261,8 +243,12 @@ impl Io {
                 challenge,
                 create,
             } => {
+                // A pending effect runs until it answers, so a lock does not
+                // end the Hello prompt, and the core drops a late answer.
+                // Cancelling would not close the prompt anyway, because
+                // Windows keeps it open after `Cancel`.
                 let window = self.window;
-                self.spawn(async move {
+                self.pend(async move {
                     let result = device_key::secret(window, challenge, create).await;
                     Answer::Core(Input::DeviceSecret { id, result })
                 });
@@ -274,20 +260,37 @@ impl Io {
         }
     }
 
-    /// Ends the entry of a task whose answer arrived.
-    pub fn finish(&mut self, task: TaskId) {
-        if let Some(index) = self.tasks.iter().position(|(id, _)| *id == task) {
-            // The task already sent its answer, so the drop aborts nothing.
-            drop(self.tasks.swap_remove(index));
-        }
+    /// The effects that run as task nodes, for the view to declare. It
+    /// declares each under its [`TaskId`] on every pass, starting the work
+    /// with [`Option::take`] on the first one, until it calls
+    /// [`answered`](Self::answered).
+    pub fn pending(&mut self) -> &mut [(TaskId, Option<Work>)] {
+        &mut self.pending
     }
 
-    /// Aborts every running effect and runs the queued file work on this
+    /// Whether an effect waits for its first pass, which the view must then
+    /// ask for.
+    pub fn unstarted(&self) -> bool {
+        self.pending.iter().any(|(_, work)| work.is_some())
+    }
+
+    /// Ends the pending effect `task`, whose answer the view took.
+    pub fn answered(&mut self, task: TaskId) {
+        self.pending.retain(|(id, _)| *id != task);
+    }
+
+    /// The stream of file work answers, for the view to run as a stream
+    /// node from its first pass. Panics when called twice.
+    pub fn stored_answers(&mut self) -> StoredAnswers {
+        self.stored.take().expect("the view starts the storage stream once")
+    }
+
+    /// Forgets every pending effect and runs the queued file work on this
     /// thread, after the job already running ends. Call it when the app
-    /// closes, so no write is lost.
+    /// closes, so no write is lost. The view then declares no task, so the
+    /// next pass drops the futures, which aborts them.
     pub fn close(&mut self) {
-        self.tasks.clear();
-        self.ticks = None;
+        self.pending.clear();
         self.clear_clipboard();
         self.storage.flush();
     }
@@ -301,18 +304,11 @@ impl Io {
         }
     }
 
-    fn spawn(&mut self, future: impl 'static + Future<Output = Answer>) {
+    /// Adds `future` as a pending effect for the view to run.
+    fn pend(&mut self, future: impl 'static + Future<Output = Answer>) {
         let task = TaskId(self.next_task);
         self.next_task += 1;
-        let handle = self.handle.clone();
-        let spawned = winui_executor::spawn(async move {
-            let answer = future.await;
-            handle.send(Message::Io {
-                task: Some(task),
-                answer,
-            });
-        });
-        self.tasks.push((task, spawned));
+        self.pending.push((task, Some(Box::pin(future))));
     }
 }
 
@@ -376,7 +372,8 @@ fn shell_open(verb: &[u16], target: &[u16]) {
 /// [`None`] when it panicked (the panic message is then on stderr).
 ///
 /// Dropping the future does not stop the job: it runs to the end and its
-/// result is dropped on the pool thread.
+/// result is dropped on the pool thread. `winui_executor::shutdown` waits
+/// for it.
 pub async fn off_thread<T: 'static + Send>(job: impl 'static + Send + FnOnce() -> T) -> Option<T> {
     let slot = Arc::new(Mutex::new(None));
     let result = Arc::clone(&slot);
@@ -387,9 +384,11 @@ pub async fn off_thread<T: 'static + Send>(job: impl 'static + Send + FnOnce() -
         *result.lock().expect("the slot is never locked twice") = value;
         Ok(())
     });
-    // The closure always returns Ok and nothing cancels the action, so the
-    // await cannot fail.
-    action.await.expect("an action that returns Ok completes");
+    // The closure always returns Ok, and a spawned action ignores a cancel,
+    // so the await cannot fail.
+    winui_executor::winrt(action)
+        .await
+        .expect("an action that returns Ok completes");
     slot.lock()
         .expect("the job ended, so it holds no lock")
         .take()
@@ -402,71 +401,89 @@ struct Storage {
     /// [`flush`](Self::flush) can wait for it. The job unparks the UI thread
     /// when it clears this.
     running: Arc<AtomicBool>,
-    /// The task that runs the queue. Dropping it stops the queue.
-    task: Option<SpawnHandle>,
+}
+
+/// The answers of [`Storage`]'s jobs, as a stream the view runs as a
+/// stream node. It runs one job at a time on the pool, in push order, and
+/// yields the answer of each job that has one. It never ends.
+pub struct StoredAnswers {
+    queue: Rc<RefCell<Queue>>,
+    running: Arc<AtomicBool>,
+    /// The UI thread, the one `flush` parks, which each job unparks.
+    ui: std::thread::Thread,
+    /// The job on the pool.
+    job: Option<std::pin::Pin<Box<dyn Future<Output = Option<Answer>>>>>,
+}
+
+impl futures_core::Stream for StoredAnswers {
+    type Item = Answer;
+
+    fn poll_next(
+        mut self: std::pin::Pin<&mut Self>,
+        context: &mut std::task::Context<'_>,
+    ) -> Poll<Option<Answer>> {
+        loop {
+            if let Some(job) = self.job.as_mut() {
+                let Poll::Ready(answer) = job.as_mut().poll(context) else {
+                    return Poll::Pending;
+                };
+                self.job = None;
+                if let Some(answer @ (Answer::Core(_) | Answer::Settings(_))) = answer {
+                    return Poll::Ready(Some(answer));
+                }
+                continue;
+            }
+            let job = {
+                let mut queue = self.queue.borrow_mut();
+                match queue.jobs.pop_front() {
+                    Some(job) => job,
+                    None => {
+                        queue.waker = Some(context.waker().clone());
+                        return Poll::Pending;
+                    }
+                }
+            };
+            // Relaxed: only this thread reads the flag before the job
+            // clears it.
+            self.running.store(true, Ordering::Relaxed);
+            let running = Arc::clone(&self.running);
+            let ui = self.ui.clone();
+            self.job = Some(Box::pin(off_thread(move || {
+                let answer = catch_unwind(AssertUnwindSafe(job));
+                // Release: `flush` sees the job's writes done once it sees
+                // false.
+                running.store(false, Ordering::Release);
+                ui.unpark();
+                answer.unwrap_or(Answer::None)
+            })));
+        }
+    }
 }
 
 type Job = Box<dyn 'static + Send + FnOnce() -> Answer>;
 
 struct Queue {
     jobs: VecDeque<Job>,
-    /// The waker of the queue's task while it waits for a job.
+    /// The waker of the answers stream while it waits for a job.
     waker: Option<Waker>,
 }
 
 impl Storage {
-    fn new(handle: Handle<Message>) -> Self {
+    /// The storage, and the stream that runs its queue.
+    fn new() -> (Self, StoredAnswers) {
         let queue = Rc::new(RefCell::new(Queue {
             jobs: VecDeque::new(),
             waker: None,
         }));
         let running = Arc::new(AtomicBool::new(false));
-        // `new` runs on the UI thread, the one `flush` parks.
-        let ui = std::thread::current();
-        let task = winui_executor::spawn({
-            let queue = Rc::clone(&queue);
-            let running = Arc::clone(&running);
-            async move {
-                loop {
-                    let job = std::future::poll_fn(|context| {
-                        let mut queue = queue.borrow_mut();
-                        match queue.jobs.pop_front() {
-                            Some(job) => Poll::Ready(job),
-                            None => {
-                                queue.waker = Some(context.waker().clone());
-                                Poll::Pending
-                            }
-                        }
-                    })
-                    .await;
-
-                    // Relaxed: only this thread reads the flag before the job
-                    // clears it.
-                    running.store(true, Ordering::Relaxed);
-                    let answer = off_thread({
-                        let running = Arc::clone(&running);
-                        let ui = ui.clone();
-                        move || {
-                            let answer = catch_unwind(AssertUnwindSafe(job));
-                            // Release: `flush` sees the job's writes done once it
-                            // sees false.
-                            running.store(false, Ordering::Release);
-                            ui.unpark();
-                            answer.unwrap_or(Answer::None)
-                        }
-                    })
-                    .await;
-                    if let Some(answer @ (Answer::Core(_) | Answer::Settings(_))) = answer {
-                        handle.send(Message::Io { task: None, answer });
-                    }
-                }
-            }
-        });
-        Storage {
-            queue,
-            running,
-            task: Some(task),
-        }
+        let answers = StoredAnswers {
+            queue: Rc::clone(&queue),
+            running: Arc::clone(&running),
+            // `new` runs on the UI thread, the one `flush` parks.
+            ui: std::thread::current(),
+            job: None,
+        };
+        (Storage { queue, running }, answers)
     }
 
     fn push(&mut self, job: impl 'static + Send + FnOnce() -> Answer) {
@@ -477,10 +494,10 @@ impl Storage {
         }
     }
 
-    /// Stops the queue's task and runs the jobs left on this thread. Their
-    /// answers are dropped, because the app is closing.
+    /// Runs the jobs left on this thread, after the job already on the
+    /// pool. Their answers are dropped, because the app is closing. The
+    /// stream finds the queue empty and stays idle until it drops.
     fn flush(&mut self) {
-        drop(self.task.take());
         // Waits for the job already on the pool, so the jobs left run after it.
         // An unpark before the park leaves a token, so no wakeup is lost; a
         // spurious wakeup only checks the flag again.

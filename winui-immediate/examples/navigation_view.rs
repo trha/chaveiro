@@ -10,11 +10,11 @@
 #![cfg(windows)]
 
 use winui_immediate::{
-    App, Handle, Length, NavigationEntry, NavigationSelection, Orientation, Ui, run,
+    App, Length, NavigationEntry, NavigationSelection, Orientation, Ui, run,
 };
 
 fn main() -> windows_core::Result<()> {
-    run(|_: Handle<()>| {
+    run(|| {
         Ok(Preview {
             open: true,
             // Favorites; entry 0 is the Vault header.
@@ -36,10 +36,6 @@ struct Preview {
 const TRASH: char = '\u{E74D}';
 
 impl App for Preview {
-    type Message = ();
-
-    fn update(&mut self, (): ()) {}
-
     fn view(&mut self, ui: &mut Ui) -> windows_core::Result<()> {
         if !self.open {
             return Ok(());

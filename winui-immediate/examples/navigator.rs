@@ -9,10 +9,10 @@
 #![cfg(windows)]
 
 use std::{cell::RefCell, rc::Rc};
-use winui_immediate::{App, Handle, Orientation, Slide, Ui, run};
+use winui_immediate::{App, Orientation, Slide, Ui, run};
 
 fn main() -> windows_core::Result<()> {
-    run(|_: Handle<()>| {
+    run(|| {
         Ok(Navigation {
             screen: Screen::First,
             slide: Slide::Instant,
@@ -35,10 +35,6 @@ struct Navigation {
 }
 
 impl App for Navigation {
-    type Message = ();
-
-    fn update(&mut self, (): ()) {}
-
     fn view(&mut self, ui: &mut Ui) -> windows_core::Result<()> {
         if !self.open {
             return Ok(());

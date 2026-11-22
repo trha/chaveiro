@@ -8,7 +8,6 @@
 mod bindings;
 mod children;
 mod events;
-mod mailbox;
 mod pass;
 mod runner;
 mod startup;
@@ -16,7 +15,6 @@ mod tree;
 mod widget;
 
 pub use events::Key;
-pub use mailbox::Handle;
 pub use pass::Ui;
 pub use runner::{App, run};
 pub use widget::{
@@ -26,7 +24,7 @@ pub use widget::{
     MenuItemResponse, MenuResponse, NavigationEntry, NavigationSelection, NavigationViewResponse,
     Orientation, Overflow, PasswordField, PasswordHandle, PressableResponse, Response, RowFn,
     SLIDE_DURATION, SearchBoxResponse, SettingsCard, SettingsCardResponse, Severity, Slide,
-    TextBoxResponse, TitleBarResponse, WindowResponse,
+    StreamResponse, TaskResponse, TextBoxResponse, TitleBarResponse, WindowResponse,
 };
 /// The type [Ui::take_password] returns.
 pub use zeroize::Zeroizing;

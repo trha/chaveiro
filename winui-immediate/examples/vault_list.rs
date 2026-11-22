@@ -46,18 +46,11 @@ fn main() -> Result<()> {
         unlocked: false,
         details: Details::Closed,
         bench,
+        ticking: false,
     };
     vault.refilter();
-    run(move |handle| {
-        if ticking {
-            std::thread::spawn(move || {
-                while handle.send(()) {
-                    std::thread::sleep(Duration::from_millis(10));
-                }
-            });
-        }
-        Ok(vault)
-    })?;
+    vault.ticking = ticking;
+    run(move || Ok(vault))?;
     eprintln!("run returned");
     Ok(())
 }
@@ -73,6 +66,8 @@ struct Vault {
     unlocked: bool,
     details: Details,
     bench: Option<Bench>,
+    /// Runs a timed pass every 10 ms.
+    ticking: bool,
 }
 
 struct Entry {
@@ -91,11 +86,12 @@ enum Details {
 }
 
 impl App for Vault {
-    type Message = ();
-
-    fn update(&mut self, (): ()) {}
-
     fn view(&mut self, ui: &mut Ui) -> Result<()> {
+        if self.ticking {
+            let mut ticks =
+                ui.stream("tick", || winui_executor::interval(Duration::from_millis(10)));
+            while ticks.next().is_some() {}
+        }
         if let Some(bench) = &mut self.bench
             && bench.measure()
         {

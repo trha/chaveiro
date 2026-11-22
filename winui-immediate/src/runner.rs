@@ -2,7 +2,6 @@
 
 use crate::{
     bindings::*,
-    mailbox::{Handle, Mailbox},
     pass::Ui,
     startup,
     tree::NodeId,
@@ -10,8 +9,7 @@ use crate::{
 };
 use std::{
     cell::{Cell, RefCell},
-    rc::{Rc, Weak},
-    sync::Arc,
+    rc::Rc,
 };
 use windows_core::{Error, IInspectable, Interface, Result};
 
@@ -22,17 +20,13 @@ use windows_core::{Error, IInspectable, Interface, Result};
 /// cap hides an app that asks for a pass on every pass.
 const MAX_PASSES: u32 = 3;
 
-/// An app: state that the UI thread updates from messages and shows through
-/// [`view`](Self::view).
+/// An app: state on the UI thread that [`view`](Self::view) shows. Async
+/// work runs as task nodes the view declares, with [`Ui::task`].
 pub trait App: 'static {
-    /// A result sent to the UI thread through a [`Handle`].
-    type Message: 'static + Send;
-
-    /// Applies one message. Runs on the UI thread before the next pass.
-    fn update(&mut self, message: Self::Message);
-
     /// Declares every open window. Runs on every pass; a pass runs after
-    /// messages and after events.
+    /// events, after woken tasks, and when a pass asks for another. For
+    /// state that changes with time, declare a task that sleeps until the
+    /// change.
     fn view(&mut self, ui: &mut Ui) -> Result<()>;
 }
 
@@ -41,70 +35,40 @@ pub trait App: 'static {
 /// is up, so it may create WinRT objects and use the dispatcher. Returns the
 /// error of `make`, or the first error a pass returned, after closing every
 /// window.
-pub fn run<A: App>(make: impl 'static + FnOnce(Handle<A::Message>) -> Result<A>) -> Result<()> {
+pub fn run<A: App>(make: impl 'static + FnOnce() -> Result<A>) -> Result<()> {
     let failure = Rc::new(RefCell::new(None));
     let launch_failure = Rc::clone(&failure);
     startup::start(move || {
+        // Every callback finds the runner through the thread local, so none
+        // holds it and no cycle forms. The handlers capture nothing, so a
+        // task's waker can build one on any thread.
         let dispatcher = DispatcherQueue::GetForCurrentThread()?;
-        let mailbox = Arc::new(Mailbox::new({
+        let post = {
             let dispatcher = dispatcher.clone();
+            // Built once, so a wake allocates nothing in Rust. A delegate is
+            // not `Send`, so a wake on another thread reaches it through an
+            // agile reference.
+            let handler = windows_core::AgileReference::new(&DispatcherQueueHandler::new(turn_current))?;
             move || {
-                // The handler captures nothing, so it can be built on any
-                // thread; it finds the runner through the UI thread's local.
-                let handler = DispatcherQueueHandler::new(|| {
-                    CURRENT.with(|current| {
-                        if let Some(current) = current.borrow().as_ref() {
-                            current.turn();
-                        }
-                    })
-                });
-                matches!(dispatcher.TryEnqueue(&handler), Ok(true))
+                handler
+                    .resolve()
+                    .is_ok_and(|handler| matches!(dispatcher.TryEnqueue(&handler), Ok(true)))
             }
-        }));
-        // A message sent from `make` waits in the mailbox: its wake finds
-        // the runner through the thread local, which is set below.
-        let app = make(Handle::new(Arc::clone(&mailbox)))?;
-        let timer = dispatcher.CreateTimer()?;
-        timer.SetIsRepeating(false)?;
-        // The tick finds the runner through the thread local, as a message's
-        // wake does, so the timer and the runner hold no cycle.
-        let tick = timer.Tick(|_, _| {
-            CURRENT.with(|current| {
-                if let Some(current) = current.borrow().as_ref() {
-                    current.turn();
-                }
-            })
-        })?;
-        let runner = Rc::new_cyclic(|weak: &Weak<Runner<A>>| {
-            let wake = {
-                let weak = weak.clone();
-                Rc::new(move || {
-                    if let Some(runner) = weak.upgrade() {
-                        runner.schedule();
-                    }
-                }) as Rc<dyn Fn()>
-            };
-            let turn = {
-                let weak = weak.clone();
-                DispatcherQueueHandler::new(move || {
-                    if let Some(runner) = weak.upgrade() {
-                        runner.turn();
-                    }
-                })
-            };
-            Runner {
-                ui: RefCell::new(Ui::new(wake)),
-                app: RefCell::new(app),
-                mailbox,
-                messages: RefCell::new(Vec::new()),
-                scheduled: Cell::new(false),
-                missed: Cell::new(false),
-                dispatcher,
-                turn,
-                timer,
-                _tick: tick,
-                failure: launch_failure,
+        };
+        let wake = Rc::new(|| {
+            if let Some(current) = current_runner() {
+                current.schedule();
             }
+        });
+
+        let runner = Rc::new(Runner {
+            ui: RefCell::new(Ui::with_task_post(wake, post)),
+            app: RefCell::new(make()?),
+            scheduled: Cell::new(false),
+            missed: Cell::new(false),
+            turn: DispatcherQueueHandler::new(turn_current),
+            dispatcher,
+            failure: launch_failure,
         });
         CURRENT.with(|current| *current.borrow_mut() = Some(runner.clone() as Rc<dyn Turn>));
         runner.turn();
@@ -121,9 +85,6 @@ pub fn run<A: App>(make: impl 'static + FnOnce(Handle<A::Message>) -> Result<A>)
 struct Runner<A: App> {
     ui: RefCell<Ui>,
     app: RefCell<A>,
-    mailbox: Arc<Mailbox<A::Message>>,
-    /// Drained messages, kept to reuse the buffer's capacity.
-    messages: RefCell<Vec<A::Message>>,
     /// Whether `turn` is queued on the dispatcher and has not run yet.
     scheduled: Cell<bool>,
     /// A turn ran inside this one and did nothing, so another is due.
@@ -131,11 +92,6 @@ struct Runner<A: App> {
     dispatcher: DispatcherQueue,
     /// Built once and queued again for every turn.
     turn: DispatcherQueueHandler,
-    /// Runs a turn when the time a pass asked for with
-    /// [`Ui::request_pass_after`] is up. Each turn sets it again or stops it.
-    timer: DispatcherQueueTimer,
-    /// Dropping it ends the tick subscription.
-    _tick: windows_core::EventRevoker,
     failure: Rc<RefCell<Option<Error>>>,
 }
 
@@ -152,7 +108,7 @@ impl<A: App> Runner<A> {
         }
     }
 
-    /// Applies queued messages, then runs passes while the last one consumed
+    /// Polls woken tasks, then runs passes while the last one consumed
     /// events or asked for another, up to [`MAX_PASSES`]: widgets declared
     /// before the one that read an event still show the old state.
     ///
@@ -171,15 +127,7 @@ impl<A: App> Runner<A> {
             self.missed.set(true);
             return;
         }
-        let mut messages = self.messages.take();
-        self.mailbox.drain(&mut messages);
-        {
-            let mut app = self.app.borrow_mut();
-            for message in messages.drain(..) {
-                app.update(message);
-            }
-        }
-        *self.messages.borrow_mut() = messages;
+        self.ui.borrow_mut().poll_woken_tasks();
         let result = tracing::debug_span!("turn").in_scope(|| {
             let mut passes = 0;
             while self.pass()? {
@@ -199,21 +147,6 @@ impl<A: App> Runner<A> {
         }
         if self.missed.take() {
             self.schedule();
-        }
-        let wake = self.ui.borrow_mut().take_wake();
-        // A timer that fails to start leaves the window as it is until the
-        // next event, which is all the app can see of it.
-        let armed = self.timer.Stop().and_then(|()| match wake {
-            Some(after) => {
-                let after = windows_time::TimeSpan::try_from(after)
-                    .unwrap_or(windows_time::TimeSpan { duration: i64::MAX });
-                self.timer.SetInterval(after)?;
-                self.timer.Start()
-            }
-            None => Ok(()),
-        });
-        if let Err(error) = armed {
-            tracing::warn!(%error, "the timed pass did not start");
         }
     }
 
@@ -288,10 +221,9 @@ impl<A: App> Runner<A> {
         }
     }
 
-    /// Stops taking messages and ends the message loop. Closing the last
-    /// window ends it too, but a pass that never opened one must end it here.
+    /// Ends the message loop. Closing the last window ends it too, but a
+    /// pass that never opened one must end it here.
     fn finish(&self) {
-        self.mailbox.close();
         startup::exit();
     }
 }
@@ -307,14 +239,26 @@ pub(crate) fn recycle_row(list: NodeId, element: &UIElement) {
 }
 
 fn current() -> Rc<dyn Turn> {
-    CURRENT
-        .with(|current| current.borrow().clone())
-        .expect("WinUI calls list factories only while `run` runs")
+    current_runner().expect("WinUI calls list factories only while `run` runs")
+}
+
+/// The runner of this thread, while [`run`] runs.
+fn current_runner() -> Option<Rc<dyn Turn>> {
+    CURRENT.with(|current| current.borrow().clone())
+}
+
+/// Runs a turn of this thread's runner. Does nothing once [`run`] ended.
+fn turn_current() {
+    // Cloned out, so no borrow of the local is held during the turn.
+    if let Some(current) = current_runner() {
+        current.turn();
+    }
 }
 
 /// A runner seen without its app type, so capture-free handlers can reach it.
 trait Turn {
     fn turn(&self);
+    fn schedule(&self);
     fn realize(&self, list: NodeId, index: usize) -> Result<UIElement>;
     fn recycle(&self, list: NodeId, element: &UIElement);
 }
@@ -322,6 +266,10 @@ trait Turn {
 impl<A: App> Turn for Runner<A> {
     fn turn(&self) {
         self.run_turn();
+    }
+
+    fn schedule(&self) {
+        Runner::schedule(self);
     }
 
     fn realize(&self, list: NodeId, index: usize) -> Result<UIElement> {

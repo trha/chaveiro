@@ -29,21 +29,16 @@ mod bindings;
 use bindings::*;
 use std::time::{Duration, Instant};
 use windows_core::{IInspectable, Interface, Result};
-use winui_immediate::{App, Handle, Orientation, Ui, run};
+use winui_immediate::{App, Orientation, Ui, run};
 
 const TICK: Duration = Duration::from_millis(50);
 const TICKS_PER_SWITCH: u32 = 40;
 const SWITCHES: u32 = 6;
 
 fn main() -> Result<()> {
-    run(|handle: Handle<()>| {
-        std::thread::spawn(move || {
-            // The loop ends when the window is gone and send fails.
-            while handle.send(()) {
-                std::thread::sleep(TICK);
-            }
-        });
+    run(|| {
         Ok(Spike {
+
             screen: 0,
             ticks: 0,
             configured: false,
@@ -56,6 +51,7 @@ fn main() -> Result<()> {
 }
 
 struct Spike {
+
     screen: u32,
     ticks: u32,
     /// Whether the transitions on the long-lived columns are set.
@@ -150,17 +146,15 @@ fn transition() -> Result<Vector3Transition> {
 }
 
 impl App for Spike {
-    type Message = ();
-
-    fn update(&mut self, (): ()) {
-        self.ticks += 1;
-        if self.ticks % TICKS_PER_SWITCH == 0 {
-            self.screen += 1;
-            eprintln!("{:>6} ms switch to screen {}", self.elapsed(), self.name());
-        }
-    }
-
     fn view(&mut self, ui: &mut Ui) -> Result<()> {
+        let mut ticks = ui.stream("tick", || winui_executor::interval(TICK));
+        while ticks.next().is_some() {
+            self.ticks += 1;
+            if self.ticks % TICKS_PER_SWITCH == 0 {
+                self.screen += 1;
+                eprintln!("{:>6} ms switch to screen {}", self.elapsed(), self.name());
+            }
+        }
         if self.screen >= SWITCHES {
             return Ok(());
         }

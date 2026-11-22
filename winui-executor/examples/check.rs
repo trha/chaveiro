@@ -17,18 +17,23 @@ use std::{
     time::Duration,
 };
 use windows_future::IAsyncOperation;
-use winui_executor::{SpawnHandle, sleep, spawn};
-use winui_immediate::{App, Handle, Ui, run};
+use winui_executor::{SpawnHandle, interval, sleep, spawn};
+use winui_immediate::{App, Ui, run};
 
-/// The checks, each reported once through a message.
+/// The checks, each reported once.
 const CHECKS: usize = 7;
 
 static FAILED: AtomicBool = AtomicBool::new(false);
 
 fn main() -> windows_core::Result<()> {
-    run(|handle: Handle<Report>| {
-        start(handle);
-        Ok(Check { reported: 0 })
+    run(|| {
+        let reports = Reports::default();
+        start(Rc::clone(&reports));
+        Ok(Check {
+            reports,
+
+            reported: 0,
+        })
     })?;
     if FAILED.load(Ordering::Relaxed) {
         std::process::exit(1);
@@ -41,9 +46,12 @@ struct Report {
     passed: bool,
 }
 
-fn report(handle: &Handle<Report>, name: &'static str, passed: bool) {
-    // The window stays open until every check reports, so the send lands.
-    let _ = handle.send(Report { name, passed });
+/// Reports of the executor's tasks, until the view prints them. The tasks
+/// run on the UI thread, so they share it with the view.
+type Reports = Rc<RefCell<Vec<Report>>>;
+
+fn report(reports: &Reports, name: &'static str, passed: bool) {
+    reports.borrow_mut().push(Report { name, passed });
 }
 
 /// Sets `flag` when dropped.
@@ -55,13 +63,13 @@ impl Drop for DropFlag {
     }
 }
 
-fn start(handle: Handle<Report>) {
+fn start(reports: Reports) {
     let ui_thread = thread::current().id();
 
     // A WinRT operation completes on a thread pool thread, and the task
     // resumes on the UI thread.
     {
-        let handle = handle.clone();
+        let reports = reports.clone();
         spawn(async move {
             let value = IAsyncOperation::<i32>::spawn(|| {
                 thread::sleep(Duration::from_millis(50));
@@ -69,7 +77,7 @@ fn start(handle: Handle<Report>) {
             })
             .await;
             let passed = matches!(value, Ok(7)) && thread::current().id() == ui_thread;
-            report(&handle, "winrt await resumes on the UI thread", passed);
+            report(&reports, "winrt await resumes on the UI thread", passed);
         })
         .detach();
     }
@@ -83,11 +91,11 @@ fn start(handle: Handle<Report>) {
         };
         let not_inline = !polled.get();
         task.detach();
-        let handle = handle.clone();
+        let reports = reports.clone();
         spawn(async move {
             yield_once().await;
             report(
-                &handle,
+                &reports,
                 "first poll is not inside spawn",
                 not_inline && polled.get(),
             );
@@ -109,11 +117,11 @@ fn start(handle: Handle<Report>) {
         };
         task.abort();
         let dropped_now = dropped.get();
-        let handle = handle.clone();
+        let reports = reports.clone();
         spawn(async move {
             yield_once().await;
             report(
-                &handle,
+                &reports,
                 "abort drops the future and it never runs",
                 dropped_now && !ran.get(),
             );
@@ -141,12 +149,12 @@ fn start(handle: Handle<Report>) {
             })
         };
         *own.borrow_mut() = Some(task);
-        let handle = handle.clone();
+        let reports = reports.clone();
         spawn(async move {
             yield_once().await;
             yield_once().await;
             report(
-                &handle,
+                &reports,
                 "self abort stops the task",
                 dropped.get() && !resumed.get(),
             );
@@ -156,13 +164,13 @@ fn start(handle: Handle<Report>) {
 
     // A sleep ends after its time, on the UI thread.
     {
-        let handle = handle.clone();
+        let reports = reports.clone();
         spawn(async move {
             let start = std::time::Instant::now();
             sleep(Duration::from_millis(100)).await;
             let passed =
                 start.elapsed() >= Duration::from_millis(90) && thread::current().id() == ui_thread;
-            report(&handle, "sleep waits its time on the UI thread", passed);
+            report(&reports, "sleep waits its time on the UI thread", passed);
         })
         .detach();
     }
@@ -177,19 +185,19 @@ fn start(handle: Handle<Report>) {
                 woke.set(true);
             })
         };
-        let handle = handle.clone();
+        let reports = reports.clone();
         spawn(async move {
             yield_once().await;
             drop(task);
             sleep(Duration::from_millis(100)).await;
-            report(&handle, "an aborted sleep never resumes", !woke.get());
+            report(&reports, "an aborted sleep never resumes", !woke.get());
         })
         .detach();
     }
 
-    // A task can spawn another, and a dropped handle aborts.
+    // A task can spawn another, and a dropped reports aborts.
     {
-        let handle = handle.clone();
+        let reports = reports.clone();
         spawn(async move {
             let ran = Rc::new(Cell::new(false));
             let inner = {
@@ -204,7 +212,7 @@ fn start(handle: Handle<Report>) {
             yield_once().await;
             yield_once().await;
             report(
-                &handle,
+                &reports,
                 "nested spawn runs, dropped handle aborts",
                 ran.get() && !kept.get(),
             );
@@ -231,26 +239,29 @@ async fn yield_once() {
 }
 
 struct Check {
+    reports: Reports,
+
     reported: usize,
 }
 
 impl App for Check {
-    type Message = Report;
-
-    fn update(&mut self, report: Report) {
-        self.reported += 1;
-        if !report.passed {
-            FAILED.store(true, Ordering::Relaxed);
-        }
-        println!(
-            "{} {}",
-            if report.passed { "PASS" } else { "FAIL" },
-            report.name
-        );
-    }
-
     fn view(&mut self, ui: &mut Ui) -> windows_core::Result<()> {
+        for report in self.reports.borrow_mut().drain(..) {
+            self.reported += 1;
+            if !report.passed {
+                FAILED.store(true, Ordering::Relaxed);
+            }
+            println!(
+                "{} {}",
+                if report.passed { "PASS" } else { "FAIL" },
+                report.name
+            );
+        }
         if self.reported < CHECKS {
+            // The executor's tasks do not wake the view, so it looks again
+            // every 20 ms until every check reported.
+            let mut looks = ui.stream("look", || interval(Duration::from_millis(20)));
+            while looks.next().is_some() {}
             ui.window("main", "winui-executor check", |ui| {
                 ui.label(
                     "status",

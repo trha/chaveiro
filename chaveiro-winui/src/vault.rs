@@ -705,8 +705,13 @@ fn account_card(ui: &mut Ui, screen: &VaultScreen<'_>, initials: &str) -> Result
     let now_ms = u64::try_from(now.as_millis()).unwrap_or(u64::MAX);
     let ago = Ago(screen.synced_at.map(|at| now_ms.saturating_sub(at)));
     // The text counts minutes, so the card draws again on the next one.
-    if let Some(elapsed) = ago.0 {
-        ui.request_pass_after(Duration::from_millis(60_000 - elapsed % 60_000));
+    // Counted from the sync, so every pass in a minute names one deadline.
+    if let (Some(elapsed), Some(synced_at)) = (ago.0, screen.synced_at) {
+        let next_minute = synced_at + (elapsed / 60_000 + 1) * 60_000;
+        let deadline = std::time::UNIX_EPOCH + Duration::from_millis(next_minute);
+        ui.task(("next minute", deadline), move || {
+            winui_executor::sleep_until_clock(deadline)
+        });
     }
     let mut asked = false;
     ui.stack("account card", Orientation::Vertical, 12.0, |ui| {
@@ -1205,8 +1210,10 @@ fn login_fields(
         .as_ref()
         .and_then(|secret| totp::now(secret, clock.as_secs()));
     if code.is_some() {
-        let into_second = Duration::from_nanos(u64::from(clock.subsec_nanos()));
-        ui.request_pass_after(Duration::from_secs(1) - into_second);
+        let deadline = std::time::UNIX_EPOCH + Duration::from_secs(clock.as_secs() + 1);
+        ui.task(("next second", deadline), move || {
+            winui_executor::sleep_until_clock(deadline)
+        });
     }
     let account = [
         Field::text(("username", 0), "Username", text(&login.username)),

@@ -42,6 +42,7 @@ pub async fn secret(
                 &CryptographicBuffer::CreateFromByteArray(&challenge)?,
             )
         })
+        .map(winui_executor::winrt)
         .map_err(failed)?
         .await
         .map_err(failed)?;
@@ -66,6 +67,7 @@ async fn credential(window: WindowId, create: bool) -> Result<KeyCredential, Dev
         ),
         false => KeyCredentialManager::OpenAsync(CREDENTIAL_NAME),
     }
+    .map(winui_executor::winrt)
     .map_err(failed)?
     .await
     .map_err(failed)?;

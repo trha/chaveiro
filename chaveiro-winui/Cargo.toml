@@ -10,6 +10,7 @@ name = "chaveiro"
 path = "src/main.rs"
 
 [target.'cfg(windows)'.dependencies]
+futures-core = "0.3"
 rand_core = { version = "0.6", features = ["getrandom"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

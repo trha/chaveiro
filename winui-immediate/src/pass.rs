@@ -6,7 +6,7 @@ use crate::{
     children::{Edit, edits},
     events::{EventSet, Events},
     tree::{Key, NodeId, Tree, Visit},
-    widget::Control,
+    widget::{Control, StreamNode, TaskNode, TaskWakes},
 };
 use std::{any::Any, hash::Hash, rc::Rc};
 use windows_core::{IInspectable, Interface, Result};
@@ -31,14 +31,27 @@ pub struct Ui {
     pub(crate) reveals: Vec<(ItemsRepeater, usize, bool)>,
     /// Set by [`request_pass`](Self::request_pass) during a pass.
     pass_requested: bool,
-    /// The shortest wait asked for by
-    /// [`request_pass_after`](Self::request_pass_after) this turn.
-    wake: Option<std::time::Duration>,
+
+    /// Shared with the waker of every task node.
+    pub(crate) tasks: std::sync::Arc<TaskWakes>,
 }
 
 impl Ui {
+    /// A UI whose tasks never post a turn, for tests that drive passes by
+    /// hand.
+    #[cfg(test)]
     pub(crate) fn new(wake: Rc<dyn Fn()>) -> Self {
+        Ui::with_task_post(wake, || true)
+    }
+
+    /// A UI whose events call `wake`, and whose woken tasks call `post`
+    /// from any thread to ask for a turn.
+    pub(crate) fn with_task_post(
+        wake: Rc<dyn Fn()>,
+        post: impl 'static + Send + Sync + Fn() -> bool,
+    ) -> Self {
         Ui {
+            tasks: TaskWakes::new(post),
             tree: Tree::new(Payload::Root),
             frames: Vec::new(),
             events: Events::new(wake),
@@ -47,30 +60,17 @@ impl Ui {
             sources: Vec::new(),
             reveals: Vec::new(),
             pass_requested: false,
-            wake: None,
         }
     }
 
     /// Asks for another pass soon after this one, for app state that
     /// changed after the widgets that show it were declared, such as an
     /// action a list row found that the next view applies. Without it, the
-    /// window shows the old state until the next event or message.
+    /// window shows the old state until the next event or woken task.
     pub fn request_pass(&mut self) {
         self.pass_requested = true;
     }
 
-    /// Asks for a pass `after` from the end of this turn, for state that
-    /// changes with time, such as a countdown. The shortest wait asked for in
-    /// a turn wins, and a turn that asks for none cancels the wait, so ask
-    /// on every pass while the state shows.
-    pub fn request_pass_after(&mut self, after: std::time::Duration) {
-        self.wake = Some(self.wake.map_or(after, |wake| wake.min(after)));
-    }
-
-    /// The wait asked for this turn, and forgets it.
-    pub(crate) fn take_wake(&mut self) -> Option<std::time::Duration> {
-        self.wake.take()
-    }
 
     /// Whether this pass asked for another one, and forgets it.
     pub(crate) fn take_pass_request(&mut self) -> bool {
@@ -88,8 +88,8 @@ impl Ui {
         consumed
     }
 
-    /// Ends a pass, closing every window it did not declare. Returns the
-    /// number of open windows.
+    /// Ends a pass, closing every window and task it did not declare.
+    /// Returns the number of open windows; tasks at the root do not count.
     pub(crate) fn end(&mut self) -> Result<usize> {
         self.close()?;
         let root = self.tree.root();
@@ -104,7 +104,13 @@ impl Ui {
                 }
             }
         }
-        Ok(self.tree.children(root).len())
+        let windows = self
+            .tree
+            .children(root)
+            .iter()
+            .filter(|node| matches!(self.tree.node(**node).payload, Payload::Window(_)))
+            .count();
+        Ok(windows)
     }
 
     /// Closes every window, as a pass that declares none would. Used after a
@@ -478,6 +484,9 @@ impl Ui {
             }
             Payload::State(_) => unreachable!("state nodes are never opened"),
             Payload::Shortcut(_) => unreachable!("shortcut nodes are never opened"),
+            Payload::Task(_) | Payload::Stream(_) => {
+                unreachable!("task and stream nodes are never opened")
+            }
         }
     }
 
@@ -545,6 +554,10 @@ pub(crate) enum Payload {
     Shortcut(ShortcutNode),
     /// From [`Ui::flyout`].
     Flyout(Box<FlyoutNode>),
+    /// From [`Ui::task`]. Dropping it drops the future.
+    Task(TaskNode),
+    /// From [`Ui::stream`]. Dropping it drops the stream.
+    Stream(StreamNode),
 }
 
 /// A flyout, shown on its first pass and hidden when its node drops.
@@ -699,7 +712,11 @@ struct Frame {
 /// Releases what a dropped node holds outside the tree.
 fn release(events: &mut Events, payload: Payload) {
     match payload {
-        Payload::Root | Payload::Cache(_) | Payload::State(_) => {}
+        Payload::Root
+        | Payload::Cache(_)
+        | Payload::State(_)
+        | Payload::Task(_)
+        | Payload::Stream(_) => {}
         Payload::Shortcut(shortcut) => {
             events.forget(&shortcut.accelerator);
             crate::widget::shortcut::release(&shortcut);
