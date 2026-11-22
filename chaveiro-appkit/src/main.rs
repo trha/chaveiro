@@ -2,7 +2,7 @@
 //! [`Core`], with [`Io`] running the core's effects.
 //!
 //! The login and two-step login screens are built, and the vault window has
-//! its sidebar. The unlock screen shows a placeholder with the one action
+//! its sidebar, list and details. The unlock screen shows a placeholder with the one action
 //! that leads back to login.
 
 // The program is macOS only. On other targets it is empty, so it checks but
@@ -17,13 +17,16 @@ mod vault;
 mod wipe;
 
 use appkit_immediate::{App, Handle, Orientation, Style, Ui, run};
-use chaveiro_core::core::{Config, Core, Input, LoginError, Screen, StoredAccount, UserAction};
+use chaveiro_core::{
+    core::{Config, Core, Input, LoginError, Screen, StoredAccount, UserAction},
+    vault::VaultIndex,
+};
 use io::{Io, Settings, TaskId};
 use login::{LoginAction, LoginForm, LoginState};
 use rand_core::OsRng;
 use second_factor::{SecondFactorAction, SecondFactorForm, SecondFactorState};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use vault::{VaultAction, VaultForm};
+use vault::{VaultAction, VaultApp, VaultForm};
 
 /// Logs go to stderr, filtered by `CHAVEIRO_LOG` (such as `debug`),
 /// warnings and up by default.
@@ -86,6 +89,15 @@ impl App for Chaveiro {
             None => {}
             Some(Next::Quit) => self.quit(),
             Some(Next::User(action)) => self.handle_input(Input::User(action)),
+        }
+    }
+}
+
+impl VaultApp for Chaveiro {
+    fn vault(&mut self) -> Option<(&mut VaultForm, &VaultIndex)> {
+        match self.core.screen() {
+            Screen::Vault(screen) => Some((&mut self.vault, screen.index)),
+            _ => None,
         }
     }
 }
@@ -169,7 +181,8 @@ impl Chaveiro {
             }
             self.showed_login = false;
             self.second_factor = None;
-            return match vault::view(ui, &mut self.vault, vault, now_ms())? {
+            let open = vault.open.map(|item| &item.view);
+            return match vault::view::<Self>(ui, &mut self.vault, vault, open, now_ms())? {
                 VaultAction::User(action) => Some(Next::User(action)),
                 VaultAction::Close => Some(Next::Quit),
             };

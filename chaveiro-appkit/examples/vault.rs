@@ -1,9 +1,17 @@
 //! The vault window on its own, over a made-up vault, so it can be seen and
-//! driven without an account. A thread plays a script: it prints the
-//! sidebar's rows and the other text after the first pass, picks the Work
-//! folder through the table as a click would, shows each sync state, and
-//! counts the Rust allocations of steady passes on the main thread, which
-//! must be zero. Lock prints to stderr and closes the window.
+//! driven without an account. It plays the core's part for the item
+//! actions: Open, Close, Save of a favorite, Trash and Restore change the
+//! made-up vault and print to stderr. Lock prints `lock` and closes the
+//! window.
+//!
+//! A thread plays a script from `App::update`, which works where System
+//! Events cannot reach the window. It picks rows of the list through the
+//! table as a click would, and after each pick prints the details heading
+//! of every pass, panicking when one shows no heading: the details must not
+//! blank while the core opens the picked item. It also clicks Show on the
+//! password and the toolbar's Favorite, Move to Trash, Restore and Sync,
+//! picks folders in the sidebar, and counts the Rust allocations of steady
+//! passes with an item open, which must be zero.
 
 // The program is macOS only. On other targets it is empty, so it checks but
 // does not link.
@@ -18,10 +26,16 @@ use appkit_immediate::{App, Ui, run};
 use chaveiro_core::{
     core::{UserAction, VaultScreen},
     crypto::SecretString,
-    vault::{CipherKind, CipherSummary, FolderSummary, VaultIndex},
+    vault::{
+        CipherContent, CipherKind, CipherSummary, CipherView, CustomField, FolderSummary,
+        LoginView, UriView, VaultIndex,
+    },
 };
 use objc2::{MainThreadMarker, Message, rc::Retained};
-use objc2_app_kit::{NSApplication, NSTableView, NSTextField, NSView};
+use objc2_app_kit::{
+    NSApplication, NSButton, NSSplitView, NSTableView, NSTableViewStyle, NSTextField,
+    NSToolbarItem, NSToolbarItemGroup, NSView,
+};
 use objc2_foundation::NSIndexSet;
 use std::{
     alloc::{GlobalAlloc, Layout, System},
@@ -30,7 +44,7 @@ use std::{
     time::Duration,
 };
 use uuid::Uuid;
-use vault::{VaultAction, VaultForm};
+use vault::{VaultAction, VaultApp, VaultForm};
 
 fn main() {
     run(|handle| {
@@ -40,11 +54,16 @@ fn main() {
                 handle.send(*step);
             }
         });
+        let index = sample();
+        let views = index.ciphers.iter().map(view_of).collect();
         Preview {
-            index: sample(),
+            index,
+            views,
+            revision: 1,
+            opened: None,
             form: VaultForm::default(),
             open: true,
-            sync: Sync::Synced,
+            watch: 0,
             steady: None,
         }
     });
@@ -53,9 +72,13 @@ fn main() {
 #[derive(Clone, Copy, Debug)]
 enum Step {
     Dump,
+    /// Selects the list row with this name through the table, then watches
+    /// the details of the next passes.
+    PickRow(&'static str),
     /// Selects the sidebar row with this label through the table.
-    Pick(&'static str),
-    Sync(Sync),
+    PickFilter(&'static str),
+    /// Clicks the button with this tooltip in the details.
+    Click(&'static str),
     /// Starts counting allocations.
     Measure,
     /// A message that changes nothing, so its pass is a steady one.
@@ -64,20 +87,14 @@ enum Step {
     Quit,
 }
 
-#[derive(Clone, Copy, Debug)]
-enum Sync {
-    Synced,
-    Syncing,
-    Failed,
-}
-
 const SCRIPT: &[Step] = &[
     Step::Dump,
-    Step::Pick("Work"),
+    Step::PickRow("GitHub"),
     Step::Dump,
-    Step::Sync(Sync::Syncing),
+    Step::PickRow("Mail server"),
     Step::Dump,
-    Step::Sync(Sync::Failed),
+    Step::PickRow("GitHub"),
+    Step::Click("Show"),
     Step::Dump,
     Step::Measure,
     Step::Tick,
@@ -86,14 +103,34 @@ const SCRIPT: &[Step] = &[
     Step::Tick,
     Step::Tick,
     Step::Report,
+    Step::Click("Favorite"),
+    Step::Dump,
+    Step::PickFilter("Work"),
+    Step::Dump,
+    Step::Click("Move to Trash"),
+    Step::PickFilter("Trash"),
+    Step::PickRow("GitHub"),
+    Step::Dump,
+    Step::Click("Restore"),
+    Step::Click("Sync"),
+    Step::Dump,
     Step::Quit,
 ];
 
+/// The made-up vault and the item it has open, as the core would keep
+/// them.
+///
+/// Contract: `views` holds one view per item of `index`, in its order.
 struct Preview {
     index: VaultIndex,
+    views: Vec<CipherView>,
+    /// Changes whenever `index` does.
+    revision: u64,
+    opened: Option<Uuid>,
     form: VaultForm,
     open: bool,
-    sync: Sync,
+    /// Passes left whose details heading is printed and checked.
+    watch: u32,
     /// The allocation count when measuring began.
     steady: Option<usize>,
 }
@@ -103,45 +140,63 @@ impl App for Preview {
 
     fn update(&mut self, step: Step) {
         let mtm = MainThreadMarker::new().expect("update runs on the main thread");
-        let content = || {
-            NSApplication::sharedApplication(mtm)
-                .windows()
-                .firstObject()
-                .expect("the window is open")
-                .contentView()
-                .expect("a window has a content view")
-        };
+        let content = content(mtm);
         match step {
-            Step::Dump => {
-                println!("-- filter {:?}", self.form.filter);
-                dump(&content());
+            Step::Dump => dump(&content),
+            Step::PickRow(name) => {
+                let list = &tables(&content)[1];
+                // A click focuses the list, which draws its selection
+                // emphasized.
+                if let Some(window) = list.window() {
+                    window.makeFirstResponder(Some(list));
+                }
+                pick(list, name);
+                println!("-- picked row {name}");
+                self.watch = 4;
             }
-            Step::Pick(label) => {
-                let content = content();
-                let table = find_table(&content).expect("the sidebar is a table");
-                let row = (0..table.numberOfRows())
-                    .find(|&row| {
-                        table
-                            .viewAtColumn_row_makeIfNecessary(0, row, false)
-                            .is_some_and(|cell| {
-                                texts(&cell).first().is_some_and(|text| text == label)
-                            })
-                    })
-                    .expect("the sidebar lists the label");
-                table.selectRowIndexes_byExtendingSelection(
-                    &NSIndexSet::indexSetWithIndex(row as usize),
-                    false,
-                );
-                println!("-- picked {label}");
+            Step::PickFilter(label) => {
+                let sidebar = &tables(&content)[0];
+                pick(sidebar, label);
+                println!("-- picked filter {label}");
             }
-            Step::Sync(sync) => self.sync = sync,
+            Step::Click(tooltip) => {
+                let button = buttons(&details(&content)).into_iter().find(|button| {
+                    button
+                        .toolTip()
+                        .is_some_and(|tip| tip.to_string() == tooltip)
+                });
+                match button {
+                    Some(button) => unsafe { button.performClick(None) },
+                    None => {
+                        // Not in the details, so a toolbar item, which
+                        // sends its action as a click does.
+                        let item = toolbar_items(&content)
+                            .into_iter()
+                            .find(|item| item.label().to_string() == tooltip)
+                            .expect("the details or the toolbar have the button");
+                        let action = item.action().expect("toolbar buttons have an action");
+                        let target = item.target();
+                        // SAFETY: the action is the crate's `fire:`, which
+                        // takes the sender.
+                        let sent = unsafe {
+                            NSApplication::sharedApplication(mtm).sendAction_to_from(
+                                action,
+                                target.as_deref(),
+                                Some(&item),
+                            )
+                        };
+                        assert!(sent, "the toolbar item's action reached its target");
+                    }
+                }
+                println!("-- clicked {tooltip}");
+            }
             Step::Measure => self.steady = Some(ALLOCATIONS.get()),
             Step::Tick => {}
             Step::Report => {
-                let start = self.steady.expect("measuring began");
+                let start = self.steady.take().expect("measuring began");
                 println!("-- steady passes allocated {}", ALLOCATIONS.get() - start);
             }
-            Step::Quit => self.open = false,
+            Step::Quit => self.open = std::env::var("QUIT").ok().as_deref() == Some("0"),
         }
     }
 
@@ -153,18 +208,13 @@ impl App for Preview {
             return;
         }
         let now_ms = 1_800_000_000_000;
-        let (syncing, sync_error) = match self.sync {
-            Sync::Synced => (false, None),
-            Sync::Syncing => (true, None),
-            Sync::Failed => (false, Some("offline")),
-        };
         let screen = VaultScreen {
             email: "alex@example.com",
             index: &self.index,
-            index_revision: 1,
+            index_revision: self.revision,
             open: None,
-            syncing,
-            sync_error,
+            syncing: false,
+            sync_error: None,
             error: None,
             revision: None,
             synced_at: Some(now_ms - 2 * 60 * 1000),
@@ -173,23 +223,188 @@ impl App for Preview {
             device_error: None,
             ssh_approval: None,
         };
-        match vault::view(ui, &mut self.form, &screen, now_ms) {
+        let open = self
+            .opened
+            .and_then(|id| self.views.iter().find(|view| view.id == Some(id)));
+        let action = vault::view::<Self>(ui, &mut self.form, &screen, open, now_ms);
+        if self.watch > 0 {
+            self.watch -= 1;
+            let mtm = MainThreadMarker::new().expect("view runs on the main thread");
+            let shown = texts(&details(&content(mtm)));
+            println!("   pass shows {:?}", &shown[..shown.len().min(2)]);
+            assert!(
+                !shown.is_empty(),
+                "the details blanked while an item opened"
+            );
+        }
+        match action {
             None => {}
             Some(VaultAction::Close) => self.open = false,
-            Some(VaultAction::User(UserAction::Lock)) => {
-                eprintln!("lock");
-                self.open = false;
-            }
-            Some(VaultAction::User(_)) => {}
+            Some(VaultAction::User(action)) => self.act(action),
         }
     }
 }
 
-fn find_table(view: &NSView) -> Option<Retained<NSTableView>> {
-    if let Ok(table) = Retained::downcast::<NSTableView>(view.retain()) {
-        return Some(table);
+impl VaultApp for Preview {
+    fn vault(&mut self) -> Option<(&mut VaultForm, &VaultIndex)> {
+        Some((&mut self.form, &self.index))
     }
-    view.subviews().iter().find_map(|child| find_table(&child))
+}
+
+impl Preview {
+    /// Does what the core would do with `action`, and prints it.
+    fn act(&mut self, action: UserAction) {
+        match action {
+            UserAction::Sync => eprintln!("sync"),
+            UserAction::Lock => {
+                eprintln!("lock");
+                self.open = false;
+            }
+            UserAction::Open(id) => {
+                eprintln!("open {}", id.as_u128());
+                self.opened = Some(id);
+            }
+            UserAction::Close => {
+                eprintln!("close");
+                self.opened = None;
+            }
+            UserAction::Save(view) => {
+                let id = view.id.expect("the preview saves only existing items");
+                eprintln!("save {} favorite={}", id.as_u128(), view.favorite);
+                let position = self.position(id);
+                self.index.ciphers[position].favorite = view.favorite;
+                self.views[position] = *view;
+                self.revision += 1;
+            }
+            UserAction::Trash(id) | UserAction::Restore(id) => {
+                let deleted = matches!(action, UserAction::Trash(_));
+                let verb = if deleted { "trash" } else { "restore" };
+                eprintln!("{verb} {}", id.as_u128());
+                let position = self.position(id);
+                self.index.ciphers[position].deleted = deleted;
+                self.revision += 1;
+            }
+            _ => {}
+        }
+    }
+
+    fn position(&self, id: Uuid) -> usize {
+        self.index
+            .ciphers
+            .iter()
+            .position(|cipher| cipher.id == id)
+            .expect("actions name items of the list")
+    }
+}
+
+fn content(mtm: MainThreadMarker) -> Retained<NSView> {
+    NSApplication::sharedApplication(mtm)
+        .windows()
+        .firstObject()
+        .expect("the window is open")
+        .contentView()
+        .expect("a window has a content view")
+}
+
+/// Selects the row of `table` whose first text is `first`, as a click
+/// would.
+fn pick(table: &NSTableView, first: &str) {
+    let row = (0..table.numberOfRows())
+        .find(|&row| {
+            table
+                .viewAtColumn_row_makeIfNecessary(0, row, false)
+                .is_some_and(|cell| texts(&cell).first().is_some_and(|text| text == first))
+        })
+        .unwrap_or_else(|| panic!("the table has a row {first}"));
+    table
+        .selectRowIndexes_byExtendingSelection(&NSIndexSet::indexSetWithIndex(row as usize), false);
+}
+
+/// The sidebar's table view and the list's, told apart by their style.
+fn tables(view: &NSView) -> [Retained<NSTableView>; 2] {
+    let found = all_tables(view);
+    let sidebar = |table: &&Retained<NSTableView>| table.style() == NSTableViewStyle::SourceList;
+    let pick = |want: bool| {
+        found
+            .iter()
+            .find(|table| sidebar(table) == want)
+            .expect("the window has a sidebar and a list")
+            .clone()
+    };
+    [pick(true), pick(false)]
+}
+
+fn all_tables(view: &NSView) -> Vec<Retained<NSTableView>> {
+    let mut found = Vec::new();
+    if let Ok(table) = Retained::downcast::<NSTableView>(view.retain()) {
+        found.push(table);
+    }
+    for child in view.subviews().iter() {
+        found.extend(all_tables(&child));
+    }
+    found
+}
+
+fn buttons(view: &NSView) -> Vec<Retained<NSButton>> {
+    let mut found = Vec::new();
+    if let Ok(button) = Retained::downcast::<NSButton>(view.retain()) {
+        found.push(button);
+    }
+    for child in view.subviews().iter() {
+        found.extend(buttons(&child));
+    }
+    found
+}
+
+/// The window's toolbar items, in order, with each group's items in place
+/// of the group.
+fn toolbar_items(content: &NSView) -> Vec<Retained<NSToolbarItem>> {
+    let toolbar = content
+        .window()
+        .and_then(|window| window.toolbar())
+        .expect("the window has a toolbar");
+    toolbar
+        .items()
+        .iter()
+        .flat_map(|item| match item.downcast_ref::<NSToolbarItemGroup>() {
+            Some(group) => group.subitems().iter().collect(),
+            None => vec![item],
+        })
+        .collect()
+}
+
+/// The labels of the toolbar's groups, one list per group.
+fn toolbar_groups(content: &NSView) -> Vec<Vec<String>> {
+    let toolbar = content
+        .window()
+        .and_then(|window| window.toolbar())
+        .expect("the window has a toolbar");
+    toolbar
+        .items()
+        .iter()
+        .filter_map(|item| {
+            let group = item.downcast_ref::<NSToolbarItemGroup>()?;
+            Some(
+                group
+                    .subitems()
+                    .iter()
+                    .map(|sub| sub.label().to_string())
+                    .collect(),
+            )
+        })
+        .collect()
+}
+
+/// The details pane: the split view's third pane.
+fn details(content: &NSView) -> Retained<NSView> {
+    fn split(view: &NSView) -> Option<Retained<NSSplitView>> {
+        if let Ok(split) = Retained::downcast::<NSSplitView>(view.retain()) {
+            return Some(split);
+        }
+        view.subviews().iter().find_map(|child| split(&child))
+    }
+    let split = split(content).expect("the window has a split view");
+    split.arrangedSubviews().objectAtIndex(2)
 }
 
 /// The text of every text field in `view`, depth first.
@@ -204,69 +419,219 @@ fn texts(view: &NSView) -> Vec<String> {
     found
 }
 
-/// Prints the sidebar's rows, with the selected one marked, then the
-/// window's other text.
+/// Prints the list's rows, with the selected one marked, and the details'
+/// text and buttons.
 fn dump(content: &NSView) {
-    let table = find_table(content).expect("the sidebar is a table");
-    let mut rows = Vec::new();
-    for row in 0..table.numberOfRows() {
-        let mark = if table.selectedRow() == row { ">" } else { " " };
-        let cell = table.viewAtColumn_row_makeIfNecessary(0, row, false);
+    let list = &tables(content)[1];
+    println!("-- list");
+    for row in 0..list.numberOfRows() {
+        let mark = if list.selectedRow() == row { ">" } else { " " };
+        let cell = list.viewAtColumn_row_makeIfNecessary(0, row, false);
         let text = cell.map(|cell| texts(&cell)).unwrap_or_default();
         println!("{mark} {}", text.join(" | "));
-        rows.extend(text);
     }
-    let mut rest = texts(content);
-    for text in &rows {
-        if let Some(position) = rest.iter().position(|other| other == text) {
-            rest.remove(position);
-        }
-    }
-    println!("  other: {rest:?}");
+    let details = details(content);
+    println!("-- details {:?}", texts(&details));
+    let tips: Vec<String> = buttons(&details)
+        .iter()
+        .filter_map(|button| button.toolTip().map(|tip| tip.to_string()))
+        .collect();
+    println!("   buttons {tips:?}");
+    let toolbar: Vec<String> = toolbar_items(content)
+        .iter()
+        .map(|item| {
+            let state = if item.isEnabled() { "" } else { " (disabled)" };
+            format!("{}{state}", item.label())
+        })
+        .collect();
+    println!(
+        "   toolbar {toolbar:?} groups {:?}",
+        toolbar_groups(content)
+    );
 }
 
-/// Two folders, one that did not decrypt, and items of every type: 9 live
-/// (3 favorites, 2 with no folder, 1 of an unknown type) and 2 in the
-/// trash.
+/// Two folders, one that did not decrypt, and items of several types: 10
+/// live (3 favorites, 1 of an unknown type, 1 that did not decrypt) and 2
+/// in the trash.
 fn sample() -> VaultIndex {
     let folder = |id, name: &str, readable| FolderSummary {
         id: Uuid::from_u128(id),
-        name: SecretString::new(name.to_owned()),
+        name: secret(name),
         readable,
     };
-    let item = |id, kind, name: &str, folder: u128, favorite, deleted| CipherSummary {
-        id: Uuid::from_u128(id),
-        kind,
-        name: SecretString::new(name.to_owned()),
-        subtitle: SecretString::default(),
-        folder_id: (folder != 0).then(|| Uuid::from_u128(folder)),
-        organization_id: None,
-        favorite,
-        deleted,
-        readable: true,
-    };
+    let item =
+        |id, kind, name: &str, subtitle: &str, folder: u128, favorite, deleted| CipherSummary {
+            id: Uuid::from_u128(id),
+            kind,
+            name: secret(name),
+            subtitle: secret(subtitle),
+            uris: Vec::new(),
+            folder_id: (folder != 0).then(|| Uuid::from_u128(folder)),
+            organization_id: None,
+            favorite,
+            deleted,
+            readable: true,
+        };
+    let mut unreadable = item(21, CipherKind::Login, "", "", 1, false, false);
+    unreadable.readable = false;
     VaultIndex {
-        // Sorted as the core sorts them: by name, the unreadable one first.
+        // Sorted as the core sorts them: by name, the unreadable ones first.
         folders: vec![
             folder(3, "", false),
             folder(1, "Personal", true),
             folder(2, "Work", true),
         ],
         ciphers: vec![
-            item(10, CipherKind::Login, "Amazon", 1, false, false),
-            item(11, CipherKind::Login, "GitHub", 2, true, false),
-            item(12, CipherKind::Login, "Mail server", 2, false, false),
-            item(13, CipherKind::Card, "Personal Visa", 1, false, false),
-            item(14, CipherKind::Identity, "Alex Lima", 0, false, false),
-            item(15, CipherKind::SecureNote, "Home Wi-Fi", 1, true, false),
-            item(16, CipherKind::SshKey, "Deploy key", 2, true, false),
-            item(17, CipherKind::Unknown(7), "Shared drive", 3, false, false),
-            item(18, CipherKind::Login, "Old forum", 0, false, false),
-            item(19, CipherKind::Login, "Deleted login", 1, true, true),
-            item(20, CipherKind::Card, "Expired card", 0, false, true),
+            unreadable,
+            item(
+                14,
+                CipherKind::Identity,
+                "Alex Lima",
+                "Lima Studio",
+                0,
+                false,
+                false,
+            ),
+            item(
+                10,
+                CipherKind::Login,
+                "Amazon",
+                "alex@example.com",
+                1,
+                false,
+                false,
+            ),
+            item(
+                16,
+                CipherKind::SshKey,
+                "Deploy key",
+                "SHA256:q3RvT1xY",
+                2,
+                true,
+                false,
+            ),
+            item(19, CipherKind::Login, "Deleted login", "old", 1, true, true),
+            item(
+                20,
+                CipherKind::Card,
+                "Expired card",
+                "Visa, *1111",
+                0,
+                false,
+                true,
+            ),
+            item(11, CipherKind::Login, "GitHub", "alex-dev", 2, false, false),
+            item(15, CipherKind::SecureNote, "Home Wi-Fi", "", 1, true, false),
+            item(
+                12,
+                CipherKind::Login,
+                "Mail server",
+                "alex",
+                2,
+                false,
+                false,
+            ),
+            item(18, CipherKind::Login, "Old forum", "alexl", 0, false, false),
+            item(
+                13,
+                CipherKind::Card,
+                "Personal Visa",
+                "Visa, *4242",
+                1,
+                false,
+                false,
+            ),
+            item(
+                17,
+                CipherKind::Unknown(7),
+                "Shared drive",
+                "",
+                3,
+                false,
+                false,
+            ),
         ],
         ssh_keys: Vec::new(),
     }
+}
+
+/// The opened form of `summary`: GitHub has every login field and custom
+/// fields, Mail server a user name and password, Home Wi-Fi asks for the
+/// master password, and the rest have only a name.
+fn view_of(summary: &CipherSummary) -> CipherView {
+    let some = |text: &str| Some(secret(text));
+    let content = match (summary.id.as_u128(), summary.kind) {
+        (11, _) => CipherContent::Login(LoginView {
+            username: some("alex-dev"),
+            password: some("Tr0ub4dor&3-xK9"),
+            totp: None,
+            password_revision_date: Some("2026-10-14T09:12:00.000Z".to_owned()),
+            uris: vec![
+                UriView {
+                    uri: some("https://github.com/login"),
+                    match_rule: None,
+                },
+                UriView {
+                    uri: some("https://gist.github.com"),
+                    match_rule: Some(2),
+                },
+            ],
+            fido2_credentials: Vec::new(),
+        }),
+        (12, _) => CipherContent::Login(LoginView {
+            username: some("alex@mail.example"),
+            password: some("hunter2-but-longer"),
+            ..LoginView::default()
+        }),
+        (_, CipherKind::Login) => CipherContent::Login(LoginView::default()),
+        (_, CipherKind::SecureNote) => CipherContent::SecureNote,
+        _ => CipherContent::Unknown,
+    };
+    let fields = match summary.id.as_u128() {
+        11 => vec![
+            CustomField {
+                kind: 0,
+                name: some("Recovery email"),
+                value: some("alex.backup@example.com"),
+                linked_id: None,
+            },
+            CustomField {
+                kind: 1,
+                name: some("API token"),
+                value: some("ghp_8fKc2Q"),
+                linked_id: None,
+            },
+            CustomField {
+                kind: 2,
+                name: some("Org admin"),
+                value: some("true"),
+                linked_id: None,
+            },
+        ],
+        _ => Vec::new(),
+    };
+    CipherView {
+        id: Some(summary.id),
+        organization_id: None,
+        collection_ids: Vec::new(),
+        kind: summary.kind,
+        name: summary.name.clone(),
+        notes: match summary.id.as_u128() {
+            15 => some("Network: Lima-5G\nPassword: correct horse battery staple"),
+            11 => some("Two-step is on.\nRecovery codes are in the safe."),
+            _ => None,
+        },
+        folder_id: summary.folder_id,
+        favorite: summary.favorite,
+        reprompt: summary.id.as_u128() == 15,
+        content,
+        fields,
+        password_history: Vec::new(),
+    }
+}
+
+fn secret(text: &str) -> SecretString {
+    SecretString::new(text.to_owned())
 }
 
 thread_local! {
