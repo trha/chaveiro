@@ -256,6 +256,10 @@ pub struct CipherSummary {
     pub folder_id: Option<Uuid>,
     pub organization_id: Option<Uuid>,
     pub favorite: bool,
+    /// The item's master password re-prompt flag, as the server stores it.
+    /// Chaveiro does not ask for the password yet: an open item with it set
+    /// shows a note in place of its fields.
+    pub reprompt: bool,
     pub deleted: bool,
     /// False when a key or field failed; `name`, `subtitle` and `uris`
     /// are then empty.
@@ -291,6 +295,7 @@ impl CipherSummary {
             folder_id: cipher.folder_id,
             organization_id: cipher.organization_id,
             favorite: cipher.favorite,
+            reprompt: cipher.reprompt == 1,
             deleted: cipher.deleted_date.is_some(),
             readable,
         }

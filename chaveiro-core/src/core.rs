@@ -947,6 +947,7 @@ impl Core {
                                                     retries: Vec::new(),
                                                     device_error: None,
                                                     ssh_grants: Vec::new(),
+        edits: Vec::new(),
                                                 }))
                                             }
                                         }
@@ -1423,16 +1424,9 @@ impl Core {
             (State::Unlocked(mut unlocked), Input::User(UserAction::Save(view)), None) => {
                 effects.push(Effect::Rerender);
                 let user_id = unlocked.account.user_id;
-                let busy = view.id.is_some_and(|cipher_id| {
-                    let pending = |purpose: &Purpose| {
-                        matches!(purpose, Purpose::Api(ApiCall { kind: ApiKind::Write(write), .. })
-                            if write.cipher_id == Some(cipher_id))
-                    };
-                    requests.any(pending)
-                        || unlocked.account.waiting.iter().any(|call| {
-                            matches!(&call.kind, ApiKind::Write(write) if write.cipher_id == Some(cipher_id))
-                        })
-                });
+                let busy = view
+                    .id
+                    .is_some_and(|cipher_id| writing(requests, &unlocked.account, cipher_id));
                 match view.id {
                     _ if busy => unlocked.error = Some(ItemError::Busy),
                     None => match unlocked.keys.outer_key(view.organization_id) {
@@ -1546,6 +1540,35 @@ impl Core {
                     }
                 }
                 State::Unlocked(unlocked)
+            }
+            (
+                State::Unlocked(mut unlocked),
+                Input::User(
+                    action @ (UserAction::MoveToFolder { .. } | UserAction::SetReprompt { .. }),
+                ),
+                None,
+            ) => {
+                effects.push(Effect::Rerender);
+                let (id, edit) = match action {
+                    UserAction::MoveToFolder { id, folder } => (id, ItemEdit::Folder(folder)),
+                    UserAction::SetReprompt { id, on } => (id, ItemEdit::Reprompt(on)),
+                    _ => unreachable!("the pattern above admits only these two"),
+                };
+                match writing(requests, &unlocked.account, id) {
+                    // Sent once the pending write lands, from the copy it
+                    // brings back, so it carries that copy's revision date. A
+                    // second edit of the same kind replaces the first.
+                    true => {
+                        let same = |(queued_id, queued): &(Uuid, ItemEdit)| {
+                            *queued_id == id && mem::discriminant(queued) == mem::discriminant(&edit)
+                        };
+                        match unlocked.edits.iter_mut().find(|queued| same(queued)) {
+                            Some(queued) => queued.1 = edit,
+                            None => unlocked.edits.push((id, edit)),
+                        }
+                    }
+                    false => send_edit(config, requests, &mut unlocked, now_ms, id, edit, &mut effects),
+                }                State::Unlocked(unlocked)
             }
             (
                 State::Unlocked(mut unlocked),
@@ -1699,7 +1722,7 @@ impl Core {
                     response,
                     &mut effects,
                 );
-                match reply {
+                let state = match reply {
                     Err(SessionEnded) => logout(
                         requests,
                         unlocked.account,
@@ -1815,6 +1838,7 @@ impl Core {
                             WriteAction::Delete => None,
                             WriteAction::Create
                             | WriteAction::Update
+                            | WriteAction::Partial
                             | WriteAction::Trash
                             | WriteAction::Restore => CipherResponse::from_slice(&answer.body).ok(),
                         };
@@ -1950,6 +1974,7 @@ impl Core {
                             (
                                 WriteAction::Create
                                 | WriteAction::Update
+                                | WriteAction::Partial
                                 | WriteAction::Trash
                                 | WriteAction::Restore
                                 | WriteAction::Delete,
@@ -1963,6 +1988,22 @@ impl Core {
                         }
                         State::Unlocked(unlocked)
                     }
+                };
+                // An answer may end the write that queued edits wait for,
+                // whether it succeeded or not.
+                match state {
+                    State::Unlocked(mut unlocked) => {
+                        while let Some(position) = unlocked
+                            .edits
+                            .iter()
+                            .position(|(id, _)| !writing(requests, &unlocked.account, *id))
+                        {
+                            let (id, edit) = unlocked.edits.remove(position);
+                            send_edit(config, requests, &mut unlocked, now_ms, id, edit, &mut effects);
+                        }
+                        State::Unlocked(unlocked)
+                    }
+                    other => other,
                 }
             }
             (State::Unlocked(mut unlocked), Input::Tick, None) => {
@@ -2106,6 +2147,8 @@ impl Core {
                     | UserAction::Close
                     | UserAction::Save(_)
                     | UserAction::Trash(_)
+                    | UserAction::MoveToFolder { .. }
+                    | UserAction::SetReprompt { .. }
                     | UserAction::Restore(_)
                     | UserAction::Delete(_)
                     | UserAction::CreateFolder { .. }
@@ -2138,6 +2181,8 @@ impl Core {
                     | UserAction::Close
                     | UserAction::Save(_)
                     | UserAction::Trash(_)
+                    | UserAction::MoveToFolder { .. }
+                    | UserAction::SetReprompt { .. }
                     | UserAction::Restore(_)
                     | UserAction::Delete(_)
                     | UserAction::CreateFolder { .. }
@@ -2172,6 +2217,8 @@ impl Core {
                     | UserAction::Close
                     | UserAction::Save(_)
                     | UserAction::Trash(_)
+                    | UserAction::MoveToFolder { .. }
+                    | UserAction::SetReprompt { .. }
                     | UserAction::Restore(_)
                     | UserAction::Delete(_)
                     | UserAction::CreateFolder { .. }
@@ -2210,6 +2257,8 @@ impl Core {
                     | UserAction::Close
                     | UserAction::Save(_)
                     | UserAction::Trash(_)
+                    | UserAction::MoveToFolder { .. }
+                    | UserAction::SetReprompt { .. }
                     | UserAction::Restore(_)
                     | UserAction::Delete(_)
                     | UserAction::CreateFolder { .. }
@@ -2244,6 +2293,8 @@ impl Core {
                     | UserAction::Close
                     | UserAction::Save(_)
                     | UserAction::Trash(_)
+                    | UserAction::MoveToFolder { .. }
+                    | UserAction::SetReprompt { .. }
                     | UserAction::Restore(_)
                     | UserAction::Delete(_)
                     | UserAction::CreateFolder { .. }
@@ -2275,6 +2326,8 @@ impl Core {
                     | UserAction::Close
                     | UserAction::Save(_)
                     | UserAction::Trash(_)
+                    | UserAction::MoveToFolder { .. }
+                    | UserAction::SetReprompt { .. }
                     | UserAction::Restore(_)
                     | UserAction::Delete(_)
                     | UserAction::CreateFolder { .. }
@@ -2306,6 +2359,8 @@ impl Core {
                     | UserAction::Close
                     | UserAction::Save(_)
                     | UserAction::Trash(_)
+                    | UserAction::MoveToFolder { .. }
+                    | UserAction::SetReprompt { .. }
                     | UserAction::Restore(_)
                     | UserAction::Delete(_)
                     | UserAction::CreateFolder { .. }
@@ -2750,6 +2805,20 @@ pub enum UserAction {
     Restore(Uuid),
     /// Delete for good.
     Delete(Uuid),
+    /// Move an item into `folder`, or out of any folder with [`None`]. The
+    /// item need not be open: the server changes only its folder, so
+    /// nothing is decrypted.
+    MoveToFolder {
+        id: Uuid,
+        folder: Option<Uuid>,
+    },
+    /// Turn on or off whether an item asks for the master password before
+    /// it opens. The item need not be open: its cached encrypted copy goes
+    /// back with only this flag changed, so nothing is decrypted.
+    SetReprompt {
+        id: Uuid,
+        on: bool,
+    },
     CreateFolder {
         name: SecretString,
     },
@@ -3261,6 +3330,16 @@ struct Unlocked {
     /// Public keys in [`SshAsk::UntilLock`] mode that the user approved this
     /// session. Lock drops them with the rest of `Unlocked`.
     ssh_grants: Vec<Vec<u8>>,
+    /// Item edits waiting for the pending write to their item, oldest
+    /// first, at most one of each kind per item.
+    edits: Vec<(Uuid, ItemEdit)>,
+}
+
+/// An edit of an item by id, which needs nothing decrypted; see
+/// [`UserAction::MoveToFolder`] and [`UserAction::SetReprompt`].
+enum ItemEdit {
+    Folder(Option<Uuid>),
+    Reprompt(bool),
 }
 
 /// The record in [`StoreSlot::DeviceWrap`], stored as JSON. It holds no
@@ -3682,6 +3761,79 @@ fn sync_call(force: bool) -> ApiCall {
     }
 }
 
+/// Sends `edit` of the cipher `id`, built from its cached copy. Sets
+/// [`ItemError::NotFound`] when the cache has no such cipher.
+fn send_edit(
+    config: &Config,
+    requests: &mut Table,
+    unlocked: &mut Unlocked,
+    now_ms: u64,
+    id: Uuid,
+    edit: ItemEdit,
+    effects: &mut Vec<Effect>,
+) {
+    let current = unlocked
+        .account
+        .cache
+        .as_ref()
+        .and_then(|cache| cache.ciphers.iter().find(|cipher| cipher.id == id));
+    let Some(current) = current else {
+        unlocked.error = Some(ItemError::NotFound);
+        return;
+    };
+    let (path, body, action) = match edit {
+        // The partial update takes the favorite flag too, so it goes back as
+        // it is.
+        ItemEdit::Folder(folder) => (
+            vec!["ciphers".into(), id.to_string(), "partial".into()],
+            serde_json::json!({
+                "folderId": folder.map(|folder| folder.to_string()),
+                "favorite": current.favorite,
+            }),
+            WriteAction::Partial,
+        ),
+        ItemEdit::Reprompt(on) => {
+            let mut edits = Map::new();
+            edits.insert("reprompt".into(), Value::from(u8::from(on)));
+            (
+                vec!["ciphers".into(), id.to_string()],
+                current.update_body(edits, unlocked.account.user_id),
+                WriteAction::Update,
+            )
+        }
+    };
+    let call = ApiCall {
+        method: Method::Put,
+        path,
+        query: &[],
+        body: Body::Json(body),
+        kind: ApiKind::Write(Write {
+            cipher_id: Some(id),
+            action,
+            view: None,
+            passkey: None,
+        }),
+        retried: false,
+    };
+    unlocked.error = None;
+    send_api(
+        config,
+        requests,
+        &mut unlocked.account,
+        now_ms,
+        call,
+        effects,
+    );
+}
+
+/// Whether a write to the cipher `cipher_id` is in flight or waits for a
+/// token.
+fn writing(requests: &Table, account: &Account, cipher_id: Uuid) -> bool {
+    let write_to = |kind: &ApiKind| matches!(kind, ApiKind::Write(write) if write.cipher_id == Some(cipher_id));
+    requests.any(|purpose| matches!(purpose, Purpose::Api(call) if write_to(&call.kind)))
+        || account.waiting.iter().any(|call| write_to(&call.kind))
+}
+
 fn store_cache(requests: &mut Table, account: &Account, effects: &mut Vec<Effect>) {
     if let Some(cache) = &account.cache {
         effects.push(Effect::Store {
@@ -3805,6 +3957,7 @@ fn open_vault(
         retries: Vec::new(),
         device_error: None,
         ssh_grants: Vec::new(),
+        edits: Vec::new(),
     });
     release_ssh(&mut unlocked, settings, effects);
     emit_catalog(&mut unlocked.account, &unlocked.keys, effects);

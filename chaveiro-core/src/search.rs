@@ -239,6 +239,7 @@ mod tests {
             folder_id: None,
             organization_id: None,
             favorite: false,
+            reprompt: false,
             deleted: false,
             readable: true,
         }

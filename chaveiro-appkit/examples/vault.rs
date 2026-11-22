@@ -541,6 +541,7 @@ fn sample() -> VaultIndex {
             folder_id: (folder != 0).then(|| Uuid::from_u128(folder)),
             organization_id: None,
             favorite,
+            reprompt: false,
             deleted,
             readable: true,
         };

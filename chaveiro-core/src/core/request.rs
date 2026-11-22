@@ -158,6 +158,8 @@ pub(super) enum FolderWrite {
 pub(super) enum WriteAction {
     Create,
     Update,
+    /// `PUT ciphers/{id}/partial`: the folder and favorite flag only.
+    Partial,
     Trash,
     Restore,
     Delete,

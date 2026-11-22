@@ -1213,6 +1213,138 @@ fn save_sends_update_and_stores_cache() {
 }
 
 #[test]
+fn move_to_folder_sends_a_partial_update_of_an_item_not_open() {
+    let mut harness = Harness::unlocked(REVISION);
+    let effects = harness.user(UserAction::MoveToFolder {
+        id: EXAMPLE_ID,
+        folder: None,
+    });
+    let (put, request) = one_http(&effects);
+    expect![[r#"
+        PUT https://vault.test/api/ciphers/1b40a535-3c7f-4cae-bb72-dd7399c24af1/partial
+        Authorization: Bearer <secret>
+        Bitwarden-Client-Name: desktop
+        Bitwarden-Client-Version: 2026.11.0
+        Device-Type: 6
+
+        {
+          "favorite": false,
+          "folderId": null
+        }
+    "#]]
+    .assert_eq(&render(request, &[]));
+    let mut moved = example_cipher().raw;
+    moved.insert("folderId".into(), Value::Null);
+    moved.insert("revisionDate".into(), "2026-11-20T17:16:20.743050Z".into());
+    let effects = harness.answer(put, 200, &Value::Object(moved));
+    assert_eq!(stored_document(&effects).revision, PUT_REVISION);
+    let screen = vault(&harness.core);
+    let row = screen
+        .index
+        .ciphers
+        .iter()
+        .find(|row| row.id == EXAMPLE_ID)
+        .unwrap();
+    assert_eq!(row.folder_id, None);
+    assert!(screen.open.is_none(), "a move opens nothing");
+}
+
+#[test]
+fn set_reprompt_resends_the_cached_item_with_only_the_flag_changed() {
+    let mut harness = Harness::unlocked(REVISION);
+    let effects = harness.user(UserAction::SetReprompt {
+        id: EXAMPLE_ID,
+        on: true,
+    });
+    let (_, request) = one_http(&effects);
+    assert_eq!(
+        request.url.as_str(),
+        format!("https://vault.test/api/ciphers/{EXAMPLE_ID}")
+    );
+    let mut body = json_object(request);
+    assert_eq!(body.remove("reprompt"), Some(Value::from(1)));
+    assert_eq!(
+        body.remove("lastKnownRevisionDate"),
+        Some(Value::from(example_cipher().revision_date))
+    );
+    assert_eq!(
+        body.remove("encryptedFor"),
+        Some(Value::from(USER_ID.to_string()))
+    );
+    // Every other key, encrypted fields included, goes back as cached.
+    let mut cached = example_cipher().raw;
+    cached.remove("reprompt");
+    assert_eq!(body, cached);
+    assert!(
+        vault(&harness.core).open.is_none(),
+        "the flag opens nothing"
+    );
+}
+
+#[test]
+fn an_item_edit_waits_for_the_pending_write_then_uses_its_copy() {
+    let mut harness = Harness::unlocked(REVISION);
+    let effects = harness.user(UserAction::MoveToFolder {
+        id: EXAMPLE_ID,
+        folder: None,
+    });
+    let (put, _) = one_http(&effects);
+    let effects = harness.user(UserAction::SetReprompt {
+        id: EXAMPLE_ID,
+        on: true,
+    });
+    assert!(http(&effects).is_empty(), "the flag waits for the move");
+    assert!(vault(&harness.core).error.is_none(), "waiting is no error");
+    // The server's copy after the move, at a new revision.
+    let moved_at = "2026-11-20T17:16:20.743050Z";
+    let mut moved = example_cipher().raw;
+    moved.insert("folderId".into(), Value::Null);
+    moved.insert("revisionDate".into(), moved_at.into());
+    let effects = harness.answer(put, 200, &Value::Object(moved));
+    let (_, request) = one_http(&effects);
+    let body = json_object(request);
+    assert_eq!(body["lastKnownRevisionDate"], moved_at);
+    assert_eq!(body["folderId"], Value::Null, "the flag keeps the move");
+    assert_eq!(body["reprompt"], 1);
+}
+#[test]
+fn a_queued_edit_goes_out_after_a_failed_write_too() {
+    let mut harness = Harness::unlocked(REVISION);
+    let effects = harness.user(UserAction::SetReprompt {
+        id: EXAMPLE_ID,
+        on: true,
+    });
+    let (put, _) = one_http(&effects);
+    harness.user(UserAction::MoveToFolder {
+        id: EXAMPLE_ID,
+        folder: None,
+    });
+    let effects = harness.answer(put, 400, &serde_json::json!({ "message": "No." }));
+    let (_, request) = one_http(&effects);
+    assert!(request.url.as_str().ends_with("/partial"));
+}
+
+#[test]
+fn a_second_queued_edit_of_one_kind_replaces_the_first() {
+    let mut harness = Harness::unlocked(REVISION);
+    let effects = harness.user(UserAction::MoveToFolder {
+        id: EXAMPLE_ID,
+        folder: None,
+    });
+    let (put, _) = one_http(&effects);
+    let first = Uuid::from_u128(1);
+    let last = Uuid::from_u128(2);
+    for folder in [first, last] {
+        harness.user(UserAction::MoveToFolder {
+            id: EXAMPLE_ID,
+            folder: Some(folder),
+        });
+    }
+    let effects = harness.answer(put, 200, &Value::Object(example_cipher().raw));
+    let (_, request) = one_http(&effects);
+    assert_eq!(json_object(request)["folderId"], last.to_string());
+}
+#[test]
 fn out_of_date_save_syncs_then_shows_conflict() {
     let mut harness = Harness::unlocked(REVISION);
     harness.user(UserAction::Open(EXAMPLE_ID));
