@@ -126,7 +126,7 @@ pub(crate) enum EventKind {
     /// A text field's editor took a command, such as an arrow key. Only
     /// the commands of [`Command`] are reported.
     Command(Command),
-    /// The user changed a source list's selection.
+    /// The user changed a source list's or table view's selection.
     SelectionDidChange,
     ShouldClose,
     ShouldTerminate,
@@ -279,6 +279,13 @@ define_class!(
             // A row view without a cell held a placeholder or nothing.
             if let Some(cell) = row_view.viewAtColumn(0) {
                 crate::runner::recycle_row(node, address(&cell));
+            }
+        }
+
+        #[unsafe(method(tableViewSelectionDidChange:))]
+        fn selection_did_change(&self, notification: &NSNotification) {
+            if let Some(table) = notification.object() {
+                self.push(&table, EventKind::SelectionDidChange);
             }
         }
     }

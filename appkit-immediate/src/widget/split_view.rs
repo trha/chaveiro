@@ -11,8 +11,12 @@ impl Ui {
     /// later, in an app linked against that SDK), reaches up under a
     /// [`full_size_content`](crate::WindowResponse::full_size_content)
     /// title bar, keeps its width when the window resizes, and the user
-    /// can drag it between the system's sidebar widths. The other panes
-    /// start below the title bar.
+    /// can drag it between the system's sidebar widths. With three panes,
+    /// the middle one is a content list, such as a mail app's list of
+    /// messages: it keeps its width when the window resizes too. Every pane
+    /// reaches up under a full-size title bar, so the toolbar shows the
+    /// content through glass; a scroll view insets its content below the
+    /// bar by itself, but put nothing else at a pane's top.
     pub fn split_view(&mut self, id: impl Hash, body: impl FnOnce(&mut Ui)) -> Response<'_> {
         let (node, _) = self.visit(id, ChildKind::Visual, |mtm| {
             let controller = NSSplitViewController::new(mtm);
@@ -39,15 +43,18 @@ impl Ui {
 /// The item that holds a split view's pane at `position`, and its view
 /// controller's view, which the split view sizes and the pane's control is
 /// pinned inside. The item keeps the view.
+/// `count` is the number of panes.
 pub(crate) fn pane_item(
     mtm: MainThreadMarker,
     position: usize,
+    count: usize,
 ) -> (Retained<NSSplitViewItem>, Retained<NSView>) {
     let container = NSView::new(mtm);
     let controller = NSViewController::new(mtm);
     controller.setView(&container);
-    let item = match position {
-        0 => NSSplitViewItem::sidebarWithViewController(&controller),
+    let item = match (position, count) {
+        (0, _) => NSSplitViewItem::sidebarWithViewController(&controller),
+        (1, 3) => NSSplitViewItem::contentListWithViewController(&controller),
         _ => NSSplitViewItem::splitViewItemWithViewController(&controller),
     };
     (item, container)

@@ -1,7 +1,7 @@
 use super::{Control, Response, must_write};
 use crate::pass::{ChildKind, ControlNode, Ui};
 use objc2::rc::Retained;
-use objc2_app_kit::NSTextField;
+use objc2_app_kit::{NSLineBreakMode, NSTextField};
 use objc2_foundation::NSString;
 use std::{fmt::Write as _, hash::Hash};
 
@@ -15,11 +15,15 @@ impl Ui {
             .expect("formatting into a String cannot fail");
         let (node, _) = self.visit(id, ChildKind::Visual, |mtm| {
             let field = NSTextField::labelWithString(&NSString::new(), mtm);
+            // Shows only when the label is narrowed, such as by
+            // `flexible_width`.
+            field.setLineBreakMode(NSLineBreakMode::ByTruncatingTail);
             ControlNode::payload(
                 Retained::clone(&field).into_super().into_super(),
                 Control::Label {
                     field,
                     text: String::new(),
+                    wraps: false,
                 },
             )
         });
@@ -28,7 +32,7 @@ impl Ui {
             unreachable!("label keys hold labels")
         };
         let stale = std::mem::take(&mut control.stale);
-        let Control::Label { field, text } = &mut control.control else {
+        let Control::Label { field, text, .. } = &mut control.control else {
             unreachable!("label keys hold labels")
         };
         if must_write(node, stale, text, scratch) {

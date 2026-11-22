@@ -49,6 +49,7 @@ name = "appkit-immediate"
 version = "0.1.0"
 dependencies = [
  "ahash",
+ "block2",
  "dispatch2",
  "objc2",
  "objc2-app-kit",

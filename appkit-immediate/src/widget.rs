@@ -9,8 +9,9 @@ use objc2::{rc::Retained, runtime::AnyObject};
 use objc2_app_kit::{
     NSButton, NSColor, NSComboBox, NSControl, NSFont, NSFontDescriptorSymbolicTraits,
     NSFontTextStyleBody, NSFontTextStyleCaption1, NSFontTextStyleTitle1, NSFontTextStyleTitle2,
-    NSLayoutConstraint, NSPopUpButton, NSProgressIndicator, NSSecureTextField,
-    NSSplitViewController, NSSplitViewItem, NSStackView, NSTableView, NSTextField, NSView,
+    NSFontWeightRegular, NSImageView, NSLayoutConstraint, NSLayoutConstraintOrientation,
+    NSLineBreakMode, NSPopUpButton, NSProgressIndicator, NSSecureTextField, NSSplitViewController,
+    NSSplitViewItem, NSStackView, NSTableView, NSTextField, NSView,
 };
 use objc2_foundation::{NSDictionary, NSEdgeInsets};
 
@@ -25,12 +26,15 @@ mod grid;
 mod label;
 mod native;
 mod pop_up_button;
+mod scroll_view;
 mod secure_text_field;
 mod source_list;
 mod split_view;
 mod stack_view;
+mod symbol;
 mod table_view;
 mod text_field;
+mod toolbar;
 mod window;
 
 pub use button::ButtonResponse;
@@ -48,8 +52,10 @@ pub use source_list::{SourceListEntries, SourceListResponse};
 pub(crate) use split_view::pane_item;
 pub use stack_view::Orientation;
 pub(crate) use table_view::TableData;
-pub use table_view::{RowFn, TableViewId};
+pub use table_view::{RowFn, TableViewId, TableViewResponse};
 pub use text_field::TextFieldResponse;
+pub use toolbar::ToolbarItemResponse;
+pub(crate) use toolbar::ToolbarSource;
 pub use window::WindowResponse;
 
 /// Access to the view a widget declared, for what the widget does not cover.
@@ -114,7 +120,7 @@ impl Response<'_> {
             let text_style = match style {
                 Style::Title => unsafe { NSFontTextStyleTitle1 },
                 Style::Title2 | Style::Heading => unsafe { NSFontTextStyleTitle2 },
-                Style::Body => unsafe { NSFontTextStyleBody },
+                Style::Body | Style::Monospace => unsafe { NSFontTextStyleBody },
                 Style::Caption => unsafe { NSFontTextStyleCaption1 },
             };
             // An empty options dictionary asks for the default font.
@@ -129,6 +135,9 @@ impl Response<'_> {
                     NSFont::fontWithDescriptor_size(&descriptor, 0.0)
                         .expect("the system font has a bold face")
                 }
+                Style::Monospace => unsafe {
+                    NSFont::monospacedSystemFontOfSize_weight(font.pointSize(), NSFontWeightRegular)
+                },
                 _ => font,
             };
             control
@@ -141,21 +150,79 @@ impl Response<'_> {
         self
     }
 
-    /// Sets the text color of a label.
+    /// Sets the text color of a label, or the tint of a symbol or a
+    /// button's image.
     ///
-    /// Panics when the view is not a label.
+    /// Panics on any other view.
     pub fn text_color(&mut self, color: TextColor) -> &mut Self {
         let control = self.ui.control_mut(self.node);
         if must_write(self.node, false, &control.text_color, &Some(color)) {
-            let Control::Label { field, .. } = &control.control else {
-                panic!("only labels take a text color")
-            };
             let ns_color = match color {
                 TextColor::Label => NSColor::labelColor(),
                 TextColor::Secondary => NSColor::secondaryLabelColor(),
+                TextColor::Orange => NSColor::systemOrangeColor(),
             };
-            field.setTextColor(Some(&ns_color));
+            match &control.control {
+                Control::Label { field, .. } => field.setTextColor(Some(&ns_color)),
+                Control::Symbol { image, .. } => image.setContentTintColor(Some(&ns_color)),
+                Control::Button { button, .. } => button.setContentTintColor(Some(&ns_color)),
+                _ => panic!("only labels, symbols and buttons take a text color"),
+            }
             control.text_color = Some(color);
+        }
+        self
+    }
+
+    /// Lets the view take the width its horizontal stack view leaves, and
+    /// give up width first when the stack is too narrow: a label then
+    /// truncates its tail. Without it a label keeps its text's width.
+    pub fn flexible_width(&mut self) -> &mut Self {
+        let control = self.ui.control_mut(self.node);
+        if must_write(self.node, false, &control.flexible, &true) {
+            let horizontal = NSLayoutConstraintOrientation::Horizontal;
+            match control.control.arranged() {
+                // A stack view's size comes from its own hugging of its
+                // children.
+                Some(stack) => {
+                    stack.setHuggingPriority_forOrientation(1.0, horizontal);
+                    stack.setClippingResistancePriority_forOrientation(1.0, horizontal);
+                }
+                None => {
+                    control
+                        .view
+                        .setContentHuggingPriority_forOrientation(1.0, horizontal);
+                    control
+                        .view
+                        .setContentCompressionResistancePriority_forOrientation(1.0, horizontal);
+                }
+            }
+            control.flexible = true;
+        }
+        self
+    }
+
+    /// Wraps a label's text onto as many lines as its width needs, and
+    /// keeps the line breaks in the text. Without it a label shows one
+    /// line.
+    ///
+    /// Panics when the view is not a label.
+    pub fn wraps(&mut self) -> &mut Self {
+        let node = self.node;
+        let control = self.ui.control_mut(node);
+        let Control::Label { field, wraps, .. } = &mut control.control else {
+            panic!("only labels wrap")
+        };
+        if must_write(node, false, wraps, &true) {
+            field.setLineBreakMode(NSLineBreakMode::ByWordWrapping);
+            field.setUsesSingleLineMode(false);
+            field.setMaximumNumberOfLines(0);
+            // Without this the label asks for its one-line width and widens
+            // its container.
+            field.setContentCompressionResistancePriority_forOrientation(
+                1.0,
+                NSLayoutConstraintOrientation::Horizontal,
+            );
+            *wraps = true;
         }
         self
     }
@@ -244,6 +311,8 @@ pub enum TextColor {
     Label,
     /// For text under a title, such as a subtitle.
     Secondary,
+    /// For a mark that stands out, such as a favorite's star.
+    Orange,
 }
 
 /// A text style for [`Response::style`], mapped to the system's preferred
@@ -258,6 +327,8 @@ pub enum Style {
     Heading,
     Body,
     Caption,
+    /// The body size in the system's monospaced face, for codes and keys.
+    Monospace,
 }
 
 /// Whether a managed value of `node` must be written: the control is
@@ -297,10 +368,30 @@ pub(crate) enum Control {
     Label {
         field: Retained<NSTextField>,
         text: String,
+        wraps: bool,
+    },
+    /// An SF Symbols image.
+    Symbol {
+        image: Retained<NSImageView>,
+        /// The symbol's name; empty until first written.
+        name: String,
+        /// The point size its configuration was made for.
+        size: f64,
+    },
+    /// The node's view is the scroll view; `content` is pinned inside
+    /// `document` by `pins`.
+    ScrollView {
+        document: Retained<NSView>,
+        content: Option<NodeId>,
+        pins: Vec<Retained<NSLayoutConstraint>>,
     },
     Button {
         button: Retained<NSButton>,
+        /// The title, or for an icon button its tooltip.
         label: String,
+        /// The SF Symbols name of an icon button; empty for a button with
+        /// a title.
+        symbol: String,
         /// [`None`] after an invalidate, until written again: the options
         /// run after the body has taken `stale`, so they cannot read it.
         /// The key equivalent, `""` for none. A button has one, so
@@ -423,6 +514,8 @@ impl Control {
             | Control::SourceList { .. }
             | Control::SplitView { .. }
             | Control::Row { .. }
+            | Control::Symbol { .. }
+            | Control::ScrollView { .. }
             | Control::Native => return None,
         })
     }
@@ -447,6 +540,8 @@ impl Control {
             Control::Row { .. } => "row",
             Control::SourceList { .. } => "source_list",
             Control::SplitView { .. } => "split_view",
+            Control::Symbol { .. } => "symbol",
+            Control::ScrollView { .. } => "scroll_view",
         }
     }
 
@@ -473,6 +568,8 @@ impl Control {
             | Control::BoxView { .. }
             | Control::Native
             | Control::SplitView { .. }
+            | Control::Symbol { .. }
+            | Control::ScrollView { .. }
             | Control::Row { .. } => (None, &[]),
         };
         one.into_iter()

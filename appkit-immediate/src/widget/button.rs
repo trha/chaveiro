@@ -1,4 +1,4 @@
-use super::{Control, Response, must_write};
+use super::{Control, Response, TextColor, must_write};
 use crate::{
     events::EventKind,
     pass::{ChildKind, ControlNode, Ui},
@@ -6,8 +6,8 @@ use crate::{
 };
 use objc2::{AnyThread, rc::Retained, sel};
 use objc2_app_kit::{
-    NSButton, NSCellImagePosition, NSColor, NSControlSize, NSImage, NSProgressIndicator,
-    NSProgressIndicatorStyle,
+    NSAccessibility, NSButton, NSCellImagePosition, NSColor, NSControlSize, NSImage,
+    NSProgressIndicator, NSProgressIndicatorStyle,
 };
 use objc2_foundation::{NSSize, NSString};
 use std::{
@@ -18,30 +18,69 @@ use std::{
 impl Ui {
     /// A push button showing `label`.
     pub fn button(&mut self, id: impl Hash, label: &str) -> ButtonResponse<'_> {
-        self.any_button(id, label, false)
+        self.any_button(id, label, Look::Push)
     }
 
     /// A button drawn as a link: `label` in the link color, with no
     /// border. It takes every option of [`Ui::button`].
     pub fn link(&mut self, id: impl Hash, label: &str) -> ButtonResponse<'_> {
-        self.any_button(id, label, true)
+        self.any_button(id, label, Look::Link)
     }
 
-    fn any_button(&mut self, id: impl Hash, label: &str, link: bool) -> ButtonResponse<'_> {
+    /// A borderless button that shows the SF Symbols image `symbol` in the
+    /// secondary color (see [`Response::text_color`]), with `label` as its tooltip and accessibility
+    /// label, such as "Show" beside a hidden password. It takes every
+    /// option of [`Ui::button`] but [`busy`](ButtonResponse::busy), which
+    /// would replace the image.
+    pub fn icon_button(&mut self, id: impl Hash, symbol: &str, label: &str) -> ButtonResponse<'_> {
+        let response = self.any_button(id, label, Look::Icon);
+        let node = response.0.node;
+        let control = response.0.ui.control_mut(node);
+        let Control::Button {
+            button,
+            symbol: written,
+            ..
+        } = &mut control.control
+        else {
+            unreachable!("button keys hold buttons")
+        };
+        if must_write(node, false, written.as_str(), symbol) {
+            let image = NSImage::imageWithSystemSymbolName_accessibilityDescription(
+                &NSString::from_str(symbol),
+                Some(&NSString::from_str(label)),
+            );
+            button.setImage(image.as_deref());
+            written.clear();
+            written.push_str(symbol);
+        }
+        response
+    }
+
+    fn any_button(&mut self, id: impl Hash, label: &str, look: Look) -> ButtonResponse<'_> {
         let (node, visit) = self.visit(id, ChildKind::Visual, |mtm| {
             let button = unsafe {
                 NSButton::buttonWithTitle_target_action(&NSString::new(), None, None, mtm)
             };
-            // Fixed for life, so the id of a link must not be a button's.
-            if link {
-                button.setBordered(false);
-                button.setContentTintColor(Some(&NSColor::linkColor()));
+            // Fixed for life, so the id of a link or icon button must not be
+            // another look's.
+            match look {
+                Look::Push => {}
+                Look::Link => {
+                    button.setBordered(false);
+                    button.setContentTintColor(Some(&NSColor::linkColor()));
+                }
+                Look::Icon => {
+                    button.setBordered(false);
+                    button.setImagePosition(NSCellImagePosition::ImageOnly);
+                    button.setContentTintColor(Some(&NSColor::secondaryLabelColor()));
+                }
             }
             ControlNode::payload(
                 Retained::clone(&button).into_super().into_super(),
                 Control::Button {
                     button,
                     label: String::new(),
+                    symbol: String::new(),
                     // A new button has no key equivalent and no spinner.
                     key: Some(""),
                     spinner: None,
@@ -50,6 +89,9 @@ impl Ui {
             )
         });
         if visit == Visit::Created {
+            if let Look::Icon = look {
+                self.control_mut(node).text_color = Some(TextColor::Secondary);
+            }
             // Registering needs the node id, which exists only now.
             let control = self.control(node);
             let Control::Button { button, .. } = &control.control else {
@@ -80,12 +122,26 @@ impl Ui {
             *busy = None;
         }
         if must_write(node, stale, written.as_str(), label) {
-            button.setTitle(&NSString::from_str(label));
+            let text = NSString::from_str(label);
+            match look {
+                Look::Icon => {
+                    button.setToolTip(Some(&text));
+                    button.setAccessibilityLabel(Some(&text));
+                }
+                Look::Push | Look::Link => button.setTitle(&text),
+            }
             written.clear();
             written.push_str(label);
         }
         ButtonResponse(Response { ui: self, node })
     }
+}
+
+#[derive(Clone, Copy)]
+enum Look {
+    Push,
+    Link,
+    Icon,
 }
 
 /// What [`Ui::button`] returns.

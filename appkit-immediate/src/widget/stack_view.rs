@@ -1,12 +1,13 @@
 use super::{Control, Response, must_write};
 use crate::pass::{ChildKind, ControlNode, Ui};
+use block2::RcBlock;
 use objc2::rc::Retained;
 use objc2_app_kit::{
-    NSBox, NSBoxType, NSColor, NSLayoutAttribute, NSStackView, NSTitlePosition,
-    NSUserInterfaceLayoutOrientation,
+    NSAppearance, NSAppearanceNameAqua, NSAppearanceNameDarkAqua, NSBox, NSBoxType, NSColor,
+    NSLayoutAttribute, NSStackView, NSTitlePosition, NSUserInterfaceLayoutOrientation, NSView,
 };
-use objc2_foundation::{NSEdgeInsets, NSSize};
-use std::hash::Hash;
+use objc2_foundation::{NSArray, NSEdgeInsets, NSSize};
+use std::{hash::Hash, ptr::NonNull};
 
 impl Ui {
     /// A stack of the controls `body` declares, in declaration order.
@@ -150,6 +151,103 @@ impl Ui {
         ui.close();
         Response { ui, node }
     }
+}
+
+impl Ui {
+    /// A rounded box as wide as its container, holding a vertical stack of
+    /// the controls `body` declares, edge to edge and with no space
+    /// between, for a group of rows that [`separator`](Self::separator)s
+    /// set apart. Its fill, corners and dividers match the grouped form of
+    /// System Settings in both appearances.
+    pub fn group_box(&mut self, id: impl Hash, body: impl FnOnce(&mut Ui)) -> Response<'_> {
+        let (node, _) = self.visit(id, ChildKind::Visual, |mtm| {
+            let frame = NSBox::new(mtm);
+            frame.setBoxType(NSBoxType::Custom);
+            frame.setTitlePosition(NSTitlePosition::NoTitle);
+            frame.setCornerRadius(12.0);
+            frame.setBorderWidth(0.0);
+            frame.setFillColor(&group_fill());
+            frame.setContentViewMargins(NSSize::new(0.0, 0.0));
+            let stack = NSStackView::new(mtm);
+            stack.setOrientation(NSUserInterfaceLayoutOrientation::Vertical);
+            stack.setAlignment(NSLayoutAttribute::NotAnAttribute);
+            stack.setSpacing(0.0);
+            stack.setEdgeInsets(NSEdgeInsets {
+                top: 0.0,
+                left: 0.0,
+                bottom: 0.0,
+                right: 0.0,
+            });
+            frame.setContentView(Some(&stack));
+            ControlNode::payload(
+                Retained::clone(&frame).into_super(),
+                Control::BoxView { stack },
+            )
+        });
+        self.open(node);
+        body(self);
+        self.close();
+        Response { ui: self, node }
+    }
+
+    /// A one-point line across its stack view, 10 points in from each
+    /// end, such as between the rows of a [`group_box`](Self::group_box).
+    pub fn separator(&mut self, id: impl Hash) -> Response<'_> {
+        let (node, _) = self.visit(id, ChildKind::Visual, |mtm| {
+            let row = NSView::new(mtm);
+            row.heightAnchor()
+                .constraintEqualToConstant(1.0)
+                .setActive(true);
+            let line = NSBox::new(mtm);
+            line.setBoxType(NSBoxType::Custom);
+            line.setTitlePosition(NSTitlePosition::NoTitle);
+            line.setBorderWidth(0.0);
+            // System Settings draws its row dividers in this fill.
+            line.setFillColor(&NSColor::tertiarySystemFillColor());
+            line.setTranslatesAutoresizingMaskIntoConstraints(false);
+            row.addSubview(&line);
+            for constraint in [
+                line.leadingAnchor()
+                    .constraintEqualToAnchor_constant(&row.leadingAnchor(), 10.0),
+                line.trailingAnchor()
+                    .constraintEqualToAnchor_constant(&row.trailingAnchor(), -10.0),
+                line.topAnchor().constraintEqualToAnchor(&row.topAnchor()),
+                line.bottomAnchor()
+                    .constraintEqualToAnchor(&row.bottomAnchor()),
+            ] {
+                constraint.setActive(true);
+            }
+            ControlNode::payload(row, Control::Native)
+        });
+        Response { ui: self, node }
+    }
+}
+
+/// The fill of a [`Ui::group_box`]: 3% black in the light appearance and
+/// 3% white in the dark one, as measured in a SwiftUI grouped form, which
+/// System Settings uses. No system color has this value:
+/// `quaternarySystemFill` is 2.7%.
+fn group_fill() -> Retained<NSColor> {
+    let light = NSColor::colorWithWhite_alpha(0.0, 0.03);
+    let dark = NSColor::colorWithWhite_alpha(1.0, 0.03);
+    let provider = RcBlock::new(move |appearance: NonNull<NSAppearance>| {
+        // SAFETY: AppKit passes the appearance the color is drawn in.
+        let appearance = unsafe { appearance.as_ref() };
+        let names = NSArray::from_slice(&[unsafe { NSAppearanceNameAqua }, unsafe {
+            NSAppearanceNameDarkAqua
+        }]);
+        let dark_match = appearance
+            .bestMatchFromAppearancesWithNames(&names)
+            .is_some_and(|name| &*name == unsafe { NSAppearanceNameDarkAqua });
+        // The block keeps both colors, so the pointer stays valid while
+        // the dynamic color lives.
+        NonNull::from(match dark_match {
+            true => &*dark,
+            false => &*light,
+        })
+    });
+    // SAFETY: the provider returns a color the block keeps alive.
+    unsafe { NSColor::colorWithName_dynamicProvider(None, &provider) }
 }
 
 /// The direction a [`Ui::stack_view`] lays out its children.

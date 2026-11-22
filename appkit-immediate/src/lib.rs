@@ -22,7 +22,8 @@ pub use widget::{
     Align, ButtonResponse, CODE_LENGTH, CheckBoxResponse, CodeBoxesResponse, CodeDigits,
     ComboBoxResponse, FieldHandle, Length, Orientation, PopUpButtonResponse, Response, RowFn,
     SecureTextFieldHandle, SecureTextFieldResponse, SourceListEntries, SourceListResponse, Style,
-    TableViewId, TextColor, TextFieldResponse, WindowResponse,
+    TableViewId, TableViewResponse, TextColor, TextFieldResponse, ToolbarItemResponse,
+    WindowResponse,
 };
 /// The type [`Ui::take_password`] returns.
 pub use zeroize::Zeroizing;

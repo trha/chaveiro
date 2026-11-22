@@ -6,17 +6,17 @@ use crate::{
     events::{EventKind, Events},
     tree::{Key, NodeId, Tree, Visit},
     widget::{
-        Align, Control, Field, GridRule as Rule, Pane, Style, TextColor, grid_constraints,
-        grid_rules, pane_item,
+        Align, Control, Field, GridRule as Rule, Pane, Style, TextColor, ToolbarSource,
+        grid_constraints, grid_rules, pane_item,
     },
 };
 use objc2::{MainThreadMarker, rc::Retained, runtime::ProtocolObject};
 use objc2_app_kit::{
     NSApplication, NSGlassEffectView, NSLayoutConstraint, NSLayoutConstraintOrientation,
-    NSStackView, NSTableView, NSUserInterfaceLayoutOrientation, NSView, NSVisualEffectView,
-    NSWindow,
+    NSStackView, NSTableView, NSToolbar, NSToolbarItem, NSUserInterfaceLayoutOrientation, NSView,
+    NSVisualEffectView, NSWindow,
 };
-use objc2_foundation::NSArray;
+use objc2_foundation::{NSArray, NSString};
 use std::{any::Any, hash::Hash, rc::Rc};
 
 /// Builds the UI. The app gets it in [`App::view`](crate::App::view).
@@ -36,6 +36,9 @@ pub struct Ui {
     /// Table views to reload after the pass, with no borrow held, because
     /// AppKit asks for rows inside `reloadData`.
     pub(crate) reloads: Vec<Retained<NSTableView>>,
+    /// Table view selections to write after the reloads, so each names a
+    /// row the table already has.
+    pub(crate) selections: Vec<(Retained<NSTableView>, Option<usize>)>,
     /// Whether this pass called [`Response::invalidate`](crate::Response::invalidate),
     /// so the next pass writes by request and is no idle pass.
     pub(crate) invalidated: bool,
@@ -59,6 +62,7 @@ impl Ui {
             new_windows: Vec::new(),
             tables: Vec::new(),
             reloads: Vec::new(),
+            selections: Vec::new(),
             invalidated: false,
             form_header_width: None,
             focus: None,
@@ -147,6 +151,14 @@ impl Ui {
             .expect("a cache is declared inside a container")
             .visual
             .extend_from_slice(&cache.emitted);
+    }
+
+    /// The innermost open container.
+    pub(crate) fn container(&self) -> NodeId {
+        self.frames
+            .last()
+            .expect("widgets are declared inside a pass")
+            .node
     }
 
     /// Opens `node` as the container for the widgets declared next.
@@ -251,6 +263,8 @@ impl Ui {
                     .extend_from_slice(&cache.emitted);
             }
             Payload::State(_) => unreachable!("state nodes are never opened"),
+            Payload::ToolbarItem(_) => self.apply_toolbar_group(node, declared),
+            Payload::Toolbar(_) => self.apply_toolbar(node, declared),
             Payload::Window(window) => {
                 assert!(
                     declared.len() <= 1,
@@ -288,10 +302,18 @@ impl Ui {
                         shell,
                         content,
                         pins,
+                    }
+                    | Control::ScrollView {
+                        document: shell,
+                        content,
+                        pins,
                     },
                 ..
             }) => {
-                assert!(declared.len() <= 1, "a table row declares one control");
+                assert!(
+                    declared.len() <= 1,
+                    "a table row or scroll view declares one control"
+                );
                 let declared_content = declared.first().copied();
                 if *content == declared_content {
                     return;
@@ -312,9 +334,12 @@ impl Ui {
                     return;
                 };
                 let view = self.control(declared_content).view.clone();
-                // The content's constraints give the row its height.
+                // The content's constraints give the row or the document
+                // its height.
                 let built = pin_to_edges(&shell, &view);
-                let Control::Row { pins, .. } = &mut self.control_mut(node).control else {
+                let (Control::Row { pins, .. } | Control::ScrollView { pins, .. }) =
+                    &mut self.control_mut(node).control
+                else {
                     unreachable!("matched above")
                 };
                 *pins = built;
@@ -346,14 +371,12 @@ impl Ui {
                 }
                 let mut built = Vec::with_capacity(declared.len());
                 for (position, &child) in declared.iter().enumerate() {
-                    let (item, container) = pane_item(self.mtm, position);
+                    let (item, container) = pane_item(self.mtm, position, declared.len());
                     let view = &self.control(child).view;
-                    // The sidebar item insets its own content below a
-                    // full-size title bar; the other panes start below it.
-                    let pins = match position {
-                        0 => pin_to_edges(&container, view),
-                        _ => pin_below_title_bar(&container, view),
-                    };
+                    // Every pane reaches under a full-size title bar, so
+                    // the toolbar shows its content through glass; scroll
+                    // views inset their content below it.
+                    let pins = pin_to_edges(&container, view);
                     controller.addSplitViewItem(&item);
                     built.push(Pane { item, child, pins });
                 }
@@ -500,6 +523,33 @@ pub(crate) enum Payload {
     Cache(CacheNode),
     /// UI-only data from [`Ui::state`].
     State(Box<dyn Any>),
+    Toolbar(ToolbarNode),
+    ToolbarItem(ToolbarItemNode),
+}
+
+/// A window's toolbar.
+///
+/// Contract: `items` lists the toolbar item nodes in the order `toolbar`
+/// shows them, and `source` holds the item of each one that has an item.
+pub(crate) struct ToolbarNode {
+    /// The window that shows the toolbar, which loses it when the node is
+    /// dropped.
+    pub(crate) window: Retained<NSWindow>,
+    pub(crate) toolbar: Retained<NSToolbar>,
+    pub(crate) source: Retained<ToolbarSource>,
+    pub(crate) items: Vec<NodeId>,
+}
+
+pub(crate) struct ToolbarItemNode {
+    /// [`None`] for an item AppKit makes, such as a flexible space.
+    pub(crate) item: Option<Retained<NSToolbarItem>>,
+    pub(crate) identifier: Retained<NSString>,
+    /// The values last written.
+    pub(crate) symbol: String,
+    pub(crate) label: String,
+    pub(crate) enabled: Option<bool>,
+    /// For a group, its items as last applied, in order.
+    pub(crate) subitems: Vec<NodeId>,
 }
 
 pub(crate) struct CacheNode {
@@ -536,6 +586,8 @@ pub(crate) struct WindowNode {
     pub(crate) sized: bool,
     /// The title last written.
     pub(crate) title: String,
+    /// The subtitle last written; [`None`] while the title is hidden.
+    pub(crate) subtitle: Option<String>,
 }
 
 pub(crate) struct ControlNode {
@@ -558,6 +610,9 @@ pub(crate) struct ControlNode {
     pub(crate) style: Option<Style>,
     pub(crate) padding: Option<[f64; 4]>,
     pub(crate) text_color: Option<TextColor>,
+    /// [`Response::flexible_width`](crate::Response::flexible_width) was
+    /// written.
+    pub(crate) flexible: bool,
     /// The header and error line of a form field.
     pub(crate) field: Option<Box<Field>>,
 }
@@ -585,6 +640,7 @@ impl ControlNode {
             style: None,
             padding: None,
             text_color: None,
+            flexible: false,
             field: None,
         })
     }
@@ -615,25 +671,6 @@ fn pin_to_edges(container: &NSView, view: &NSView) -> Vec<Retained<NSLayoutConst
             .constraintEqualToAnchor(&container.trailingAnchor()),
         view.topAnchor()
             .constraintEqualToAnchor(&container.topAnchor()),
-        view.bottomAnchor()
-            .constraintEqualToAnchor(&container.bottomAnchor()),
-    ];
-    NSLayoutConstraint::activateConstraints(&NSArray::from_retained_slice(&pins));
-    pins
-}
-
-/// Adds `view` to `container` and pins it to the edges, with its top at
-/// the top of the container's safe area, which a full-size title bar
-/// covers. Returns the active constraints.
-fn pin_below_title_bar(container: &NSView, view: &NSView) -> Vec<Retained<NSLayoutConstraint>> {
-    container.addSubview(view);
-    let pins = vec![
-        view.leadingAnchor()
-            .constraintEqualToAnchor(&container.leadingAnchor()),
-        view.trailingAnchor()
-            .constraintEqualToAnchor(&container.trailingAnchor()),
-        view.topAnchor()
-            .constraintEqualToAnchor(&container.safeAreaLayoutGuide().topAnchor()),
         view.bottomAnchor()
             .constraintEqualToAnchor(&container.bottomAnchor()),
     ];
@@ -733,6 +770,12 @@ struct Frame {
 fn release(events: &Events, payload: Payload) {
     match payload {
         Payload::Root | Payload::Cache(_) | Payload::State(_) => {}
+        Payload::Toolbar(toolbar) => toolbar.window.setToolbar(None),
+        Payload::ToolbarItem(item) => {
+            if let Some(item) = &item.item {
+                events.forget(item);
+            }
+        }
         Payload::Window(window) => {
             events.forget(&window.window);
             window.window.setDelegate(None);

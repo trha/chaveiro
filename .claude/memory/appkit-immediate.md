@@ -127,3 +127,36 @@ rows off screen are wrong.
   nixpkgs#ipsw -c ipsw macho disass <binary> --arch arm64e -x
   __TEXT.__text`, which names each `objc_msgSend` selector; `ipsw
   class-dump` lists the classes.
+
+## Learned while building the vault list and details (2026-11-22)
+
+- The WinUI details flicker (commit 42a8169) happens here too: the core
+  opens a picked item only after the pass, so the details must draw the
+  item still open (or none) in the pass that asks for Open.
+  `chaveiro-appkit/examples/vault.rs` prints every pass after a pick and
+  panics on a blank pane; with the fix undone it does panic.
+- `NSTableRowView` gives the emphasized background style only to the cell
+  view and AppKit's cell view passes it only to its own text field and
+  image view. Labels nested in stack views stayed dark on the blue
+  selection, so the row shell (`RowShell`) passes the style to every
+  control inside it. Check it with the list focused (`makeFirstResponder`),
+  or the row is not emphasized.
+- A content list split view item (`contentListWithViewController`) opens
+  200 pt wide; the vault sets the pane's width to the design's 300.
+- In a gravity-areas `NSStackView` a child fills the leftover width only
+  when its hugging is below the stack's: `Response::flexible_width` sets
+  hugging and compression to 1 (a stack view child gets the stack's own
+  hugging and clipping resistance instead).
+- Table view selection is written after the reloads in `settle_tables`,
+  with the target muted, because `selectRowIndexes:` on a row past the
+  table's cached count is wrong, and a reload can post a selection change
+  that is not the user's.
+- A `NSView.subviews` dump lists a stack's views in insertion order, which
+  differs from the arranged order after edits; it is not a layout bug.
+- Toolbar glass (macOS 26, measured 2026-11-22): the glass bar over
+  content is drawn by `NSTitlebarBackgroundView`, which
+  `titlebarAppearsTransparent = true` hides, leaving the toolbar clear.
+  A standard split view window (Swift spike) never sets it. The scroll
+  pocket's `PocketBlur` views stay hidden either way, so they prove
+  nothing. Panes must reach under the bar (pinned to the top, not the
+  safe area) so their scroll views get a pocket and inset their content.

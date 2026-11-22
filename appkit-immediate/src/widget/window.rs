@@ -54,6 +54,7 @@ impl Ui {
                 fitted: None,
                 sized: false,
                 title: String::new(),
+                subtitle: None,
             })
         });
         if visit == Visit::Created {
@@ -231,10 +232,12 @@ impl WindowResponse<'_> {
         self
     }
 
-    /// Draws the content up under a transparent title bar with no title,
-    /// keeping all three window buttons, so a
-    /// [`split_view`](Ui::split_view)'s sidebar reaches the window's top
-    /// edge. Its other panes start below the title bar.
+    /// Draws the content up under the title bar, which shows no title
+    /// (until [`subtitle`](Self::subtitle) shows it) and keeps all three
+    /// window buttons, so a [`split_view`](Ui::split_view)'s panes reach the
+    /// window's top edge. The title bar keeps its own background, which on
+    /// macOS 26 is the Liquid Glass that a toolbar shows the content
+    /// through; making it transparent would leave the toolbar clear.
     pub fn full_size_content(&mut self) -> &mut Self {
         let window = self.ui.window_mut(self.node);
         if !window.full_size {
@@ -242,9 +245,27 @@ impl WindowResponse<'_> {
             let window_view = &window.window;
             window_view
                 .setStyleMask(window_view.styleMask() | NSWindowStyleMask::FullSizeContentView);
-            window_view.setTitlebarAppearsTransparent(true);
             window_view.setTitleVisibility(NSWindowTitleVisibility::Hidden);
             window.full_size = true;
+        }
+        self
+    }
+
+    /// Shows the window's title in its toolbar, with `subtitle` under it,
+    /// such as the name of the list a window shows over its item count. A
+    /// unified toolbar puts both after the sidebar.
+    pub fn subtitle(&mut self, subtitle: &str) -> &mut Self {
+        let node = self.node;
+        let window = self.ui.window_mut(node);
+        if window.subtitle.as_deref() != Some(subtitle) {
+            crate::write_check::record(node);
+            if window.subtitle.is_none() {
+                window
+                    .window
+                    .setTitleVisibility(NSWindowTitleVisibility::Visible);
+            }
+            window.window.setSubtitle(&NSString::from_str(subtitle));
+            window.subtitle = Some(subtitle.to_owned());
         }
         self
     }

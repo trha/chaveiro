@@ -16,7 +16,7 @@ use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy, NSEvent, NSEventModifierFlags, NSEventType,
     NSMenu, NSMenuItem, NSView,
 };
-use objc2_foundation::{NSPoint, NSString};
+use objc2_foundation::{NSIndexSet, NSInteger, NSPoint, NSString};
 use std::{
     any::Any,
     cell::{Cell, RefCell},
@@ -234,8 +234,21 @@ impl<A: App> Runner<A> {
                 }
             }
         }
+        let selections = std::mem::take(&mut self.ui.borrow_mut().selections);
         for table in tables {
             table.reloadData();
+        }
+        for (table, selected) in selections {
+            match selected {
+                Some(row) => {
+                    table.selectRowIndexes_byExtendingSelection(
+                        &NSIndexSet::indexSetWithIndex(row),
+                        false,
+                    );
+                    table.scrollRowToVisible(row as NSInteger);
+                }
+                None => unsafe { table.deselectAll(None) },
+            }
         }
     }
 

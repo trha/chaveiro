@@ -389,6 +389,16 @@ impl Ui {
                     }
                     Payload::Cache(_) => "cached",
                     Payload::State(_) => "state",
+                    Payload::Toolbar(toolbar) => {
+                        owners.insert(Retained::as_ptr(&toolbar.toolbar).addr(), *child);
+                        "toolbar"
+                    }
+                    Payload::ToolbarItem(item) => {
+                        if let Some(item) = &item.item {
+                            owners.insert(Retained::as_ptr(item).addr(), *child);
+                        }
+                        "toolbar_item"
+                    }
                 };
                 let child_path = if path.is_empty() {
                     format!("{kind}[{index}]")

@@ -38,7 +38,7 @@ impl App for Vault {
         }
         let window = ui.window("main", "vault", |ui| {
             ui.grid("rows", &[Length::Star(1.0), Length::Auto], |ui| {
-                let table = ui.table_view("entries", ROWS, 0, row);
+                let table = ui.table_view("entries", ROWS, 0, row).id();
                 let slots = ui.table_view_slots(table);
                 ui.label(
                     "status",

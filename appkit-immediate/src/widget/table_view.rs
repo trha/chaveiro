@@ -1,17 +1,25 @@
-use super::Control;
+use super::{Control, Response, must_write};
 use crate::{
     App,
+    events::EventKind,
     pass::{ChildKind, ControlNode, Payload, Ui},
     tree::{Key, NodeId, Visit},
 };
 use ahash::AHashMap;
-use objc2::{MainThreadMarker, MainThreadOnly, rc::Retained, runtime::ProtocolObject};
-use objc2_app_kit::{
-    NSScrollView, NSTableColumn, NSTableView, NSTableViewColumnAutoresizingStyle, NSTableViewStyle,
-    NSView,
+use objc2::{
+    MainThreadMarker, MainThreadOnly, define_class, msg_send, rc::Retained, runtime::ProtocolObject,
 };
-use objc2_foundation::NSString;
-use std::{any::Any, hash::Hash, rc::Rc};
+use objc2_app_kit::{
+    NSBackgroundStyle, NSControl, NSScrollView, NSTableCellView, NSTableColumn, NSTableView,
+    NSTableViewColumnAutoresizingStyle, NSTableViewStyle, NSView,
+};
+use objc2_foundation::{NSObjectProtocol, NSString};
+use std::{
+    any::Any,
+    hash::Hash,
+    ops::{Deref, DerefMut},
+    rc::Rc,
+};
 
 /// Builds row `index` of the table view `TableViewId` from the app's state.
 /// Given to [`Ui::table_view`] as a plain function, because AppKit asks for
@@ -34,13 +42,15 @@ impl Ui {
     ///
     /// `revision` must change whenever the order or identity of the items
     /// changes; AppKit then reloads every row.
+    ///
+    /// The user can select one row; see [`TableViewResponse::selection`].
     pub fn table_view<A: App>(
         &mut self,
         id: impl Hash,
         len: usize,
         revision: u64,
         row: RowFn<A>,
-    ) -> TableViewId {
+    ) -> TableViewResponse<'_> {
         let (node, visit) = self.visit(id, ChildKind::Visual, |mtm| {
             let (scroll, table) = table_views(mtm);
             ControlNode::payload(
@@ -56,6 +66,9 @@ impl Ui {
                         len: 0,
                         revision: 0,
                         loaded: false,
+                        reloading: false,
+                        selected: None,
+                        inset: false,
                         item_state: AHashMap::new(),
                     }),
                 },
@@ -73,6 +86,7 @@ impl Ui {
         data.loaded = true;
         data.len = len;
         data.revision = revision;
+        data.reloading = reload;
         if visit == Visit::Created {
             self.events.register(&table, node);
             // AppKit holds both weakly; `Events` keeps the target alive.
@@ -98,7 +112,7 @@ impl Ui {
         }
         self.close();
         self.tables.push(node);
-        TableViewId(node)
+        TableViewResponse(Response { ui: self, node })
     }
 
     /// UI state for the item `item` of `table`, such as whether it is
@@ -174,7 +188,9 @@ impl Ui {
                 let data = self.table_data_mut(table);
                 let slot = data.next_slot;
                 data.next_slot += 1;
-                let shell = NSView::new(self.mtm);
+                let shell: Retained<RowShell> =
+                    unsafe { msg_send![RowShell::alloc(self.mtm), init] };
+                let shell = shell.into_super().into_super();
                 let key = Key::child(self.tree.node(table).key(), ("row", slot));
                 let Payload::Control(row) = ControlNode::payload(
                     shell.clone(),
@@ -257,6 +273,84 @@ impl Ui {
     }
 }
 
+/// What [`Ui::table_view`] returns.
+pub struct TableViewResponse<'u>(Response<'u>);
+
+impl TableViewResponse<'_> {
+    /// Names the table view for [`Ui::table_view_state`] and
+    /// [`Ui::table_view_slots`].
+    pub fn id(&self) -> TableViewId {
+        TableViewId(self.0.node)
+    }
+
+    /// Shows the rows inset from the table's edges, with rounded selection,
+    /// as a list beside a sidebar does. A table starts plain.
+    pub fn inset(&mut self, on: bool) -> &mut Self {
+        let node = self.0.node;
+        let Control::TableView { table, data } = &mut self.0.ui.control_mut(node).control else {
+            unreachable!("table view keys hold table views")
+        };
+        if must_write(node, false, &data.inset, &on) {
+            table.setStyle(match on {
+                true => NSTableViewStyle::Inset,
+                false => NSTableViewStyle::Plain,
+            });
+            data.inset = on;
+        }
+        self
+    }
+
+    /// The selected row. The user's pick, by click or arrow key, is copied
+    /// into `selected`, and a pick runs a pass. The table shows `selected`
+    /// once the pass ends, scrolled into view when the app changed it. A
+    /// row past the end shows no selection. Returns whether the user picked
+    /// since the last pass.
+    ///
+    /// A pick in the pass that changes the rows is dropped, because the row
+    /// it named may now show another item.
+    pub fn selection(&mut self, selected: &mut Option<usize>) -> bool {
+        let node = self.0.node;
+        let ui = &mut *self.0.ui;
+        let event = ui.events.happened(node, EventKind::SelectionDidChange);
+        let Control::TableView { table, data } = &mut ui.control_mut(node).control else {
+            unreachable!("table view keys hold table views")
+        };
+        // The crate's own changes post the event too: a written selection,
+        // and a reload that dropped the selected row, which the selection
+        // written after it restores. Either way the table then shows what
+        // was written last, so only a differing row is the user's pick.
+        let shown = usize::try_from(table.selectedRow()).ok();
+        let picked = event && !data.reloading && data.selected != Some(shown);
+        if picked {
+            *selected = shown;
+            data.selected = Some(shown);
+        }
+        let declared = selected.filter(|&row| row < data.len);
+        // A reload may keep a row selected that now shows another item, so
+        // the selection is written again after each one.
+        if must_write(node, data.reloading, &data.selected, &Some(declared)) {
+            data.selected = Some(declared);
+            let table = table.clone();
+            ui.selections.push((table, declared));
+        }
+        picked
+    }
+}
+
+impl<'u> Deref for TableViewResponse<'u> {
+    type Target = Response<'u>;
+
+    fn deref(&self) -> &Response<'u> {
+        &self.0
+    }
+}
+
+impl<'u> DerefMut for TableViewResponse<'u> {
+    fn deref_mut(&mut self) -> &mut Response<'u> {
+        &mut self.0
+    }
+}
+
 /// Names a table view for [`Ui::table_view_state`].
 #[derive(Clone, Copy, Debug)]
 pub struct TableViewId(NodeId);
@@ -280,6 +374,12 @@ pub(crate) struct TableData {
     revision: u64,
     /// Whether the table was loaded yet.
     loaded: bool,
+    /// This pass reloads the table.
+    reloading: bool,
+    /// The selection last written or read back; [`None`] until the app
+    /// first declares one.
+    selected: Option<Option<usize>>,
+    inset: bool,
     item_state: AHashMap<u64, Box<dyn Any>>,
 }
 
@@ -304,6 +404,40 @@ struct RealizedRow {
     slot: u32,
     /// The item it shows.
     index: usize,
+}
+
+define_class!(
+    /// The cell view of one row. The row view tells it the background
+    /// style, emphasized on a selected row of a focused table, and it
+    /// passes the style to every control inside it, so system colors such
+    /// as the label color turn light on the selection. AppKit's own cell
+    /// view tells only its text field and image view.
+    #[unsafe(super(NSTableCellView, NSView))]
+    #[thread_kind = MainThreadOnly]
+    struct RowShell;
+
+    unsafe impl NSObjectProtocol for RowShell {}
+
+    impl RowShell {
+        #[unsafe(method(setBackgroundStyle:))]
+        fn set_background_style(&self, style: NSBackgroundStyle) {
+            let _: () = unsafe { msg_send![super(self), setBackgroundStyle: style] };
+            pass_background_style(self, style);
+        }
+    }
+);
+
+/// Sets `style` on the cell of every control inside `view`.
+fn pass_background_style(view: &NSView, style: NSBackgroundStyle) {
+    for child in view.subviews().iter() {
+        if let Some(cell) = child
+            .downcast_ref::<NSControl>()
+            .and_then(|control| control.cell())
+        {
+            cell.setBackgroundStyle(style);
+        }
+        pass_background_style(&child, style);
+    }
 }
 
 /// A one-column, headerless, plain table view with automatic row heights
