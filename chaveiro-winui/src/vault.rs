@@ -241,6 +241,10 @@ pub fn view<A: VaultApp>(
         };
     }
 
+    // This pass asks the core to open the selected item, which it does
+    // after the pass draws, so `open` is still the item before.
+    let opening = matches!(action, Some(VaultAction::User(UserAction::Open(_))));
+
     let sidebar = &form.sidebar;
     let position = |filter| {
         sidebar
@@ -346,6 +350,7 @@ pub fn view<A: VaultApp>(
                             index,
                             selected: selected_item,
                             open,
+                            opening,
                             error: screen.error,
                         };
                         if let Some(asked) = details_pane(ui, details, revealed)? {
@@ -522,6 +527,9 @@ struct Details<'a> {
     index: &'a VaultIndex,
     selected: Option<Uuid>,
     open: Option<&'a CipherView>,
+    /// The core opens `selected` after this pass, so the pane still shows
+    /// `open` for this one pass.
+    opening: bool,
     error: Option<&'a ItemError>,
 }
 
@@ -533,9 +541,13 @@ fn details_pane(
     revealed: &mut Vec<FieldId>,
 ) -> Result<Option<UserAction>> {
     let mut asked = None;
-    let summary = details
-        .selected
-        .and_then(|id| details.index.ciphers.iter().find(|cipher| cipher.id == id));
+    // Drawing the item before until the new one opens keeps the pane's
+    // controls in place, so the pane does not blank for a pass.
+    let shown = match details.open {
+        Some(view) if details.opening => view.id,
+        _ => details.selected,
+    };
+    let summary = shown.and_then(|id| details.index.ciphers.iter().find(|cipher| cipher.id == id));
     ui.scroll("details", |ui| {
         ui.stack("details", Orientation::Vertical, 16.0, |ui| {
             if let Some(error) = details.error {
