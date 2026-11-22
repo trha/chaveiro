@@ -90,7 +90,7 @@ submit, then cleared.
  │     apply pending ItemsSource changes (no borrows held)          │
  │   GetElement / RecycleElement (during WinUI layout)              │
  │     ui.realize → list's RowFn(app, ui, index)                    │
- │   Handle::send(msg) from any thread → app.update(msg) → passes   │
+ │   a wake from any thread → poll woken tasks/streams → passes     │
  ├──────────────────────────────────────────────────────────────────┤
  │ Ui:  pass state, frames, widgets          (pass.rs, widget/*)    │
  │ Tree<Payload>: slab, keys, stamps, drops  (tree.rs, pure)        │
@@ -109,22 +109,17 @@ WinUI types, so they get property tests. WinUI calls live only in
 
 ```rust
 pub trait App: 'static {
-    /// A result sent to the UI thread from another thread.
-    type Message: 'static + Send;
-
-    /// Applies one message. Runs on the UI thread before the next pass.
-    fn update(&mut self, message: Self::Message);
-
-    /// Builds the whole window. Runs on every pass.
+    /// Builds every window. Runs on every pass. Async work runs as task,
+    /// stream and flow nodes the view declares.
     fn view(&mut self, ui: &mut Ui) -> windows_core::Result<()>;
 }
 
 /// Builds row `index` of a list. Given to `Ui::list` as a plain function.
 pub type RowFn<A> = fn(&mut A, &mut Ui, usize) -> windows_core::Result<()>;
 
-/// Starts WinUI on this thread and runs passes until a pass declares no
-/// window. `start` receives the handle before the first pass.
-pub fn run<A: App>(app: A, start: impl FnOnce(&mut A, Handle<A::Message>)) -> windows_core::Result<()>;
+/// Starts WinUI on this thread, builds the app with `make` once WinUI is
+/// up, and runs passes until a pass declares no window.
+pub fn run<A: App>(make: impl 'static + FnOnce() -> windows_core::Result<A>) -> windows_core::Result<()>;
 ```
 
 Rows are not part of the trait. Each list takes its own `RowFn<A>` at the
@@ -136,9 +131,8 @@ cannot capture borrowed data by mistake, because a row gets its data from
 `Box<dyn Fn(&mut dyn Any, &mut Ui, usize) -> Result<()>>`, a closure that
 downcasts the app to `A` and calls the `fn` pointer; the runner passes the
 app as `&mut dyn Any`. The box is made once, when the list node is created,
-and again only if a later pass passes a different `fn` pointer. `view`,
-`update` and rows never run at the same time, so each borrows the app
-mutably.
+and again only if a later pass passes a different `fn` pointer. `view`
+and rows never run at the same time, so each borrows the app mutably.
 
 ### Windows
 
@@ -169,7 +163,7 @@ keeps it to ask "discard changes?" first; when the window is no longer
 declared, drop on detach calls `Window.Close()`. When a pass declares no
 window at all, the runner leaves the message loop and `run` returns.
 
-All windows run on the one UI thread, so they share the `Ui`, the mailbox,
+All windows run on the one UI thread, so they share the `Ui`, the task wakes,
 the delegates and the scheduler, and one pass rebuilds every window. A
 window whose subtree did not change costs one `cached` check if the app
 wraps its body. WinUI 3 can put windows on separate threads, each with its
@@ -183,49 +177,31 @@ calls back into the same runner whichever window it is in.
 
 ### Crossing into the UI thread
 
-The crate owns the inbound half of domain crossing and nothing else. Work
-leaves the UI thread however the app chooses (`windows_threading::submit`, a
-thread, a WinRT async operation), and its result comes back as an
-`A::Message` through a `Handle`.
+Async work is a tree node, owned by the view that declares it, so dropping
+the node cancels the work. Superseded design: a `Mailbox` and `Handle`
+carried messages into `App::update`. Change `uvuzqqpz` removed them.
 
 ```rust
-/// Sends messages to the UI thread from any thread. Cheap to clone.
-pub struct Handle<M> { shared: Arc<Mailbox<M>> }
+impl Ui {
+    /// A future, started on first declaration, output taken once.
+    pub fn task<F>(&mut self, id: impl Hash, start: impl FnOnce() -> F)
+        -> TaskResponse<'_, F::Output>
+    where F: 'static + Future, F::Output: 'static;
 
-struct Mailbox<M> {
-    /// Messages not yet applied. The UI thread swaps this with a reused
-    /// buffer, so a steady stream allocates only when it outgrows capacity.
-    queue: Mutex<Vec<M>>,
-    /// Set while one wake is posted and not yet run.
-    wake_posted: AtomicBool,
-    /// Cleared when the window closes; `send` then drops the message.
-    open: AtomicBool,
-    dispatcher: DispatcherQueue,
-}
-
-impl<M: 'static + Send> Handle<M> {
-    /// Queues `message` and wakes the UI thread. Returns false, and drops the
-    /// message, when the window has closed or the dispatcher refused the wake.
-    pub fn send(&self, message: M) -> bool;
+    /// A `futures_core::Stream`, whose items queue in the node.
+    pub fn stream<S>(&mut self, id: impl Hash, start: impl FnOnce() -> S)
+        -> StreamResponse<'_, S::Item>
+    where S: 'static + Stream, S::Item: 'static;
 }
 ```
 
-`send` pushes under the lock, then posts a wake only if `wake_posted` was
-false. The wake's handler is a `DispatcherQueueHandler` that captures
-nothing, so it can be created on any thread; it finds the runner through a
-thread-local on the UI thread. The runner clears `wake_posted`, swaps the
-queue out, calls `A::update` for each message in order, then runs the passes
-once for the whole batch. A burst of 1,000 results therefore costs one wake
-and one build, as in Reactor's background queue
-(`core/component.rs` `TaskSpawner::spawn_inner`, `background_dispatch_waker`).
-
-Drop and shutdown rules: when the window closes, the runner clears `open`
-and drops queued messages, so a message type that holds secrets must wipe
-itself on drop. The queue is unbounded; the vault core bounds its own
-in-flight work by request id, and stale results are the core's to discard,
-not the crate's. WinRT callbacks that already arrive on the UI thread, such
-as delegates on XAML objects, use the event path, not the mailbox.
-
+A node's waker may run on any thread. It lists the node in `TaskWakes`
+and posts one turn per burst through a `DispatcherQueueHandler` built once
+and held in an `AgileReference`. At the start of each turn the runner polls
+the listed nodes, so the turn's first pass reads their results. Leaves that
+wrap WinRT operations use `winui_executor::winrt`, which cancels on drop,
+and the app calls `winui_executor::shutdown` after `run` returns. Flows,
+which draw from inside their future, are in `plans/winui-flow.md`.
 ### Keys and the tree
 
 ```rust
@@ -517,8 +493,12 @@ to the nearest known control.
 ### Passes and scheduling
 
 The runner keeps the spike's coalescing: a pending flag and one
-`DispatcherQueue` callback. A pass that consumed events runs a second pass,
-because widgets built before the reader still show old state. After the
+`DispatcherQueue` callback. A turn first polls the woken task and stream
+nodes, then runs passes. A pass that consumed events, or called
+`Ui::request_pass`, runs another, up to `MAX_PASSES`, because widgets built
+before the reader still show old state. State that changes with time uses a
+sleeping task or a `winui_executor::interval` stream, so the runner keeps no
+timer of its own. After the
 passes, the runner releases every borrow, then applies pending
 `SetItemsSource` calls, since WinUI may call `GetElement` inside them.
 
@@ -562,8 +542,7 @@ row: `list_state::<T>(list, item_key)` stores it on the list node instead.
 
 A pass allocates only when: a node or control is created; a stored string
 grows past its capacity; a child list grows past its capacity; a cache's
-deps change type; `state` is first created (or its id changes); or a burst of
-messages outgrows the mailbox buffer. WinUI's own allocations (HSTRINGs, COM objects) happen on
+deps change type; `state` is first created (or its id changes); or the woken-node list outgrows its buffer. WinUI's own allocations (HSTRINGs, COM objects) happen on
 the OS heap and are counted as WinUI calls instead.
 
 ## Crate layout
@@ -577,7 +556,8 @@ winui-immediate/
   build.rs, bindings.txt         generate the bindings into OUT_DIR
   src/bindings.rs                include! of the output, shared delegates, add_* helpers
   src/startup.rs                 bootstrap, app shim (from spike winui.rs)
-  src/runner.rs                  Runner<A>, scheduling, passes, Handle, factory hooks
+  src/runner.rs                  Runner<A>, scheduling, passes, factory hooks
+  src/widget/task.rs             task and stream nodes, TaskWakes
   src/tree.rs                    Tree<P>, Node, NodeId, Key (pure)
   src/children.rs                edits (pure)
   src/pass.rs                    Ui, Frame, Payload, the pass core
@@ -600,7 +580,9 @@ tools/winui-bindgen/             spikes only (filter spikes.txt)
 3. `Tree` duplicate id: visiting one key twice in a pass panics.
 4. `cached` body runs (proptest over a model): the body runs exactly when
    deps changed, the node is new, or an event targets its subtree.
-5. Mailbox: 8 threads each send 10,000 numbered messages while the UI
+5. Mailbox (superseded: `mailbox.rs` was removed in change `uvuzqqpz`; the
+   task and stream tests and the loom tests in `widget/task` replace it):
+   8 threads each send 10,000 numbered messages while the UI
    thread drains; every message arrives exactly once, each sender's messages
    arrive in order, at most one wake is posted at a time, and `send` after
    close returns false. Runs against the mailbox with a fake wake, no WinUI.

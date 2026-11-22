@@ -140,7 +140,12 @@ dani-garcia/vaultwarden tag 1.37.4 and bitwarden/server@8c88e007.
   `POST /identity/accounts/register/send-verification-email` then
   `/register/finish` (`identity.rs` L1051, L1100).
 
-**The shell.** From `plans/winui-immediate.md` (WP-00 to WP-07 done): the
+**The shell.** Superseded on 2026-11-22: `App::update`, `Handle` and the
+mailbox are gone. Effects now run as task and stream nodes that the view
+declares (`plans/winui-immediate.md` "Crossing into the UI thread"). The
+paragraphs below keep the original design for its history.
+
+From `plans/winui-immediate.md` (WP-00 to WP-07 done): the
 app implements `winui_immediate::App`, whose `update(message)` and
 `view(&mut self, ui)` run on the UI thread. Work leaves the UI thread however
 the app chooses, and its result comes back as an `A::Message` through
