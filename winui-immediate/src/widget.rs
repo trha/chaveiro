@@ -9,8 +9,9 @@ use crate::{
         AppBarButton, Application, AutomationProperties, Brush, Button, ComboBox,
         Control as XamlControl, DependencyObject, FocusState, FontIcon, FrameworkElement, Grid,
         HorizontalAlignment, ICommandBarElement, IPanel, IconElement, InfoBar, ItemsRepeater,
-        PasswordBox, ProgressRing, StackPanel, Style, TextBlock, TextBox, TextWrapping, Thickness,
-        TitleBar, UIElement, UIElementCollection, Visibility,
+        MenuFlyoutItem, MenuFlyoutItemBase, MenuFlyoutSubItem, PasswordBox, ProgressRing,
+        StackPanel, Style, TextBlock, TextBox, TextWrapping, Thickness, TitleBar,
+        ToggleMenuFlyoutItem, UIElement, UIElementCollection, Visibility,
     },
     events::EventKind,
     pass::Ui,
@@ -33,6 +34,7 @@ mod info_bar;
 mod label;
 mod link;
 mod list;
+mod menu;
 mod native;
 mod navigation_view;
 mod navigator;
@@ -59,6 +61,7 @@ pub use label::{LabelResponse, Overflow};
 pub use link::LinkResponse;
 pub(crate) use list::index_source;
 pub use list::{ListId, RowFn};
+pub use menu::{MenuAnchor, MenuItemResponse, MenuResponse};
 pub use navigation_view::{NavigationEntry, NavigationSelection, NavigationViewResponse};
 pub(crate) use navigator::Navigator;
 pub use navigator::{SLIDE_DURATION, Slide};
@@ -686,6 +689,26 @@ pub(crate) enum Control {
     /// From [`Ui::navigation_view`]: the pane's items, and one content
     /// control.
     NavigationView(Box<navigation_view::Parts>),
+    /// From [`Ui::menu_item`].
+    MenuItem {
+        item: MenuFlyoutItem,
+        look: menu::Look,
+        critical: bool,
+    },
+    /// From [`Ui::menu_toggle`].
+    MenuToggle {
+        item: ToggleMenuFlyoutItem,
+        look: menu::Look,
+        /// [`None`] until written, and after a click, when WinUI flipped it.
+        checked: Option<bool>,
+    },
+    /// From [`Ui::submenu`]: its items.
+    SubMenu {
+        item: MenuFlyoutSubItem,
+        items: IVector<MenuFlyoutItemBase>,
+        look: menu::Look,
+    },
+    MenuSeparator,
 }
 
 impl Control {

@@ -216,6 +216,25 @@ impl Ui {
         }
     }
 
+    /// Edits `items`, a menu's item list, from the items `old` to `new`.
+    fn apply_menu_items(
+        &self,
+        items: &windows_collections::IVector<MenuFlyoutItemBase>,
+        old: &[NodeId],
+        new: &[NodeId],
+    ) -> Result<()> {
+        for edit in edits(old, new) {
+            match edit {
+                Edit::RemoveAt(index) => items.RemoveAt(index)?,
+                Edit::InsertAt(index, child) => items.InsertAt(
+                    index,
+                    &self.control(child).element.cast::<MenuFlyoutItemBase>()?,
+                )?,
+            }
+        }
+        Ok(())
+    }
+
     /// Makes `declared` the WinUI children of `node`. Leaves the previous
     /// list in `declared`.
     fn apply_visual(&mut self, node: NodeId, declared: &mut Vec<NodeId>) -> Result<()> {
@@ -326,6 +345,26 @@ impl Ui {
                     }
                 }
                 Ok(())
+            }
+            Payload::Control(ControlNode {
+                control: Control::SubMenu { items, .. },
+                visual,
+                ..
+            }) => {
+                let items = items.clone();
+                std::mem::swap(visual, declared);
+                let Payload::Control(control) = &self.tree.node(node).payload else {
+                    unreachable!("matched above")
+                };
+                self.apply_menu_items(&items, declared, &control.visual)
+            }
+            Payload::Menu(menu) => {
+                let items = menu.items.clone();
+                std::mem::swap(&mut menu.visual, declared);
+                let Payload::Menu(menu) = &self.tree.node(node).payload else {
+                    unreachable!("matched above")
+                };
+                self.apply_menu_items(&items, declared, &menu.visual)
             }
             Payload::Control(ControlNode {
                 control: Control::Navigator(navigator),
@@ -445,6 +484,18 @@ pub(crate) enum Payload {
     Cache(CacheNode),
     /// UI-only data from [`Ui::state`].
     State(Box<dyn Any>),
+    /// From [`Ui::menu`].
+    Menu(Box<MenuNode>),
+}
+
+/// A menu, shown on its first pass and hidden when its node drops.
+pub(crate) struct MenuNode {
+    pub(crate) flyout: MenuFlyout,
+    pub(crate) items: windows_collections::IVector<MenuFlyoutItemBase>,
+    /// The items, in order, as last applied to `items`.
+    pub(crate) visual: Vec<NodeId>,
+    pub(crate) shown: bool,
+    pub(crate) subscribed: EventSet,
 }
 
 pub(crate) struct CacheNode {
@@ -571,6 +622,15 @@ struct Frame {
 fn release(events: &mut Events, payload: Payload) {
     match payload {
         Payload::Root | Payload::Cache(_) | Payload::State(_) => {}
+        Payload::Menu(menu) => {
+            events.forget(&menu.flyout);
+            // Hiding fails only for a menu WinUI already closed, which is
+            // the state this asks for.
+            let _ = menu
+                .flyout
+                .cast::<FlyoutBase>()
+                .and_then(|flyout| flyout.Hide());
+        }
         Payload::Window(window) => {
             events.forget(&window.app_window);
             // Closing fails only for a window the user already closed, which

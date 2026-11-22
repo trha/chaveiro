@@ -180,6 +180,9 @@ add_handler!(IComboBox, add_text_submitted, TextSubmitted, TypedEventHandler<Com
 add_handler!(IAppWindow, add_closing, Closing, TypedEventHandler<AppWindow, AppWindowClosingEventArgs>);
 add_handler!(ITitleBar, add_back_requested, BackRequested, TypedEventHandler<TitleBar, windows_core::IInspectable>);
 add_handler!(IKeyboardAccelerator, add_invoked, Invoked, TypedEventHandler<KeyboardAccelerator, KeyboardAcceleratorInvokedEventArgs>);
+add_handler!(IMenuFlyoutItem, add_click, Click, RoutedEventHandler);
+add_handler!(IFlyoutBase, add_closed, Closed, EventHandler<IInspectable>);
+add_handler!(IUIElement, add_context_requested, ContextRequested, TypedEventHandler<UIElement, ContextRequestedEventArgs>);
 add_handler!(INavigationView, add_selection_changed, SelectionChanged, TypedEventHandler<NavigationView, NavigationViewSelectionChangedEventArgs>);
 
 impl IPasswordBox {

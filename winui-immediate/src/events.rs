@@ -24,9 +24,13 @@ pub(crate) struct Events {
     current: Vec<(NodeId, EventKind)>,
     /// Keys pressed since the last pass, resolved to nodes, in order.
     keys: Vec<(NodeId, Key)>,
+    /// Context menu requests since the last pass, resolved to nodes, each
+    /// with the pointer position in the node's element, if any.
+    contexts: Vec<(NodeId, Option<Point>)>,
     /// Swapped with the inbox at the start of each pass, to reuse capacity.
     drained: Vec<(usize, EventKind)>,
     drained_keys: Vec<(usize, Key)>,
+    drained_contexts: Vec<(usize, Option<Point>)>,
 }
 
 impl Events {
@@ -36,6 +40,7 @@ impl Events {
         let inbox = Rc::new(Inbox {
             queued: RefCell::new(Vec::new()),
             keys: RefCell::new(Vec::new()),
+            contexts: RefCell::new(Vec::new()),
             wake,
         });
         tracing::debug!(count = Delegates::COUNT, "shared delegates");
@@ -45,8 +50,10 @@ impl Events {
             inbox,
             current: Vec::new(),
             keys: Vec::new(),
+            contexts: Vec::new(),
             drained: Vec::new(),
             drained_keys: Vec::new(),
+            drained_contexts: Vec::new(),
         }
     }
 
@@ -70,7 +77,29 @@ impl Events {
                 self.keys.push((node, key));
             }
         }
-        !self.current.is_empty() || !self.keys.is_empty()
+        self.contexts.clear();
+        std::mem::swap(
+            &mut self.drained_contexts,
+            &mut *self.inbox.contexts.borrow_mut(),
+        );
+        for (sender, position) in self.drained_contexts.drain(..) {
+            if let Some(node) = self.senders.get(&sender).copied() {
+                tree.mark_event(node);
+                self.contexts.push((node, position));
+            }
+        }
+        !self.current.is_empty() || !self.keys.is_empty() || !self.contexts.is_empty()
+    }
+
+    /// The last context menu request `node` got since the last pass: the
+    /// pointer position in its element, or [`None`] inside for a request
+    /// from the keyboard.
+    pub(crate) fn context(&self, node: NodeId) -> Option<Option<Point>> {
+        self.contexts
+            .iter()
+            .rev()
+            .find(|(target, _)| *target == node)
+            .map(|(_, position)| *position)
     }
 
     /// The keys `node` got since the last pass, in the order pressed.
@@ -113,9 +142,18 @@ impl Events {
             return Ok(());
         }
         match kind {
-            EventKind::Click => source
-                .cast::<IButtonBase>()?
-                .add_click(&self.delegates.click)?,
+            EventKind::Click => match source.cast::<IButtonBase>() {
+                Ok(button) => button.add_click(&self.delegates.click)?,
+                Err(_) => source
+                    .cast::<IMenuFlyoutItem>()?
+                    .add_click(&self.delegates.click)?,
+            },
+            EventKind::ContextRequested => source
+                .cast::<IUIElement>()?
+                .add_context_requested(&self.delegates.context_requested)?,
+            EventKind::FlyoutClosed => source
+                .cast::<IFlyoutBase>()?
+                .add_closed(&self.delegates.flyout_closed)?,
             EventKind::CloseRequested => source
                 .cast::<IAppWindow>()?
                 .add_closing(&self.delegates.close_requested)?,
@@ -212,6 +250,11 @@ pub(crate) enum EventKind {
     Key,
     /// A navigation view's selected item changed, by the user or by a write.
     NavigationSelectionChanged,
+    /// The user asked for a context menu, by right-click, the Menu key or
+    /// Shift+F10. The position is kept apart, in [`Events::contexts`].
+    ContextRequested,
+    /// A flyout closed, by a pick, a click outside it, or Escape.
+    FlyoutClosed,
 }
 
 /// A key a control reports through [`TextBoxResponse::keys`]. Enter is not
@@ -251,7 +294,7 @@ impl Key {
 
 /// Event kinds a node is subscribed to, one bit per [`EventKind`].
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) struct EventSet(u16);
+pub(crate) struct EventSet(u32);
 
 impl EventSet {
     pub(crate) fn contains(self, kind: EventKind) -> bool {
@@ -267,6 +310,7 @@ impl EventSet {
 struct Inbox {
     queued: RefCell<Vec<(usize, EventKind)>>,
     keys: RefCell<Vec<(usize, Key)>>,
+    contexts: RefCell<Vec<(usize, Option<Point>)>>,
     wake: Rc<dyn Fn()>,
 }
 
@@ -275,6 +319,15 @@ impl Inbox {
         // A delegate without a sender cannot be routed to a node.
         let Some(sender) = sender else { return };
         self.keys.borrow_mut().push((sender.as_raw() as usize, key));
+        (self.wake)();
+    }
+
+    fn push_context(&self, sender: Option<&IUnknown>, position: Option<Point>) {
+        // A delegate without a sender cannot be routed to a node.
+        let Some(sender) = sender else { return };
+        self.contexts
+            .borrow_mut()
+            .push((sender.as_raw() as usize, position));
         (self.wake)();
     }
 
@@ -306,6 +359,8 @@ struct Delegates {
     key: KeyEventHandler,
     navigation_selection_changed:
         TypedEventHandler<NavigationView, NavigationViewSelectionChangedEventArgs>,
+    context_requested: TypedEventHandler<UIElement, ContextRequestedEventArgs>,
+    flyout_closed: EventHandler<IInspectable>,
     /// Not an event the app sees: it selects the sender's text.
     select_all: RoutedEventHandler,
 }
@@ -458,6 +513,36 @@ impl Delegates {
                 )
             })
         };
+        let context_requested = {
+            let inbox = Rc::clone(inbox);
+            TypedEventHandler::shared(
+                move |sender: Ref<'_, UIElement>, arguments: Ref<'_, ContextRequestedEventArgs>| {
+                    let (Ok(sender), Ok(arguments)) = (sender.ok(), arguments.ok()) else {
+                        return;
+                    };
+                    // Handled, so a parent does not open its own menu too; if
+                    // the write fails, a parent may also act on it.
+                    let _ = arguments.SetHandled(true);
+                    let mut point = Point::default();
+                    // From the keyboard there is no position, and the menu
+                    // opens at its control.
+                    let position = arguments
+                        .TryGetPosition(sender, &mut point)
+                        .unwrap_or(false)
+                        .then_some(point);
+                    inbox.push_context(canonical(Some(sender)).as_ref(), position);
+                },
+            )
+        };
+        let flyout_closed = {
+            let inbox = Rc::clone(inbox);
+            EventHandler::<IInspectable>::shared(move |sender: Ref<'_, IInspectable>, _| {
+                inbox.push(
+                    canonical(sender.ok().ok()).as_ref(),
+                    EventKind::FlyoutClosed,
+                )
+            })
+        };
         let select_all = RoutedEventHandler::shared(|sender: Ref<'_, IInspectable>, _| {
             // Only text boxes register it; a failed selection leaves the
             // caret where WinUI put it, which is still usable.
@@ -467,6 +552,8 @@ impl Delegates {
         });
         Delegates {
             navigation_selection_changed,
+            context_requested,
+            flyout_closed,
             back_requested,
             select_all,
             key,

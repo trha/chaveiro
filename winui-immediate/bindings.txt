@@ -207,3 +207,24 @@ Microsoft.UI.Xaml.UIElement::{get_KeyboardAccelerators, put_KeyboardAcceleratorP
 Microsoft.UI.Xaml.Controls.ItemsRepeater::{GetOrCreateElement}
 Microsoft.UI.Xaml.Input.FocusManager::{FindFirstFocusableElement}
 Microsoft.UI.Xaml.Input.IFocusManagerStatics::FindFirstFocusableElement
+Microsoft.UI.Xaml.Controls.MenuFlyout::{get_Items}
+Microsoft.UI.Xaml.Controls.IMenuFlyoutFactory::CreateInstance
+Microsoft.UI.Xaml.Controls.Primitives.FlyoutBase::{ShowAt, Hide, add_Closed, remove_Closed}
+Microsoft.UI.Xaml.Controls.Primitives.FlyoutShowOptions::{put_Position, put_Placement}
+Microsoft.UI.Xaml.Controls.Primitives.IFlyoutShowOptionsFactory::CreateInstance
+Microsoft.UI.Xaml.Controls.Primitives.FlyoutPlacementMode
+Microsoft.UI.Xaml.Controls.MenuFlyoutItem::{put_Text, put_Icon, add_Click, remove_Click}
+Microsoft.UI.Xaml.Controls.IMenuFlyoutItemFactory::CreateInstance
+Microsoft.UI.Xaml.Controls.ToggleMenuFlyoutItem::{get_IsChecked, put_IsChecked}
+Microsoft.UI.Xaml.Controls.IToggleMenuFlyoutItemFactory::CreateInstance
+Microsoft.UI.Xaml.Controls.MenuFlyoutSubItem::{CreateInstance, get_Items, put_Text, put_Icon}
+Microsoft.UI.Xaml.Controls.MenuFlyoutSeparator::{}
+Microsoft.UI.Xaml.Controls.IMenuFlyoutSeparatorFactory::CreateInstance
+Microsoft.UI.Xaml.Controls.MenuFlyoutItemBase::{}
+Microsoft.UI.Xaml.UIElement::{add_ContextRequested, remove_ContextRequested}
+Microsoft.UI.Xaml.Input.ContextRequestedEventArgs::{TryGetPosition, put_Handled}
+Microsoft.UI.Xaml.Controls.Control::{put_Foreground}
+Microsoft.UI.Xaml.Controls.Primitives.FlyoutBase::{ShowAtWithOptions}
+Microsoft.UI.Xaml.Controls.Control::{get_ForegroundProperty}
+Microsoft.UI.Xaml.Controls.IControlStatics::get_ForegroundProperty
+Microsoft.UI.Xaml.Controls.Primitives.FlyoutBase::{put_AreOpenCloseAnimationsEnabled}
