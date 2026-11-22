@@ -3,7 +3,7 @@ use crate::{
     bindings::{
         Brush, DependencyObject, FontFamily, FontStyle, TextBlock, TextTrimming, TextWrapping,
     },
-    pass::{ChildKind, ControlNode, Payload, Ui},
+    pass::{ChildKind, ControlNode, NativeTree, Payload, Ui},
 };
 use std::{
     fmt::Write as _,
@@ -35,7 +35,7 @@ impl Ui {
                 },
             ))
         })?;
-        let Payload::Control(control) = &mut self.tree.node_mut(node).payload else {
+        let Payload::Control(control) = self.core.tree.native_mut(node) else {
             unreachable!("label keys hold labels")
         };
         let stale = std::mem::take(&mut control.stale);

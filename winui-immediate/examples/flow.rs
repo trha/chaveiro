@@ -47,8 +47,10 @@ impl App for Example {
                 ui.label("done", format_args!("{} jobs done", self.done))?;
                 ui.flow("jobs", owned(&mut self.done), |flow| async move {
                     loop {
-                        flow.frame(|ui, _| Ok(ui.button("start", "Start")?.clicked()?.then_some(())))
-                            .await;
+                        flow.frame(|ui, _| {
+                            Ok(ui.button("start", "Start")?.clicked()?.then_some(()))
+                        })
+                        .await;
                         let started = Instant::now();
                         let job = winui_executor::sleep(Duration::from_secs(3));
                         // The countdown frame never completes on its own; it
@@ -91,7 +93,10 @@ impl App for Example {
                 if ui.button("after", "Click me")?.clicked()? {
                     self.clicks += 1;
                 }
-                ui.label("clicks", format_args!("{} clicks after the flow", self.clicks))?;
+                ui.label(
+                    "clicks",
+                    format_args!("{} clicks after the flow", self.clicks),
+                )?;
                 Ok(())
             })?;
             Ok(())

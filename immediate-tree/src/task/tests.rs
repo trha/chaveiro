@@ -1,9 +1,8 @@
-use crate::pass::Ui;
+use crate::testing::Ui;
 use proptest::prelude::*;
 use std::{
     future::Future,
     pin::Pin,
-    rc::Rc,
     sync::{
         Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
@@ -76,7 +75,7 @@ impl Drop for RemoteFuture {
 /// A UI that counts the turns its tasks post.
 fn ui_counting_posts() -> (Ui, Arc<AtomicUsize>) {
     let posts = Arc::new(AtomicUsize::new(0));
-    let ui = Ui::with_task_post(Rc::new(|| {}), {
+    let ui = Ui::new({
         let posts = Arc::clone(&posts);
         move || {
             posts.fetch_add(1, Ordering::SeqCst);
@@ -342,7 +341,10 @@ fn items_ready_at_once_are_in_the_first_pass() {
     feed.send(vec![1, 2], false);
     ui.begin();
     let mut stream = ui.stream("feed", || feed.stream());
-    assert_eq!((stream.next(), stream.next(), stream.next()), (Some(1), Some(2), None));
+    assert_eq!(
+        (stream.next(), stream.next(), stream.next()),
+        (Some(1), Some(2), None)
+    );
     ui.end().unwrap();
 }
 
@@ -357,7 +359,11 @@ fn an_ended_stream_is_finished_once_its_items_are_taken() {
     stream.next();
     assert!(stream.finished());
     ui.end().unwrap();
-    assert_eq!(feed.live.load(Ordering::SeqCst), 0, "an ended stream is dropped");
+    assert_eq!(
+        feed.live.load(Ordering::SeqCst),
+        0,
+        "an ended stream is dropped"
+    );
 }
 
 /// One step of the stream model.

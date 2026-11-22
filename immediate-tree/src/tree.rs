@@ -1,4 +1,4 @@
-//! The retained node tree, free of WinUI types.
+//! The retained node tree.
 
 use std::{
     collections::HashMap,
@@ -14,7 +14,7 @@ use std::{
 /// [`close`](Self::close) keeps this true by dropping, with its subtree, any old child its parent did not visit this pass.
 /// A node visited without building its children (a cache hit) keeps them. A pass therefore
 /// costs work in proportion to the containers it closes, not the tree's size.
-pub(crate) struct Tree<P> {
+pub struct Tree<P> {
     slots: Vec<Slot<P>>,
     free: Vec<u32>,
     by_key: HashMap<Key, NodeId, BuildHasherDefault<KeyHasher>>,
@@ -30,7 +30,7 @@ pub(crate) struct Tree<P> {
 
 impl<P> Tree<P> {
     /// A tree holding only the root node, whose payload is `root`.
-    pub(crate) fn new(root: P) -> Self {
+    pub fn new(root: P) -> Self {
         let mut tree = Tree {
             slots: Vec::new(),
             free: Vec::new(),
@@ -47,12 +47,12 @@ impl<P> Tree<P> {
         tree
     }
 
-    pub(crate) fn root(&self) -> NodeId {
+    pub fn root(&self) -> NodeId {
         self.root
     }
 
     /// Starts a pass and returns its number. The root counts as visited.
-    pub(crate) fn begin_pass(&mut self) -> u32 {
+    pub fn begin_pass(&mut self) -> u32 {
         if self.pass == u32::MAX {
             // Restart the count so no stale stamp can equal a new pass.
             for node in self.slots.iter_mut().filter_map(|slot| slot.node.as_mut()) {
@@ -75,7 +75,7 @@ impl<P> Tree<P> {
     /// which happens when two siblings use the same id. Panics when `key`
     /// belongs to a node under another parent, which only a hash collision
     /// can cause.
-    pub(crate) fn visit(
+    pub fn visit(
         &mut self,
         parent: NodeId,
         key: Key,
@@ -107,12 +107,7 @@ impl<P> Tree<P> {
     /// Makes `visited` the children of `parent` and drops every old child not
     /// visited this pass, with its subtree, passing each dropped payload to
     /// `on_drop`. Leaves `visited` empty, holding the old list's capacity.
-    pub(crate) fn close(
-        &mut self,
-        parent: NodeId,
-        visited: &mut Vec<NodeId>,
-        mut on_drop: impl FnMut(P),
-    ) {
+    pub fn close(&mut self, parent: NodeId, visited: &mut Vec<NodeId>, mut on_drop: impl FnMut(P)) {
         std::mem::swap(&mut self.node_mut(parent).children, visited);
         let pass = self.pass;
         let mut stack = std::mem::take(&mut self.drop_stack);
@@ -137,10 +132,10 @@ impl<P> Tree<P> {
     /// Creates the node `key` under `parent` outside the parent's build, and
     /// appends it to the parent's children at once, so it stays reachable
     /// until the parent's next [`close`](Self::close) lists it. Used for rows
-    /// that WinUI asks for during layout.
+    /// that a toolkit asks for during layout.
     ///
     /// Panics when `key` is already live.
-    pub(crate) fn adopt(&mut self, parent: NodeId, key: Key, payload: P) -> NodeId {
+    pub fn adopt(&mut self, parent: NodeId, key: Key, payload: P) -> NodeId {
         assert!(self.find(key).is_none(), "key {key:?} is already live");
         let id = self.insert(key, Some(parent), payload);
         self.node_mut(parent).children.push(id);
@@ -148,7 +143,7 @@ impl<P> Tree<P> {
     }
 
     /// Marks `id` and its ancestors as having an event this pass.
-    pub(crate) fn mark_event(&mut self, id: NodeId) {
+    pub fn mark_event(&mut self, id: NodeId) {
         let pass = self.pass;
         let mut current = Some(id);
         while let Some(id) = current {
@@ -162,27 +157,27 @@ impl<P> Tree<P> {
     }
 
     /// Whether an event targeted `id` or a node under it this pass.
-    pub(crate) fn has_event(&self, id: NodeId) -> bool {
+    pub fn has_event(&self, id: NodeId) -> bool {
         self.node(id).event_stamp == self.pass
     }
 
     /// An empty child list, reusing a spare one when there is one.
-    pub(crate) fn take_list(&mut self) -> Vec<NodeId> {
+    pub fn take_list(&mut self) -> Vec<NodeId> {
         self.spare_lists.pop().unwrap_or_default()
     }
 
     /// Returns a list to the spare pool. It must be empty.
-    pub(crate) fn recycle_list(&mut self, list: Vec<NodeId>) {
+    pub fn recycle_list(&mut self, list: Vec<NodeId>) {
         debug_assert!(list.is_empty());
         self.spare_lists.push(list);
     }
 
-    pub(crate) fn find(&self, key: Key) -> Option<NodeId> {
+    pub fn find(&self, key: Key) -> Option<NodeId> {
         self.by_key.get(&key).copied()
     }
 
     /// The node `id` names, or [`None`] when it was dropped.
-    pub(crate) fn get(&self, id: NodeId) -> Option<&Node<P>> {
+    pub fn get(&self, id: NodeId) -> Option<&Node<P>> {
         let slot = self.slots.get(id.index as usize)?;
         if slot.generation != id.generation {
             return None;
@@ -192,20 +187,20 @@ impl<P> Tree<P> {
 
     /// Panics when `id` was dropped; [`node_mut`](Self::node_mut) and
     /// [`children`](Self::children) do too.
-    pub(crate) fn node(&self, id: NodeId) -> &Node<P> {
+    pub fn node(&self, id: NodeId) -> &Node<P> {
         self.get(id)
-            .expect("node ids held by the crate stay live until dropped")
+            .expect("node ids held by a platform crate stay live until dropped")
     }
 
-    pub(crate) fn node_mut(&mut self, id: NodeId) -> &mut Node<P> {
+    pub fn node_mut(&mut self, id: NodeId) -> &mut Node<P> {
         let slot = &mut self.slots[id.index as usize];
         assert!(slot.generation == id.generation, "stale node id");
         slot.node
             .as_mut()
-            .expect("node ids held by the crate stay live until dropped")
+            .expect("node ids held by a platform crate stay live until dropped")
     }
 
-    pub(crate) fn children(&self, id: NodeId) -> &[NodeId] {
+    pub fn children(&self, id: NodeId) -> &[NodeId] {
         &self.node(id).children
     }
 
@@ -259,7 +254,7 @@ impl<P> Tree<P> {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Visit {
+pub enum Visit {
     Created,
     Existing,
 }
@@ -271,10 +266,10 @@ pub struct Key(u64);
 
 impl Key {
     /// The key of the tree's root node.
-    pub(crate) const ROOT: Key = Key(0);
+    pub const ROOT: Key = Key(0);
 
     /// The key of the child `id` of the node keyed `parent`.
-    pub(crate) fn child(parent: Key, id: impl Hash) -> Key {
+    pub fn child(parent: Key, id: impl Hash) -> Key {
         // Fixed seeds: keys only need to be stable within one process, and
         // fixed seeds make them reproducible in tests.
         const HASHER: ahash::RandomState = ahash::RandomState::with_seeds(
@@ -290,14 +285,14 @@ impl Key {
 /// Names a node only while `generation` equals its slot's generation, so an
 /// id kept after its node was dropped never reads a later node.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) struct NodeId {
+pub struct NodeId {
     index: u32,
     generation: NonZeroU32,
 }
 
 const _: () = assert!(size_of::<Option<NodeId>>() == size_of::<NodeId>());
 
-pub(crate) struct Node<P> {
+pub struct Node<P> {
     key: Key,
     /// Only [`Tree::mark_event`] reads it, to stamp ancestors.
     parent: Option<NodeId>,
@@ -307,11 +302,11 @@ pub(crate) struct Node<P> {
     event_stamp: u32,
     /// Children in build order, as of the last pass that closed this node.
     children: Vec<NodeId>,
-    pub(crate) payload: P,
+    pub payload: P,
 }
 
 impl<P> Node<P> {
-    pub(crate) fn key(&self) -> Key {
+    pub fn key(&self) -> Key {
         self.key
     }
 }
@@ -342,10 +337,10 @@ impl Hasher for KeyHasher {
     }
 }
 
-#[cfg(test)]
+#[doc(hidden)]
 impl NodeId {
     /// An id for tests that never touch a tree, such as child-list diffs.
-    pub(crate) fn for_test(index: u32) -> Self {
+    pub fn for_test(index: u32) -> Self {
         NodeId {
             index,
             generation: NonZeroU32::MIN,
@@ -353,10 +348,10 @@ impl NodeId {
     }
 }
 
-#[cfg(test)]
+#[doc(hidden)]
 impl<P> Tree<P> {
     /// Ids of every live node.
-    pub(crate) fn live(&self) -> Vec<NodeId> {
+    pub fn live(&self) -> Vec<NodeId> {
         self.slots
             .iter()
             .enumerate()
@@ -368,11 +363,11 @@ impl<P> Tree<P> {
             .collect()
     }
 
-    pub(crate) fn key_count(&self) -> usize {
+    pub fn key_count(&self) -> usize {
         self.by_key.len()
     }
 
-    pub(crate) fn parent(&self, id: NodeId) -> Option<NodeId> {
+    pub fn parent(&self, id: NodeId) -> Option<NodeId> {
         self.node(id).parent
     }
 }

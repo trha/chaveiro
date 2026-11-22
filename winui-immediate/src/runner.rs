@@ -1,12 +1,6 @@
 //! The app interface and the loop that runs passes on the UI thread.
 
-use crate::{
-    bindings::*,
-    pass::Ui,
-    startup,
-    tree::NodeId,
-    widget::index_source,
-};
+use crate::{bindings::*, pass::Ui, startup, tree::NodeId, widget::index_source};
 use std::{
     cell::{Cell, RefCell},
     rc::Rc,
@@ -48,7 +42,8 @@ pub fn run<A: App>(make: impl 'static + FnOnce() -> Result<A>) -> Result<()> {
             // Built once, so a wake allocates nothing in Rust. A delegate is
             // not `Send`, so a wake on another thread reaches it through an
             // agile reference.
-            let handler = windows_core::AgileReference::new(&DispatcherQueueHandler::new(turn_current))?;
+            let handler =
+                windows_core::AgileReference::new(&DispatcherQueueHandler::new(turn_current))?;
             move || {
                 handler
                     .resolve()

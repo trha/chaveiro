@@ -3,20 +3,16 @@
 
 use crate::{
     bindings::*,
-    children::{Edit, edits},
     events::{EventSet, Events},
-    tree::{Key, NodeId, Tree, Visit},
-    widget::{Control, FlowNode, StreamNode, TaskNode, TaskWakes},
+    widget::Control,
 };
-use std::{any::Any, hash::Hash, rc::Rc};
+use immediate_tree::{Core, Edit, Node, NodeId, Shell, Tree, Visit, edits};
+use std::{hash::Hash, rc::Rc};
 use windows_core::{IInspectable, Interface, Result};
 
 /// Builds the UI. The app gets it in [`App::view`](crate::App::view).
 pub struct Ui {
-    pub(crate) tree: Tree<Payload>,
-    /// Mirrors the call stack of open containers: the root frame at the
-    /// bottom during a pass, and no frame between passes.
-    frames: Vec<Frame>,
+    pub(crate) core: Core<NativeNode>,
     pub(crate) events: Events,
     /// Reused buffer for formatting labels before comparing them.
     pub(crate) scratch: String,
@@ -29,21 +25,9 @@ pub struct Ui {
     /// focus them, for the same reason: WinUI builds a row that does not
     /// exist yet.
     pub(crate) reveals: Vec<(ItemsRepeater, usize, bool)>,
-    /// Set by [`request_pass`](Self::request_pass) during a pass.
-    pass_requested: bool,
-
-    /// Shared with the waker of every task node.
-    pub(crate) tasks: std::sync::Arc<TaskWakes>,
 }
 
 impl Ui {
-    /// A UI whose tasks never post a turn, for tests that drive passes by
-    /// hand.
-    #[cfg(test)]
-    pub(crate) fn new(wake: Rc<dyn Fn()>) -> Self {
-        Ui::with_task_post(wake, || true)
-    }
-
     /// A UI whose events call `wake`, and whose woken tasks call `post`
     /// from any thread to ask for a turn.
     pub(crate) fn with_task_post(
@@ -51,15 +35,12 @@ impl Ui {
         post: impl 'static + Send + Sync + Fn() -> bool,
     ) -> Self {
         Ui {
-            tasks: TaskWakes::new(post),
-            tree: Tree::new(Payload::Root),
-            frames: Vec::new(),
+            core: Core::new(post),
             events: Events::new(wake),
             scratch: String::new(),
             lists: Vec::new(),
             sources: Vec::new(),
             reveals: Vec::new(),
-            pass_requested: false,
         }
     }
 
@@ -68,23 +49,29 @@ impl Ui {
     /// action a list row found that the next view applies. Without it, the
     /// window shows the old state until the next event or woken task.
     pub fn request_pass(&mut self) {
-        self.pass_requested = true;
+        self.core.request_pass();
     }
-
 
     /// Whether this pass asked for another one, and forgets it.
     pub(crate) fn take_pass_request(&mut self) -> bool {
-        std::mem::take(&mut self.pass_requested)
+        self.core.take_pass_request()
+    }
+
+    /// Polls every task and stream woken since the last turn. Called by the
+    /// runner at the start of a turn.
+    pub(crate) fn poll_woken_tasks(&mut self) {
+        // Woken or not, the runner runs the turn's passes.
+        self.core.poll_woken_tasks();
     }
 
     /// Starts a pass. Returns whether events arrived since the last one.
     pub(crate) fn begin(&mut self) -> bool {
-        debug_assert!(self.frames.is_empty(), "the last pass closed its frames");
+        debug_assert!(self.core.depth() == 0, "the last pass closed its frames");
         self.lists.clear();
-        self.tree.begin_pass();
-        let consumed = self.events.begin_pass(&mut self.tree);
-        let root = self.tree.root();
-        self.open(root);
+        self.core.tree.begin_pass();
+        let consumed = self.events.begin_pass(&mut self.core.tree);
+        let root = self.core.tree.root();
+        self.core.open(root);
         consumed
     }
 
@@ -92,10 +79,13 @@ impl Ui {
     /// Returns the number of open windows; tasks at the root do not count.
     pub(crate) fn end(&mut self) -> Result<usize> {
         self.close()?;
-        let root = self.tree.root();
-        for index in 0..self.tree.children(root).len() {
-            let node = self.tree.children(root)[index];
-            if let Payload::Window(window) = &mut self.tree.node_mut(node).payload {
+        let tree = &mut self.core.tree;
+        let root = tree.root();
+        for index in 0..tree.children(root).len() {
+            let node = tree.children(root)[index];
+            if let Node::Native(NativeNode(Payload::Window(window))) =
+                &mut tree.node_mut(node).payload
+            {
                 // A window shows after its first pass, or after its first fit
                 // when it fits its content, so no resize is seen.
                 if window.cloaked && !(window.fit && !window.fitted_once) {
@@ -104,11 +94,15 @@ impl Ui {
                 }
             }
         }
-        let windows = self
-            .tree
+        let windows = tree
             .children(root)
             .iter()
-            .filter(|node| matches!(self.tree.node(**node).payload, Payload::Window(_)))
+            .filter(|node| {
+                matches!(
+                    tree.node(**node).payload,
+                    Node::Native(NativeNode(Payload::Window(_)))
+                )
+            })
             .count();
         Ok(windows)
     }
@@ -116,56 +110,29 @@ impl Ui {
     /// Closes every window, as a pass that declares none would. Used after a
     /// failed pass, which may have left frames open.
     pub(crate) fn close_all(&mut self) {
-        self.unwind(0);
-        self.tree.begin_pass();
-        let root = self.tree.root();
-        let mut nothing = self.tree.take_list();
-        let events = &mut self.events;
-        self.tree
-            .close(root, &mut nothing, |payload| release(events, payload));
-        self.tree.recycle_list(nothing);
+        immediate_tree::close_all(self);
     }
 
     /// The number of open containers, for [`unwind`](Self::unwind).
     pub(crate) fn depth(&self) -> usize {
-        self.frames.len()
+        self.core.depth()
     }
 
     /// Closes the containers opened after `depth`, innermost first, after a
-    /// build failed inside them. Closing attaches every node they visited to
-    /// its parent, so no node is left live but unreachable; a skipped
-    /// discard would leave such orphans in the tree.
+    /// build failed inside them.
     pub(crate) fn unwind(&mut self, depth: usize) {
-        while self.frames.len() > depth {
-            // The build already failed with the error the caller returns; a
-            // second WinUI error while closing changes nothing for it, and
-            // the frame is popped either way.
-            let _ = self.close();
-        }
+        immediate_tree::unwind(self, depth);
     }
 
     /// Opens `node` as the container for the widgets declared next.
     pub(crate) fn open(&mut self, node: NodeId) {
-        let key = self.tree.node(node).key();
-        self.open_with_key(node, key);
+        self.core.open(node);
     }
 
     /// Opens `node` like [`open`](Self::open), but the children's keys
     /// derive from `scope` as well, so a new `scope` makes every child new.
     pub(crate) fn open_scoped(&mut self, node: NodeId, scope: impl Hash) {
-        let key = Key::child(self.tree.node(node).key(), scope);
-        self.open_with_key(node, key);
-    }
-
-    fn open_with_key(&mut self, node: NodeId, key: Key) {
-        let logical = self.tree.take_list();
-        let visual = self.tree.take_list();
-        self.frames.push(Frame {
-            node,
-            key,
-            logical,
-            visual,
-        });
+        self.core.open_scoped(node, scope);
     }
 
     /// Finds or creates the node `id` in the open container and records it
@@ -176,47 +143,34 @@ impl Ui {
         kind: ChildKind,
         create: impl FnOnce() -> Result<Payload>,
     ) -> Result<(NodeId, Visit)> {
-        let frame = self
-            .frames
-            .last()
-            .expect("widgets are declared inside a pass");
-        let key = Key::child(frame.key, id);
-        let parent = frame.node;
-        let created = match self.tree.find(key) {
-            Some(_) => None,
-            None => Some(create()?),
-        };
-        let (node, visit) = self.tree.visit(parent, key, || {
-            created.expect("a payload was created because the key was missing")
-        });
-        let frame = self
-            .frames
-            .last_mut()
-            .expect("widgets are declared inside a pass");
-        frame.logical.push(node);
-        if kind == ChildKind::Visual {
-            frame.visual.push(node);
-        }
-        Ok((node, visit))
+        self.core.try_visit(id, kind, || {
+            create().map(|payload| Node::Native(NativeNode(payload)))
+        })
     }
 
     /// The window the open containers are inside.
     pub(crate) fn enclosing_window(&self) -> NodeId {
-        self.frames
-            .iter()
+        self.core
+            .open_nodes()
             .rev()
-            .map(|frame| frame.node)
-            .find(|&node| matches!(self.tree.node(node).payload, Payload::Window(_)))
+            .find(|&node| {
+                matches!(
+                    self.core.tree.node(node).payload,
+                    Node::Native(NativeNode(Payload::Window(_)))
+                )
+            })
             .expect("controls are declared inside a window")
     }
 
     /// The element of the innermost open control.
     pub(crate) fn enclosing_control(&self) -> UIElement {
-        self.frames
-            .iter()
+        self.core
+            .open_nodes()
             .rev()
-            .find_map(|frame| match &self.tree.node(frame.node).payload {
-                Payload::Control(control) => Some(control.element.clone()),
+            .find_map(|node| match &self.core.tree.node(node).payload {
+                Node::Native(NativeNode(Payload::Control(control))) => {
+                    Some(control.element.clone())
+                }
                 _ => None,
             })
             .expect("a shortcut is declared inside a control")
@@ -225,27 +179,18 @@ impl Ui {
     /// Closes the innermost container: applies its WinUI children, then drops
     /// the children it no longer declares.
     pub(crate) fn close(&mut self) -> Result<()> {
-        let mut frame = self.frames.pop().expect("close matches open");
-        let applied = self.apply_visual(frame.node, &mut frame.visual);
-        let events = &mut self.events;
-        self.tree.close(frame.node, &mut frame.logical, |payload| {
-            release(events, payload)
-        });
-        frame.visual.clear();
-        self.tree.recycle_list(frame.logical);
-        self.tree.recycle_list(frame.visual);
-        applied
+        immediate_tree::close(self)
     }
 
     pub(crate) fn control(&self, node: NodeId) -> &ControlNode {
-        match &self.tree.node(node).payload {
+        match self.core.tree.native(node) {
             Payload::Control(control) => control,
             _ => unreachable!("visual children and widget keys are controls"),
         }
     }
 
     pub(crate) fn control_mut(&mut self, node: NodeId) -> &mut ControlNode {
-        match &mut self.tree.node_mut(node).payload {
+        match self.core.tree.native_mut(node) {
             Payload::Control(control) => control,
             _ => unreachable!("widget keys hold controls"),
         }
@@ -272,9 +217,8 @@ impl Ui {
 
     /// Makes `declared` the WinUI children of `node`. Leaves the previous
     /// list in `declared`.
-    fn apply_visual(&mut self, node: NodeId, declared: &mut Vec<NodeId>) -> Result<()> {
-        match &mut self.tree.node_mut(node).payload {
-            Payload::Root => Ok(()),
+    fn apply_native(&mut self, node: NodeId, declared: &mut Vec<NodeId>) -> Result<()> {
+        match self.core.tree.native_mut(node) {
             Payload::Window(window) => {
                 assert!(
                     declared.len() <= 1,
@@ -379,7 +323,7 @@ impl Ui {
                 let commands = commands.clone();
                 // Afterwards `declared` holds the old list.
                 std::mem::swap(visual, declared);
-                let Payload::Control(control) = &self.tree.node(node).payload else {
+                let Payload::Control(control) = self.core.tree.native(node) else {
                     unreachable!("matched above")
                 };
                 for edit in edits(declared, &control.visual) {
@@ -400,7 +344,7 @@ impl Ui {
             }) => {
                 let items = items.clone();
                 std::mem::swap(visual, declared);
-                let Payload::Control(control) = &self.tree.node(node).payload else {
+                let Payload::Control(control) = self.core.tree.native(node) else {
                     unreachable!("matched above")
                 };
                 self.apply_menu_items(&items, declared, &control.visual)
@@ -421,7 +365,7 @@ impl Ui {
             Payload::Menu(menu) => {
                 let items = menu.items.clone();
                 std::mem::swap(&mut menu.visual, declared);
-                let Payload::Menu(menu) = &self.tree.node(node).payload else {
+                let Payload::Menu(menu) = self.core.tree.native(node) else {
                     unreachable!("matched above")
                 };
                 self.apply_menu_items(&items, declared, &menu.visual)
@@ -441,7 +385,7 @@ impl Ui {
                 let Payload::Control(ControlNode {
                     control: Control::Navigator(navigator),
                     ..
-                }) = &mut self.tree.node_mut(node).payload
+                }) = self.core.tree.native_mut(node)
                 else {
                     unreachable!("matched above")
                 };
@@ -469,42 +413,7 @@ impl Ui {
                 }
                 Ok(())
             }
-            // A cache or a flow has no element: its controls belong to the
-            // parent.
-            Payload::Cache(_) | Payload::Flow(_) => {
-                std::mem::swap(self.emitted_mut(node), declared);
-                self.emit_cached(node);
-                Ok(())
-            }
-            Payload::State(_) => unreachable!("state nodes are never opened"),
             Payload::Shortcut(_) => unreachable!("shortcut nodes are never opened"),
-            Payload::Task(_) | Payload::Stream(_) => {
-                unreachable!("task and stream nodes are never opened")
-            }
-        }
-    }
-
-    /// Adds the controls a cache emitted on its last run to the open
-    /// container, for a pass that skips the cache's body.
-    pub(crate) fn emit_cached(&mut self, node: NodeId) {
-        let emitted = match &self.tree.node(node).payload {
-            Payload::Cache(cache) => &cache.emitted,
-            Payload::Flow(flow) => flow.emitted(),
-            _ => unreachable!("only caches and flows emit controls"),
-        };
-        self.frames
-            .last_mut()
-            .expect("a cache or a flow is declared inside a container")
-            .visual
-            .extend_from_slice(emitted);
-    }
-
-    /// The controls a cache or a flow declared on its last run.
-    fn emitted_mut(&mut self, node: NodeId) -> &mut Vec<NodeId> {
-        match &mut self.tree.node_mut(node).payload {
-            Payload::Cache(cache) => &mut cache.emitted,
-            Payload::Flow(flow) => flow.emitted_mut(),
-            _ => unreachable!("only caches and flows emit controls"),
         }
     }
 
@@ -536,35 +445,63 @@ impl Ui {
     }
 }
 
-/// How a declared node joins its container.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ChildKind {
-    /// A control: it joins the container's WinUI children as well.
-    Visual,
-    /// A node without an element of its own (window, cache, state): it joins
-    /// only the tree.
-    Logical,
+pub(crate) use immediate_tree::ChildKind;
+
+impl Shell for Ui {
+    type Native = NativeNode;
+    type Error = windows_core::Error;
+
+    fn core(&mut self) -> &mut Core<NativeNode> {
+        &mut self.core
+    }
+
+    fn apply_visual(&mut self, node: NodeId, declared: &mut Vec<NodeId>) -> Result<()> {
+        self.apply_native(node, declared)
+    }
+
+    fn release(&mut self, native: NativeNode) {
+        release(&mut self.events, native.0);
+    }
 }
 
+/// Reads the WinUI payload of a node this crate made.
+pub(crate) trait NativeTree {
+    /// Panics when `node` holds a node of `immediate-tree`, such as a cache.
+    fn native(&self, node: NodeId) -> &Payload;
+    fn native_mut(&mut self, node: NodeId) -> &mut Payload;
+}
+
+impl NativeTree for Tree<Node<NativeNode>> {
+    fn native(&self, node: NodeId) -> &Payload {
+        match &self.node(node).payload {
+            Node::Native(NativeNode(native)) => native,
+            _ => unreachable!("widget keys hold WinUI payloads"),
+        }
+    }
+
+    fn native_mut(&mut self, node: NodeId) -> &mut Payload {
+        match &mut self.node_mut(node).payload {
+            Node::Native(NativeNode(native)) => native,
+            _ => unreachable!("widget keys hold WinUI payloads"),
+        }
+    }
+}
+
+/// A WinUI payload, public only because [`Shell`] names it, so apps can
+/// neither name nor read it.
+pub struct NativeNode(pub(crate) Payload);
+
+/// The WinUI nodes. The nodes every platform shares, such as caches and
+/// tasks, are the other variants of [`Node`].
 pub(crate) enum Payload {
-    Root,
     Window(WindowNode),
     Control(ControlNode),
-    Cache(CacheNode),
-    /// UI-only data from [`Ui::state`].
-    State(Box<dyn Any>),
     /// From [`Ui::menu`].
     Menu(Box<MenuNode>),
     /// From [`Ui::shortcut`].
     Shortcut(ShortcutNode),
     /// From [`Ui::flyout`].
     Flyout(Box<FlyoutNode>),
-    /// From [`Ui::task`]. Dropping it drops the future.
-    Task(TaskNode),
-    /// From [`Ui::stream`]. Dropping it drops the stream.
-    Stream(StreamNode),
-    /// From [`Ui::flow`]. Dropping it drops the future and its controls.
-    Flow(Box<FlowNode>),
 }
 
 /// A flyout, shown on its first pass and hidden when its node drops.
@@ -591,15 +528,6 @@ pub(crate) struct MenuNode {
     pub(crate) visual: Vec<NodeId>,
     pub(crate) shown: bool,
     pub(crate) subscribed: EventSet,
-}
-
-pub(crate) struct CacheNode {
-    /// The dependencies of the last run, reassigned in place while their type
-    /// stays the same.
-    pub(crate) deps: Option<Box<dyn Any>>,
-    /// The controls the last run declared, in order, which a skipped run
-    /// declares again for the parent.
-    pub(crate) emitted: Vec<NodeId>,
 }
 
 pub(crate) struct WindowNode {
@@ -706,25 +634,9 @@ impl ControlNode {
     }
 }
 
-/// One open container during a pass.
-struct Frame {
-    node: NodeId,
-    key: Key,
-    /// Nodes declared in it so far, in order.
-    logical: Vec<NodeId>,
-    /// The subset of `logical` that are WinUI children.
-    visual: Vec<NodeId>,
-}
-
 /// Releases what a dropped node holds outside the tree.
 fn release(events: &mut Events, payload: Payload) {
     match payload {
-        Payload::Root
-        | Payload::Cache(_)
-        | Payload::State(_)
-        | Payload::Task(_)
-        | Payload::Stream(_)
-        | Payload::Flow(_) => {}
         Payload::Shortcut(shortcut) => {
             events.forget(&shortcut.accelerator);
             crate::widget::shortcut::release(&shortcut);

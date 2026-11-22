@@ -6,26 +6,30 @@
 #![cfg(windows)]
 
 mod bindings;
-mod children;
 mod events;
 mod pass;
 mod runner;
 mod startup;
-mod tree;
 mod widget;
 
+/// The shared tree, under the paths the widgets used before it moved.
+mod tree {
+    pub(crate) use immediate_tree::{Key, NodeId, Tree, Visit};
+}
+
 pub use events::Key;
+pub use immediate_tree::lend;
 pub use pass::Ui;
 pub use runner::{App, run};
 pub use widget::{
-    Flow, FlowResponse, Frame, Lend, Lent, Owned, OwnedFamily, owned,
     Align, AppBarButtonResponse, ButtonResponse, CODE_LENGTH, CheckBoxResponse, CodeBoxes,
-    CodeDigits, ComboBoxResponse, ContentAlignment, ContentButtonResponse, FieldHandle,
-    FontIconResponse, IconButtonResponse, LabelResponse, Length, LinkResponse, ListId, MenuAnchor,
-    MenuItemResponse, MenuResponse, NavigationEntry, NavigationSelection, NavigationViewResponse,
-    Orientation, Overflow, PasswordField, PasswordHandle, PressableResponse, Response, RowFn,
-    SLIDE_DURATION, SearchBoxResponse, SettingsCard, SettingsCardResponse, Severity, Slide,
-    StreamResponse, TaskResponse, TextBoxResponse, TitleBarResponse, WindowResponse,
+    CodeDigits, ComboBoxResponse, ContentAlignment, ContentButtonResponse, FieldHandle, Flow,
+    FlowResponse, FontIconResponse, IconButtonResponse, LabelResponse, Lend, Length, Lent,
+    LinkResponse, ListId, MenuAnchor, MenuItemResponse, MenuResponse, NavigationEntry,
+    NavigationSelection, NavigationViewResponse, Orientation, Overflow, Owned, OwnedFamily,
+    PasswordField, PasswordHandle, PressableResponse, Response, RowFn, SLIDE_DURATION,
+    SearchBoxResponse, SettingsCard, SettingsCardResponse, Severity, Slide, StreamResponse,
+    TaskResponse, TextBoxResponse, TitleBarResponse, WindowResponse, owned,
 };
 /// The type [Ui::take_password] returns.
 pub use zeroize::Zeroizing;

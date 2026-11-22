@@ -1,0 +1,24 @@
+[package]
+name = "immediate-tree"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+publish = false
+description = "The keyed node tree, caches, tasks and flows shared by the immediate-mode UI crates"
+
+[dependencies]
+# Keys hash with fixed seeds, so no runtime randomness; that also keeps
+# `getrandom` out of a wasm build.
+ahash = { version = "0.8", default-features = false, features = ["std"] }
+futures-core = "0.3"
+
+[dev-dependencies]
+proptest = "1"
+
+# The wake protocol of task nodes runs on loom's atomics under
+# `--cfg loom`; see `src/task/loom_tests.rs`.
+[target.'cfg(loom)'.dependencies]
+loom = "0.7"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(loom)'] }

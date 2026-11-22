@@ -4,7 +4,7 @@ use crate::{
         SizeInt32, VerticalAlignment, Window,
     },
     events::{EventKind, EventSet},
-    pass::{ChildKind, Payload, Ui, WindowNode},
+    pass::{ChildKind, NativeTree, Payload, Ui, WindowNode},
     tree::NodeId,
 };
 use std::hash::Hash;
@@ -49,7 +49,7 @@ impl Ui {
             window.title.clear();
             window.title.push_str(title);
         }
-        let Payload::Window(window) = &mut self.tree.node_mut(node).payload else {
+        let Payload::Window(window) = self.core.tree.native_mut(node) else {
             unreachable!("window keys hold windows")
         };
         self.events.subscribe(
@@ -74,7 +74,7 @@ impl Ui {
     }
 
     fn window_mut(&mut self, node: NodeId) -> &mut WindowNode {
-        match &mut self.tree.node_mut(node).payload {
+        match self.core.tree.native_mut(node) {
             Payload::Window(window) => window,
             _ => unreachable!("window keys hold windows"),
         }
@@ -239,7 +239,7 @@ impl WindowResponse<'_> {
     /// The `AppWindow.Id` value, which window-aware system calls (such as
     /// Windows Hello's `...ForWindowAsync`) take as their owner window.
     pub fn id(&self) -> Result<u64> {
-        match &self.ui.tree.node(self.node).payload {
+        match self.ui.core.tree.native(self.node) {
             Payload::Window(window) => Ok(window.app_window.Id()?.value),
             _ => unreachable!("window keys hold windows"),
         }
@@ -248,7 +248,7 @@ impl WindowResponse<'_> {
     /// The WinUI `Window`, for what this crate does not cover. Cast it with
     /// your own WinUI bindings.
     pub fn window(&self) -> IInspectable {
-        match &self.ui.tree.node(self.node).payload {
+        match self.ui.core.tree.native(self.node) {
             Payload::Window(window) => window.window.clone().into(),
             _ => unreachable!("window keys hold windows"),
         }

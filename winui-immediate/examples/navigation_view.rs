@@ -9,9 +9,7 @@
 #![cfg_attr(not(windows), no_main)]
 #![cfg(windows)]
 
-use winui_immediate::{
-    App, Length, NavigationEntry, NavigationSelection, Orientation, Ui, run,
-};
+use winui_immediate::{App, Length, NavigationEntry, NavigationSelection, Orientation, Ui, run};
 
 fn main() -> windows_core::Result<()> {
     run(|| {

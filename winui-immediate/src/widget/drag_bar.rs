@@ -7,9 +7,10 @@ use crate::{
         AppWindow, FrameworkElement, Grid, InputNonClientPointerSource, NonClientRegionKind, Panel,
         Rect, RectInt32, Thickness, TitleBarHeightOption, UIElement,
     },
-    pass::{ChildKind, ControlNode, Payload, Ui},
+    pass::{ChildKind, ControlNode, NativeNode, NativeTree, Payload, Ui},
     tree::NodeId,
 };
+use immediate_tree::Node;
 use std::{cell::RefCell, hash::Hash, rc::Rc};
 use windows_core::{Interface, Result};
 
@@ -30,7 +31,7 @@ impl Ui {
         body: impl FnOnce(&mut Ui) -> Result<()>,
     ) -> Result<Response<'_>> {
         let window = self.enclosing_window();
-        let Payload::Window(window_node) = &self.tree.node(window).payload else {
+        let Payload::Window(window_node) = self.core.tree.native(window) else {
             unreachable!("enclosing_window returns a window")
         };
         let app_window = window_node.app_window.clone();
@@ -81,7 +82,7 @@ impl Ui {
         self.close()?;
         self.collect_clickable(node);
         let element = self.control(node).element.clone();
-        let Payload::Window(window) = &mut self.tree.node_mut(window).payload else {
+        let Payload::Window(window) = self.core.tree.native_mut(window) else {
             unreachable!("enclosing_window returns a window")
         };
         if window.title_bar != Some(node) {
@@ -110,7 +111,8 @@ impl Ui {
         found.clear();
         walk.push(bar);
         while let Some(node) = walk.pop() {
-            if let Payload::Control(control) = &self.tree.node(node).payload
+            if let Node::Native(NativeNode(Payload::Control(control))) =
+                &self.core.tree.node(node).payload
                 && node != bar
                 && control.control.takes_input()
             {
@@ -118,7 +120,7 @@ impl Ui {
                 continue;
             }
             // Children in reverse, so the walk visits them in order.
-            walk.extend(self.tree.children(node).iter().rev());
+            walk.extend(self.core.tree.children(node).iter().rev());
         }
         if *found != *nodes {
             std::mem::swap(found, nodes);

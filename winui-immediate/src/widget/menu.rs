@@ -14,9 +14,10 @@ use crate::{
         ToggleMenuFlyoutItem, TypeKind, TypeName,
     },
     events::EventKind,
-    pass::{ChildKind, ControlNode, FlyoutNode, MenuNode, Payload, Ui},
+    pass::{ChildKind, ControlNode, FlyoutNode, MenuNode, NativeNode, NativeTree, Payload, Ui},
     tree::NodeId,
 };
+use immediate_tree::Node;
 use std::{
     hash::Hash,
     ops::{Deref, DerefMut},
@@ -49,7 +50,7 @@ impl Ui {
                 subscribed: Default::default(),
             })))
         })?;
-        let Payload::Menu(menu) = &mut self.tree.node_mut(node).payload else {
+        let Payload::Menu(menu) = self.core.tree.native_mut(node) else {
             unreachable!("menu keys hold menus")
         };
         let flyout = menu.flyout.clone();
@@ -59,14 +60,14 @@ impl Ui {
         body(self)?;
         self.close()?;
         let mut closed = self.events.happened(node, EventKind::FlyoutClosed);
-        let Payload::Menu(menu) = &self.tree.node(node).payload else {
+        let Payload::Menu(menu) = self.core.tree.native(node) else {
             unreachable!("menu keys hold menus")
         };
         if !menu.shown {
             if !self.show_at(&flyout.cast()?, anchor)? {
                 closed = true;
             }
-            let Payload::Menu(menu) = &mut self.tree.node_mut(node).payload else {
+            let Payload::Menu(menu) = self.core.tree.native_mut(node) else {
                 unreachable!("menu keys hold menus")
             };
             menu.shown = true;
@@ -101,7 +102,7 @@ impl Ui {
                 subscribed: Default::default(),
             })))
         })?;
-        let Payload::Flyout(popup) = &mut self.tree.node_mut(node).payload else {
+        let Payload::Flyout(popup) = self.core.tree.native_mut(node) else {
             unreachable!("flyout keys hold flyouts")
         };
         let flyout = popup.flyout.clone();
@@ -115,14 +116,14 @@ impl Ui {
         body(self)?;
         self.close()?;
         let mut closed = self.events.happened(node, EventKind::FlyoutClosed);
-        let Payload::Flyout(popup) = &self.tree.node(node).payload else {
+        let Payload::Flyout(popup) = self.core.tree.native(node) else {
             unreachable!("flyout keys hold flyouts")
         };
         if !popup.shown {
             if !self.show_at(&flyout.cast()?, anchor)? {
                 closed = true;
             }
-            let Payload::Flyout(popup) = &mut self.tree.node_mut(node).payload else {
+            let Payload::Flyout(popup) = self.core.tree.native_mut(node) else {
                 unreachable!("flyout keys hold flyouts")
             };
             popup.shown = true;
@@ -133,7 +134,8 @@ impl Ui {
     /// Shows `flyout` at `anchor`. Gives false when the anchor's control
     /// is gone, and nothing shows.
     fn show_at(&self, flyout: &FlyoutBase, anchor: MenuAnchor) -> Result<bool> {
-        let Some(Payload::Control(control)) = self.tree.get(anchor.node).map(|node| &node.payload)
+        let Some(Node::Native(NativeNode(Payload::Control(control)))) =
+            self.core.tree.get(anchor.node).map(|node| &node.payload)
         else {
             return Ok(false);
         };

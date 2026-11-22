@@ -88,8 +88,9 @@ enum Details {
 impl App for Vault {
     fn view(&mut self, ui: &mut Ui) -> Result<()> {
         if self.ticking {
-            let mut ticks =
-                ui.stream("tick", || winui_executor::interval(Duration::from_millis(10)));
+            let mut ticks = ui.stream("tick", || {
+                winui_executor::interval(Duration::from_millis(10))
+            });
             while ticks.next().is_some() {}
         }
         if let Some(bench) = &mut self.bench

@@ -38,7 +38,10 @@ fn a_wake_during_a_turn_is_never_lost() {
         let seen = done.load(Ordering::Relaxed);
         completer.join().unwrap();
         let listed_again = !shared.take_woken().is_empty();
-        assert!(seen || listed_again, "the poll missed the state and nothing listed the task again");
+        assert!(
+            seen || listed_again,
+            "the poll missed the state and nothing listed the task again"
+        );
     });
 }
 

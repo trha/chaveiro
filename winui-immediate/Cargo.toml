@@ -9,6 +9,7 @@ description = "An immediate-mode UI over the WinUI 3 retained tree"
 [target.'cfg(windows)'.dependencies]
 ahash = "0.8"
 futures-core = "0.3"
+immediate-tree = { path = "../immediate-tree" }
 tracing = "0.1"
 windows-collections = { version = "0.100.0", features = ["std"] }
 windows-core = "0.100.0"

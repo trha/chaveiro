@@ -3,7 +3,7 @@ use crate::{
         KeyboardAccelerator, KeyboardAcceleratorPlacementMode, VirtualKey, VirtualKeyModifiers,
     },
     events::EventKind,
-    pass::{ChildKind, Payload, ShortcutNode, Ui},
+    pass::{ChildKind, NativeTree, Payload, ShortcutNode, Ui},
 };
 use std::hash::Hash;
 use windows_core::Result;
@@ -42,14 +42,14 @@ impl Ui {
                 subscribed: Default::default(),
             }))
         })?;
-        let Payload::Shortcut(shortcut) = &mut self.tree.node_mut(node).payload else {
+        let Payload::Shortcut(shortcut) = self.core.tree.native_mut(node) else {
             unreachable!("shortcut keys hold shortcuts")
         };
         let accelerator = shortcut.accelerator.clone();
         let mut subscribed = shortcut.subscribed;
         self.events
             .subscribe(node, &mut subscribed, &accelerator, EventKind::Invoked)?;
-        let Payload::Shortcut(shortcut) = &mut self.tree.node_mut(node).payload else {
+        let Payload::Shortcut(shortcut) = self.core.tree.native_mut(node) else {
             unreachable!("shortcut keys hold shortcuts")
         };
         shortcut.subscribed = subscribed;

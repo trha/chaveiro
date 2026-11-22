@@ -7,11 +7,12 @@ use crate::{
         UIElement,
     },
     events::{self, EventKind},
-    pass::{ChildKind, ControlNode, Payload, Ui},
+    pass::{ChildKind, ControlNode, NativeNode, Payload, Ui},
     runner,
     tree::{Key, NodeId, Visit},
 };
 use ahash::AHashMap;
+use immediate_tree::Node;
 use std::{any::Any, hash::Hash, rc::Rc};
 use windows_core::{ComObject, IInspectable, Interface, Ref, Result, implement_decl};
 
@@ -193,7 +194,7 @@ impl Ui {
         // current; a reused row's controls carry them. A fresh pass number
         // lets the row be built again. Nothing else reads stamps between
         // passes.
-        self.tree.begin_pass();
+        self.core.tree.begin_pass();
         let (node, slot) = match self.list_data_mut(list).free.pop() {
             Some(free) => free,
             None => {
@@ -205,9 +206,14 @@ impl Ui {
                 shell
                     .cast::<XamlControl>()?
                     .SetHorizontalContentAlignment(HorizontalAlignment::Stretch)?;
-                let key = Key::child(self.tree.node(list).key(), ("row", slot));
+                let key = Key::child(self.core.tree.node(list).key(), ("row", slot));
                 let payload = ControlNode::new(shell.cast()?, Control::Row { content: None });
-                (self.tree.adopt(list, key, payload), slot)
+                (
+                    self.core
+                        .tree
+                        .adopt(list, key, Node::Native(NativeNode(payload))),
+                    slot,
+                )
             }
         };
         let depth = self.depth();
@@ -243,11 +249,11 @@ impl Ui {
     /// pass dropped it.
     pub(crate) fn is_list(&self, list: NodeId) -> bool {
         matches!(
-            self.tree.get(list).map(|node| &node.payload),
-            Some(Payload::Control(ControlNode {
+            self.core.tree.get(list).map(|node| &node.payload),
+            Some(Node::Native(NativeNode(Payload::Control(ControlNode {
                 control: Control::List { .. },
                 ..
-            }))
+            }))))
         )
     }
 

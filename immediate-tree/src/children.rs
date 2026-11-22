@@ -6,7 +6,7 @@ use crate::tree::NodeId;
 /// in place. Apply them in order: each index refers to the collection as the
 /// earlier edits left it. Both lists must hold unique ids. Equal lists yield
 /// no edits.
-pub(crate) fn edits(old: &[NodeId], new: &[NodeId]) -> impl Iterator<Item = Edit> {
+pub fn edits(old: &[NodeId], new: &[NodeId]) -> impl Iterator<Item = Edit> {
     let prefix = old
         .iter()
         .zip(new)
@@ -30,7 +30,7 @@ pub(crate) fn edits(old: &[NodeId], new: &[NodeId]) -> impl Iterator<Item = Edit
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Edit {
+pub enum Edit {
     RemoveAt(u32),
     InsertAt(u32, NodeId),
 }

@@ -1,4 +1,7 @@
-use crate::{pass::Ui, tree::Key};
+use crate::{
+    testing::{TestError, Ui, ui},
+    tree::Key,
+};
 use proptest::prelude::*;
 use std::{cell::Cell, rc::Rc};
 
@@ -19,7 +22,7 @@ proptest! {
             1..20,
         )
     ) {
-        let mut ui = Ui::new(Rc::new(|| {}));
+        let mut ui = ui();
         let runs = Rc::new(Cell::new(0));
         // The model: the deps of the last run, or None when the node is gone.
         let mut alive: Option<u8> = None;
@@ -49,7 +52,7 @@ proptest! {
 
 #[test]
 fn state_inside_a_cache_survives_skipped_runs_and_dies_with_the_cache() {
-    let mut ui = Ui::new(Rc::new(|| {}));
+    let mut ui = ui();
     let pass = |ui: &mut Ui, declared: bool, deps: u8| -> u32 {
         let mut seen = 0;
         ui.begin();
@@ -86,7 +89,7 @@ fn state_inside_a_cache_survives_skipped_runs_and_dies_with_the_cache() {
 
 #[test]
 fn state_keyed_by_its_inputs_recomputes_only_when_they_change() {
-    let mut ui = Ui::new(Rc::new(|| {}));
+    let mut ui = ui();
     let computed = Cell::new(0);
     let pass = |ui: &mut Ui, input: u32| -> u32 {
         ui.begin();
@@ -112,12 +115,12 @@ fn state_keyed_by_its_inputs_recomputes_only_when_they_change() {
 }
 #[test]
 fn a_failed_build_leaves_no_node_behind() {
-    let mut ui = Ui::new(Rc::new(|| {}));
+    let mut ui = ui();
     ui.begin();
     let failed = ui.cached("cache", 1u8, |ui| {
         ui.cached("inner", 2u8, |ui| {
             ui.state("count", || 0u32)?;
-            Err(windows_core::Error::empty())
+            Err(TestError("inner failed"))
         })
     });
     assert!(failed.is_err());
@@ -130,4 +133,23 @@ fn a_failed_build_leaves_no_node_behind() {
 /// The key of the state node inside the cache in the model test.
 fn inner_key() -> Key {
     Key::child(Key::child(Key::ROOT, "cache"), "inner")
+}
+
+#[test]
+fn a_panicking_build_leaves_no_node_behind() {
+    let mut ui = ui();
+    ui.begin();
+    let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        ui.cached("cache", 1u8, |ui| {
+            ui.cached("inner", 2u8, |ui| {
+                ui.state("count", || 0u32)?;
+                panic!("a planned failure inside two open caches");
+            })
+        })
+    }));
+    assert!(failed.is_err());
+    ui.close_all();
+    ui.begin();
+    ui.end().expect("no toolkit call can fail here");
+    assert_eq!(ui.tree.live().len(), 1, "only the root is left");
 }

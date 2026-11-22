@@ -1,4 +1,8 @@
-use crate::{Flow, Owned, owned, pass::Ui, tree::Key};
+use crate::{
+    Flow, Owned, OwnedFamily, owned,
+    testing::{TestError, Ui, ui},
+    tree::Key,
+};
 use proptest::prelude::*;
 use std::{
     cell::Cell,
@@ -7,11 +11,6 @@ use std::{
     rc::Rc,
     task::{Context, Poll},
 };
-use windows_core::{Error, HRESULT};
-
-fn ui() -> Ui {
-    Ui::new(Rc::new(|| {}))
-}
 
 /// The key of the state node `id` that a frame of the flow `"flow"`
 /// declares at the root.
@@ -44,7 +43,7 @@ impl Drop for DropFlag {
 #[test]
 #[should_panic(expected = "Flow::frame is polled only inside Ui::flow")]
 fn a_frame_outside_a_flow_panics() {
-    let flow: Flow<crate::OwnedFamily<()>> = Flow {
+    let flow: Flow<OwnedFamily<()>, Ui> = Flow {
         family: std::marker::PhantomData,
     };
     let mut frame = flow.frame(|_, _| Ok(Some(())));
@@ -98,7 +97,7 @@ fn a_poll_that_draws_nothing_keeps_the_last_controls() {
 fn a_completed_frame_draws_the_next_step_in_the_next_pass() {
     let mut ui = ui();
     let mut unit = ();
-    let start = |flow: Flow<crate::OwnedFamily<()>>| async move {
+    let start = |flow: Flow<OwnedFamily<()>, Ui>| async move {
         flow.frame(|ui, _| {
             ui.state("first", || ())?;
             Ok(Some(()))
@@ -115,7 +114,10 @@ fn a_completed_frame_draws_the_next_step_in_the_next_pass() {
     assert!(ui.take_pass_request(), "the next step asks for a pass");
     ui.end().unwrap();
     assert!(ui.tree.find(inner("first")).is_some());
-    assert!(ui.tree.find(inner("second")).is_none(), "one frame per pass");
+    assert!(
+        ui.tree.find(inner("second")).is_none(),
+        "one frame per pass"
+    );
 
     ui.begin();
     ui.flow("flow", owned(&mut unit), start).unwrap();
@@ -149,7 +151,10 @@ fn leaving_a_flow_out_drops_its_future_and_controls() {
     ui.begin();
     ui.end().unwrap();
     assert!(dropped.get(), "the future is dropped");
-    assert!(ui.tree.find(inner("inner")).is_none(), "its controls are dropped");
+    assert!(
+        ui.tree.find(inner("inner")).is_none(),
+        "its controls are dropped"
+    );
 }
 
 #[test]
@@ -158,19 +163,18 @@ fn a_draw_error_comes_out_of_flow() {
     let mut unit = ();
     ui.begin();
     let result = ui.flow("flow", owned(&mut unit), |flow| async move {
-        flow.frame(|_, _| Err::<Option<()>, _>(Error::new(HRESULT(-1), "draw failed")))
+        flow.frame(|_, _| Err::<Option<()>, _>(TestError("draw failed")))
             .await;
     });
-    assert_eq!(result.err().map(|error| error.message()), Some("draw failed".to_owned()));
+    assert_eq!(result.err(), Some(TestError("draw failed")));
 }
 
 #[test]
 fn the_output_is_taken_once() {
     let mut ui = ui();
     let mut unit = ();
-    let start = |flow: Flow<crate::OwnedFamily<()>>| async move {
-        flow.frame(|_, _| Ok(Some(7u32))).await
-    };
+    let start =
+        |flow: Flow<OwnedFamily<()>, Ui>| async move { flow.frame(|_, _| Ok(Some(7u32))).await };
     ui.begin();
     let mut response = ui.flow("flow", owned(&mut unit), start).unwrap();
     assert!(!response.running());
@@ -229,4 +233,29 @@ proptest! {
             prop_assert_eq!(count as usize, pass + 1);
         }
     }
+}
+
+#[test]
+#[should_panic(expected = "a frame is polled only inside a flow of its own family and shell")]
+fn a_frame_carried_into_a_flow_of_another_family_panics() {
+    let mut ui = ui();
+    let mut unit = ();
+    let mut count = 0u32;
+    let carried: Rc<Cell<Option<Flow<OwnedFamily<()>, Ui>>>> = Rc::new(Cell::new(None));
+    ui.begin();
+    // The first flow hands its `Flow` out; the second polls a frame of it,
+    // which would read the `u32` lent here as a `()`.
+    ui.flow("unit", owned(&mut unit), {
+        let carried = Rc::clone(&carried);
+        move |flow| async move {
+            carried.set(Some(flow));
+            pending::<()>().await;
+        }
+    })
+    .unwrap();
+    ui.flow("count", owned(&mut count), move |_| async move {
+        let flow = carried.take().expect("the first flow ran");
+        flow.frame(|_, _| Ok(Some(()))).await;
+    })
+    .unwrap();
 }

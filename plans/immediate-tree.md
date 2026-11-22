@@ -1,6 +1,7 @@
 # immediate-tree: the core shared by winui-immediate and appkit-immediate
 
-Status: draft API. Not compiled.
+Status: spikes 1 to 4 done on 2026-11-22. See "Spike results" for where the
+code differs from the draft above.
 
 ## Goal
 
@@ -283,3 +284,46 @@ Platform work, none of it in the core:
 4. A minimal `dom-immediate`: `Shell` over `web-sys`, a stack, a label, a
    button and a text input, with one task, run in a browser. It shows
    whether the re-entry and caret handling fit the platform side alone.
+
+## Spike results
+
+All four spikes build and pass their tests.
+
+- Windows: `immediate-tree` (36 tests, 2 loom tests), `winui-immediate` (19
+  tests, 2 `compile_fail` docs), `chaveiro-winui`. Four winui examples start
+  and keep running.
+- Mac (rmac `~/ws/chaveiro`, a new jj change on top of the working copy):
+  `appkit-immediate`, ported from the mac copy, and `chaveiro-appkit` build
+  with all targets. Tests and loom tests pass. Four examples run with the
+  idle pass check on.
+- `cargo check --target wasm32-unknown-unknown -p immediate-tree` is clean.
+- `dom-immediate/spike/run.ps1` runs the DOM spike in headless Edge. Clicks,
+  typing, a kept caret, a blur, a task on `setTimeout` and a two-step flow
+  all show in the page. Removing the focused input fires `blur` inside the
+  pass, and the queue absorbs it.
+
+Where the code differs from the draft:
+
+- `state`, `task`, `stream` and `poll_woken_tasks` are methods of `Core`,
+  because they run no user code that needs the shell. Only `cache`, `flow`,
+  `close`, `unwind` and `close_all` take the shell.
+- `poll_woken_tasks` returns whether any node was woken; the AppKit runner
+  uses it.
+- A platform's `Shell::Native` is a public newtype, `NativeNode(Payload)`,
+  with a crate-private field. `impl Shell for Ui` is public, so a
+  crate-private `Payload` there is error E0446, and making `Payload` public
+  would drag every node type with it.
+- `Core::declared_visual(depth)` gives the AppKit toolbar the window's
+  children while the toolbar is open.
+- On AppKit a flow frame that completes sets the core's pass request, and
+  `Ui::end` turns it into `request_pass`, because the AppKit runner has its
+  own request flag.
+- The flow lending records the `TypeId` of its family and shell, and a
+  frame asserts them before its unsafe casts. Without it, a `Flow` handle
+  carried into another flow's future read that flow's state as the wrong
+  type. The test `a_frame_carried_into_a_flow_of_another_family_panics`
+  fails when the assert is removed.
+- `immediate-tree` turns off `ahash`'s runtime randomness, which pulled
+  `getrandom` into the wasm build. Keys use fixed seeds anyway.
+- The DOM spike uses `Error = !` with `expect` on DOM calls that cannot
+  fail, not `JsValue`.

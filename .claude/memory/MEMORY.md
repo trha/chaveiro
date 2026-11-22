@@ -15,3 +15,4 @@
 - [appkit-immediate](appkit-immediate.md) — measured AppKit facts behind the crate: pools, caret, stack alignment, table reuse, hugging, row selection colors, details flicker; smoke script notes
 - [Platform target](platform-target.md) — on Windows: chaveiro-winui and the "Chaveiro" design system artifact, never the macOS canvas
 - [Core errors are enums](core-errors-are-enums.md) — chaveiro-core returns enums; UI crates own the text
+- [immediate-tree](immediate-tree.md) — shared core under the *-immediate crates; NativeNode newtype; editing the mac copy via tar over ssh (scp fails, fish shell)

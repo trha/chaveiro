@@ -2,7 +2,7 @@ use super::{Control, Response, must_write};
 use crate::{
     bindings::{TitleBar, UIElement},
     events::EventKind,
-    pass::{ChildKind, ControlNode, Payload, Ui},
+    pass::{ChildKind, ControlNode, NativeTree, Payload, Ui},
 };
 use std::hash::Hash;
 use windows_core::{Interface, Result};
@@ -69,7 +69,7 @@ impl Ui {
         body(self)?;
         self.close()?;
         let window = self.enclosing_window();
-        let Payload::Window(window) = &mut self.tree.node_mut(window).payload else {
+        let Payload::Window(window) = self.core.tree.native_mut(window) else {
             unreachable!("enclosing_window returns a window")
         };
         if window.title_bar != Some(node) {
