@@ -1,7 +1,9 @@
 //! Time-based one-time codes (RFC 6238) from the secrets Bitwarden stores.
+//! Nothing here allocates, so a view can make the code on every pass.
 
-use hmac::{Hmac, Mac};
-use zeroize::Zeroizing;
+use hmac::{Hmac, Mac, digest::KeyInit};
+use std::fmt;
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 use crate::crypto::SecretString;
 
@@ -12,77 +14,150 @@ enum Algorithm {
     Sha512,
 }
 
+/// The longest key read, in bytes: 128, twice SHA-512's block. Real keys
+/// are 10 to 64 bytes.
+const KEY_LENGTH: usize = 128;
+
+const STEAM: &[u8] = b"23456789BCDFGHJKMNPQRTVWXY";
+
+/// One code, wiped on drop.
+#[derive(Zeroize, ZeroizeOnDrop)]
+pub struct Code {
+    /// ASCII digits, or Steam letters, in `text[..length]`.
+    text: [u8; 10],
+    length: u8,
+    /// Seconds from the code's start to the next code.
+    #[zeroize(skip)]
+    period: u64,
+}
+
+impl Code {
+    pub fn as_str(&self) -> &str {
+        std::str::from_utf8(&self.text[..usize::from(self.length)])
+            .expect("a code holds only ASCII")
+    }
+
+    /// Seconds until the next code, at `now_s`: 1 to the period.
+    pub fn seconds_left(&self, now_s: u64) -> u64 {
+        self.period - now_s % self.period
+    }
+}
+
+/// Writes a 6 or 8 digit code as two halves, such as `492 117`, and any
+/// other as it is.
+impl fmt::Display for Code {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let text = self.as_str();
+        match text.len() {
+            6 | 8 if text.bytes().all(|byte| byte.is_ascii_digit()) => {
+                let (first, second) = text.split_at(text.len() / 2);
+                write!(formatter, "{first} {second}")
+            }
+            _ => formatter.write_str(text),
+        }
+    }
+}
+
 /// The code for `secret` at `now_s` seconds since the Unix epoch. `secret`
 /// is a bare base32 key, an `otpauth://totp/` URI, or a `steam://` key, as
-/// Bitwarden accepts them. Gives [`None`] for a secret it cannot read.
-pub fn code(secret: &str, now_s: u64) -> Option<SecretString> {
+/// Bitwarden accepts them. Gives [`None`] for a secret it cannot read, or a
+/// key longer than 128 bytes.
+pub fn now(secret: &str, now_s: u64) -> Option<Code> {
     let secret = secret.trim();
     let mut algorithm = Algorithm::Sha1;
     let mut digits = 6u32;
     let mut period = 30u64;
     let mut steam = false;
-    let key = if let Some(rest) = strip_prefix_ignore_case(secret, "otpauth://totp/") {
-        let mut key = None;
+    let mut key = Key {
+        bytes: [0; KEY_LENGTH],
+        length: 0,
+    };
+    if let Some(rest) = strip_prefix_ignore_case(secret, "otpauth://totp/") {
+        let mut found = false;
         let query = rest.split_once('?')?.1;
         for pair in query.split('&') {
             let (name, value) = pair.split_once('=').unwrap_or((pair, ""));
-            match name.to_ascii_lowercase().as_str() {
-                "secret" => key = Some(base32(value)?),
-                "digits" => {
-                    digits = value
-                        .parse()
-                        .ok()
-                        .filter(|digits| (1..=10).contains(digits))?
-                }
-                "period" => period = value.parse().ok().filter(|period| *period > 0)?,
-                "algorithm" => {
-                    algorithm = match value.to_ascii_uppercase().as_str() {
-                        "SHA1" => Algorithm::Sha1,
-                        "SHA256" => Algorithm::Sha256,
-                        "SHA512" => Algorithm::Sha512,
-                        _ => return None,
-                    }
-                }
-                _ => {}
+            if name.eq_ignore_ascii_case("secret") {
+                base32(value, &mut key)?;
+                found = true;
+            } else if name.eq_ignore_ascii_case("digits") {
+                digits = value
+                    .parse()
+                    .ok()
+                    .filter(|digits| (1..=10).contains(digits))?;
+            } else if name.eq_ignore_ascii_case("period") {
+                period = value.parse().ok().filter(|period| *period > 0)?;
+            } else if name.eq_ignore_ascii_case("algorithm") {
+                algorithm = [
+                    ("SHA1", Algorithm::Sha1),
+                    ("SHA256", Algorithm::Sha256),
+                    ("SHA512", Algorithm::Sha512),
+                ]
+                .into_iter()
+                .find(|(name, _)| value.eq_ignore_ascii_case(name))?
+                .1;
             }
         }
-        key?
+        if !found {
+            return None;
+        }
     } else if let Some(rest) = strip_prefix_ignore_case(secret, "steam://") {
         steam = true;
-        base32(rest)?
+        base32(rest, &mut key)?;
     } else {
-        base32(secret)?
-    };
+        base32(secret, &mut key)?;
+    }
+    let key = &key.bytes[..key.length];
     let counter = (now_s / period).to_be_bytes();
-    let hash: Zeroizing<Vec<u8>> = Zeroizing::new(match algorithm {
-        Algorithm::Sha1 => mac::<Hmac<sha1::Sha1>>(&key, &counter),
-        Algorithm::Sha256 => mac::<Hmac<sha2::Sha256>>(&key, &counter),
-        Algorithm::Sha512 => mac::<Hmac<sha2::Sha512>>(&key, &counter),
-    });
-    let offset = usize::from(hash[hash.len() - 1] & 0x0f);
-    let mut value =
-        u32::from_be_bytes(hash[offset..offset + 4].try_into().expect("four bytes")) & 0x7fff_ffff;
-    let mut code = Zeroizing::new(String::new());
+    let mut value = match algorithm {
+        Algorithm::Sha1 => truncate::<Hmac<sha1::Sha1>>(key, &counter),
+        Algorithm::Sha256 => truncate::<Hmac<sha2::Sha256>>(key, &counter),
+        Algorithm::Sha512 => truncate::<Hmac<sha2::Sha512>>(key, &counter),
+    };
+    let mut code = Code {
+        text: [0; 10],
+        length: 0,
+        period,
+    };
     if steam {
-        const STEAM: &[u8] = b"23456789BCDFGHJKMNPQRTVWXY";
-        for _ in 0..5 {
-            code.push(char::from(STEAM[value as usize % STEAM.len()]));
+        for slot in &mut code.text[..5] {
+            *slot = STEAM[value as usize % STEAM.len()];
             value /= STEAM.len() as u32;
         }
+        code.length = 5;
     } else {
         let value = u64::from(value) % 10u64.pow(digits);
-        for place in (0..digits).rev() {
-            let digit = (value / 10u64.pow(place) % 10) as u8;
-            code.push(char::from(b'0' + digit));
+        for (place, slot) in (0..digits).rev().zip(&mut code.text) {
+            *slot = b'0' + (value / 10u64.pow(place) % 10) as u8;
         }
+        code.length = digits as u8;
     }
+    value.zeroize();
     Some(code)
 }
 
-fn mac<M: Mac + hmac::digest::KeyInit>(key: &[u8], message: &[u8]) -> Vec<u8> {
+/// [`now`] as a string, for the clipboard.
+pub fn code(secret: &str, now_s: u64) -> Option<SecretString> {
+    now(secret, now_s).map(|code| SecretString::new(code.as_str().to_owned()))
+}
+
+/// A decoded key, wiped on drop.
+#[derive(Zeroize, ZeroizeOnDrop)]
+struct Key {
+    bytes: [u8; KEY_LENGTH],
+    length: usize,
+}
+
+/// The RFC 4226 dynamic truncation of the HMAC of `message` under `key`.
+fn truncate<M: Mac + KeyInit>(key: &[u8], message: &[u8]) -> u32 {
     let mut mac = <M as Mac>::new_from_slice(key).expect("HMAC takes a key of any length");
     mac.update(message);
-    mac.finalize().into_bytes().to_vec()
+    let mut hash = mac.finalize().into_bytes();
+    let offset = usize::from(hash[hash.len() - 1] & 0x0f);
+    let value =
+        u32::from_be_bytes(hash[offset..offset + 4].try_into().expect("four bytes")) & 0x7fff_ffff;
+    hash.as_mut_slice().zeroize();
+    value
 }
 
 fn strip_prefix_ignore_case<'a>(text: &'a str, prefix: &str) -> Option<&'a str> {
@@ -91,11 +166,13 @@ fn strip_prefix_ignore_case<'a>(text: &'a str, prefix: &str) -> Option<&'a str> 
         .map(|_| &text[prefix.len()..])
 }
 
-/// Decodes RFC 4648 base32, any case, skipping spaces, dashes and padding.
-fn base32(text: &str) -> Option<Zeroizing<Vec<u8>>> {
-    let mut bytes = Zeroizing::new(Vec::with_capacity(text.len() * 5 / 8));
+/// Decodes RFC 4648 base32 into `key`, any case, skipping spaces, dashes
+/// and padding. Gives [`None`] for a bad letter, an empty key or one longer
+/// than [`KEY_LENGTH`].
+fn base32(text: &str, key: &mut Key) -> Option<()> {
     let mut buffer = 0u64;
     let mut bits = 0;
+    key.length = 0;
     for byte in text.bytes() {
         let value = match byte {
             b'A'..=b'Z' => byte - b'A',
@@ -108,12 +185,13 @@ fn base32(text: &str) -> Option<Zeroizing<Vec<u8>>> {
         bits += 5;
         if bits >= 8 {
             bits -= 8;
-            bytes.push((buffer >> bits) as u8);
+            *key.bytes.get_mut(key.length)? = (buffer >> bits) as u8;
+            key.length += 1;
         }
     }
-    (!bytes.is_empty()).then_some(bytes)
+    buffer.zeroize();
+    (key.length > 0).then_some(())
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -190,9 +268,35 @@ mod tests {
     }
 
     #[test]
+    fn a_six_digit_code_shows_as_two_halves() {
+        let code = now("gezd gnbv gy3t qojq gezd gnbv gy3t qojq", 59).expect("a valid key");
+        assert_eq!(code.to_string(), "287 082");
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn the_code_holds_for_the_seconds_left_then_the_next_starts(
+            period in 1u64..=120,
+            time in 0u64..1 << 40,
+        ) {
+            let uri = format!("otpauth://totp/x?secret={SHA1_KEY}&period={period}");
+            let code = now(&uri, time).expect("a valid key");
+            let left = code.seconds_left(time);
+            proptest::prop_assert!((1..=period).contains(&left));
+            let last = now(&uri, time + left - 1).expect("a valid key");
+            proptest::prop_assert_eq!(last.as_str(), code.as_str());
+            // The next window starts a new counter, which is all the
+            // contract promises; its code may repeat by chance.
+            proptest::prop_assert_eq!((time + left) % period, 0);
+        }
+    }
+
+    #[test]
     fn an_unreadable_secret_gives_none() {
         assert_eq!(code("not base32!", 59), None);
         assert_eq!(code("otpauth://totp/x?digits=6", 59), None);
         assert_eq!(code("otpauth://totp/x?secret=GEZA&algorithm=MD5", 59), None);
+        // 129 bytes is one past the longest key read.
+        assert_eq!(code(&"A".repeat(129 * 8 / 5 + 1), 59), None);
     }
 }
