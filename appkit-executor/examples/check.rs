@@ -11,11 +11,13 @@
 #![cfg_attr(not(target_os = "macos"), no_main)]
 #![cfg(target_os = "macos")]
 
-use appkit_executor::{SpawnHandle, off_thread, spawn};
+use appkit_executor::{SpawnHandle, interval, off_thread, sleep, sleep_until, spawn};
 use dispatch2::DispatchQueue;
+use futures_core::Stream;
 use std::{
     cell::{Cell, RefCell},
-    future::poll_fn,
+    future::{Future, poll_fn},
+    pin::Pin,
     rc::Rc,
     sync::{
         Arc,
@@ -23,11 +25,11 @@ use std::{
     },
     task::Poll,
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 /// The checks, each reported once.
-const CHECKS: usize = 8;
+const CHECKS: usize = 11;
 
 static FAILED: AtomicBool = AtomicBool::new(false);
 
@@ -245,4 +247,54 @@ fn start() {
         let result = off_thread(|| -> u8 { panic!("expected panic from the check") }).await;
         report("a panicking off_thread job yields None", result.is_none());
     }));
+
+    // A sleep ends no earlier than its deadline, on the main thread.
+    keep(spawn(async move {
+        let deadline = Instant::now() + Duration::from_millis(50);
+        sleep_until(deadline).await;
+        report(
+            "sleep_until ends at or after its deadline on the main thread",
+            Instant::now() >= deadline && thread::current().id() == main_thread,
+        );
+    }));
+
+    // An interval ticks once per period, the first a period after its
+    // first poll.
+    keep(spawn(async move {
+        let started = Instant::now();
+        let mut ticks = interval(Duration::from_millis(20));
+        for _ in 0..5 {
+            poll_fn(|context| Pin::new(&mut ticks).poll_next(context)).await;
+        }
+        let elapsed = started.elapsed();
+        report(
+            "an interval's fifth tick comes after five periods",
+            elapsed >= Duration::from_millis(100),
+        );
+    }));
+
+    // Dropping a sleep cancels its timer, so the task is never woken.
+    {
+        let polls = Rc::new(Cell::new(0));
+        keep(spawn({
+            let polls = Rc::clone(&polls);
+            async move {
+                let mut sleeping = Some(Box::pin(sleep(Duration::from_millis(10))));
+                poll_fn(|context| {
+                    polls.set(polls.get() + 1);
+                    if let Some(sleeping) = sleeping.as_mut() {
+                        // Starts the timer, then drops it.
+                        let _ = sleeping.as_mut().poll(context);
+                    }
+                    sleeping = None;
+                    Poll::<()>::Pending
+                })
+                .await;
+            }
+        }));
+        keep(spawn(async move {
+            sleep(Duration::from_millis(60)).await;
+            report("a dropped sleep wakes nothing", polls.get() == 1);
+        }));
+    }
 }

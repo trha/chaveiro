@@ -13,7 +13,7 @@ use appkit_immediate::{App, Length, Orientation, TableViewId, Ui, run};
 const ROWS: usize = 10_000;
 
 fn main() {
-    run(|_| Vault {
+    run(|| Vault {
         open: true,
         picked: None,
     });
@@ -25,10 +25,6 @@ struct Vault {
 }
 
 impl App for Vault {
-    type Message = ();
-
-    fn update(&mut self, (): ()) {}
-
     fn view(&mut self, ui: &mut Ui) {
         if ui.should_terminate() {
             self.open = false;

@@ -15,9 +15,11 @@
 
 mod completion;
 mod off_thread;
+mod timer;
 
 pub use completion::{Completer, Completion, completion};
 pub use off_thread::off_thread;
+pub use timer::{Interval, Sleep, interval, sleep, sleep_until, sleep_until_clock};
 
 use dispatch2::DispatchQueue;
 use objc2::MainThreadMarker;

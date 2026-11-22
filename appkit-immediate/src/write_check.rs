@@ -388,6 +388,8 @@ impl Ui {
                         control.control.kind()
                     }
                     Payload::Cache(_) => "cached",
+                    Payload::Task(_) => "task",
+                    Payload::Stream(_) => "stream",
                     Payload::State(_) => "state",
                     Payload::Toolbar(toolbar) => {
                         owners.insert(Retained::as_ptr(&toolbar.toolbar).addr(), *child);

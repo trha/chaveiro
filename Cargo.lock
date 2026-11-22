@@ -39,7 +39,9 @@ dependencies = [
 name = "appkit-executor"
 version = "0.1.0"
 dependencies = [
+ "block2",
  "dispatch2",
+ "futures-core",
  "objc2",
  "proptest",
 ]
@@ -49,8 +51,11 @@ name = "appkit-immediate"
 version = "0.1.0"
 dependencies = [
  "ahash",
+ "appkit-executor",
  "block2",
  "dispatch2",
+ "futures-core",
+ "loom",
  "objc2",
  "objc2-app-kit",
  "objc2-foundation",

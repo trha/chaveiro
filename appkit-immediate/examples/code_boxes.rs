@@ -1,5 +1,5 @@
 //! Code boxes in a form, with a pop-up that has a disabled item, a check
-//! box in the fields' column, a link and a button. A thread plays a script
+//! box in the fields' column, a link and a button. An interval plays a script
 //! of edits through the window's field editor, prints the digits after
 //! each step, and saves the window as a PDF to the path in the first argument
 //! (`code_boxes.pdf` by default) before it quits.
@@ -13,24 +13,17 @@ use appkit_immediate::{App, CodeDigits, Orientation, Ui, run};
 use objc2::{MainThreadMarker, rc::Retained, sel};
 use objc2_app_kit::{NSApplication, NSTextInputClient, NSTextView};
 use objc2_foundation::{NSNotFound, NSRange, NSString};
-use std::{thread, time::Duration};
+use std::time::Duration;
 
 fn main() {
-    run(|handle| {
-        thread::spawn(move || {
-            for step in SCRIPT {
-                thread::sleep(Duration::from_millis(300));
-                handle.send(*step);
-            }
-        });
-        Boxes {
-            open: true,
-            digits: CodeDigits::default(),
-            method: 0,
-            remember: true,
-            focused: false,
-            error: None,
-        }
+    run(|| Boxes {
+        open: true,
+        played: 0,
+        digits: CodeDigits::default(),
+        method: 0,
+        remember: true,
+        focused: false,
+        error: None,
     });
 }
 
@@ -43,6 +36,9 @@ enum Step {
     Snapshot,
     Quit,
 }
+
+/// The time between steps.
+const STEP_EVERY: Duration = Duration::from_millis(300);
 
 const SCRIPT: &[Step] = &[
     Step::Type("4"),
@@ -60,6 +56,8 @@ const SCRIPT: &[Step] = &[
 
 struct Boxes {
     open: bool,
+    /// Steps of [`SCRIPT`] played so far.
+    played: usize,
     digits: CodeDigits,
     method: usize,
     remember: bool,
@@ -67,11 +65,10 @@ struct Boxes {
     error: Option<&'static str>,
 }
 
-impl App for Boxes {
-    type Message = Step;
-
-    fn update(&mut self, step: Step) {
-        let mtm = MainThreadMarker::new().expect("update runs on the main thread");
+impl Boxes {
+    /// Plays one step of the script.
+    fn play(&mut self, step: Step) {
+        let mtm = MainThreadMarker::new().expect("the view runs on the main thread");
         let application = NSApplication::sharedApplication(mtm);
         let window = application
             .windows()
@@ -128,8 +125,19 @@ impl App for Boxes {
             });
         println!("{step:?}: {shown} focus {focus:?}");
     }
+}
 
+impl App for Boxes {
     fn view(&mut self, ui: &mut Ui) {
+        // Played before the view reads the state, so this pass shows the
+        // step.
+        let mut ticks = ui.stream("script", || appkit_executor::interval(STEP_EVERY));
+        while ticks.next().is_some() {
+            if let Some(step) = SCRIPT.get(self.played) {
+                self.played += 1;
+                self.play(*step);
+            }
+        }
         if ui.should_terminate() {
             self.open = false;
         }

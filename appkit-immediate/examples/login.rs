@@ -8,59 +8,47 @@
 #![cfg_attr(not(target_os = "macos"), no_main)]
 #![cfg(target_os = "macos")]
 
-use appkit_immediate::{Align, App, Handle, Style, Ui, run};
-use std::thread::JoinHandle;
+use appkit_immediate::{Align, App, Style, Ui, run};
+use std::time::Duration;
 
 fn main() {
-    run(|handle| Login {
-        handle,
+    run(|| Login {
         open: true,
         server: 0,
         email: String::new(),
         error: None,
         busy: false,
         status: String::from("signed out"),
-        worker: None,
+        signing_in: None,
     });
 }
 
 const SERVERS: [&str; 3] = ["bitwarden.com", "bitwarden.eu", "Self-hosted"];
 
 struct Login {
-    handle: Handle<Done>,
     open: bool,
     server: usize,
     email: String,
     error: Option<&'static str>,
     busy: bool,
     status: String,
-    /// The pretend sign-in, joined when its result arrives or the app drops.
-    worker: Option<JoinHandle<()>>,
-}
-
-/// The pretend sign-in finished.
-struct Done(usize);
-
-impl Drop for Login {
-    fn drop(&mut self) {
-        if let Some(worker) = self.worker.take() {
-            worker.join().expect("the worker does not panic");
-        }
-    }
+    /// The password length of the pretend sign-in that runs, as a task.
+    signing_in: Option<usize>,
 }
 
 impl App for Login {
-    type Message = Done;
-
-    fn update(&mut self, Done(length): Done) {
-        if let Some(worker) = self.worker.take() {
-            worker.join().expect("the worker does not panic");
-        }
-        self.busy = false;
-        self.status = format!("signed in with {length} characters");
-    }
-
     fn view(&mut self, ui: &mut Ui) {
+        // Taken before the form reads `busy`, so this pass shows the end.
+        if let Some(length) = self.signing_in {
+            let mut task = ui.task("sign in", || {
+                appkit_executor::sleep(Duration::from_millis(1500))
+            });
+            if task.take().is_some() {
+                self.signing_in = None;
+                self.busy = false;
+                self.status = format!("signed in with {length} characters");
+            }
+        }
         if ui.should_terminate() {
             self.open = false;
         }
@@ -99,12 +87,10 @@ impl App for Login {
                         self.error = None;
                         self.busy = true;
                         let length = ui.take_password(password).chars().count();
-                        let handle = self.handle.clone();
-                        self.worker = Some(std::thread::spawn(move || {
-                            std::thread::sleep(std::time::Duration::from_millis(1500));
-                            // The window may be gone, which needs no message.
-                            let _ = handle.send(Done(length));
-                        }));
+                        self.signing_in = Some(length);
+                        // The task is declared before the form, so it
+                        // starts next pass.
+                        ui.request_pass();
                     }
                 }
                 ui.label(

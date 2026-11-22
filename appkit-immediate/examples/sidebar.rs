@@ -1,5 +1,5 @@
 //! A split view with a source list sidebar over a footer, and a content
-//! pane that names the pick. A thread plays a script: a user pick (sent
+//! pane that names the pick. An interval plays a script: a user pick (sent
 //! through the table, so the delegate reports it), a selection from code, a
 //! rebuild of the entries that keeps the selection, and a pick of a header
 //! from code, which shows no selection. After each step it prints the app's selection
@@ -16,23 +16,16 @@ use appkit_immediate::{App, Length, Orientation, Style, Ui, run};
 use objc2::{MainThreadMarker, Message, rc::Retained};
 use objc2_app_kit::{NSApplication, NSTableView, NSTextField, NSView, NSVisualEffectView};
 use objc2_foundation::NSIndexSet;
-use std::{thread, time::Duration};
+use std::time::Duration;
 
 fn main() {
-    run(|handle| {
-        thread::spawn(move || {
-            for step in SCRIPT {
-                thread::sleep(Duration::from_millis(400));
-                handle.send(*step);
-            }
-        });
-        Sidebar {
-            open: true,
-            selected: Some(1),
-            folders: vec!["Personal", "Work"],
-            revision: 0,
-            picks: 0,
-        }
+    run(|| Sidebar {
+        open: true,
+        played: 0,
+        selected: Some(1),
+        folders: vec!["Personal", "Work"],
+        revision: 0,
+        picks: 0,
     });
 }
 
@@ -47,6 +40,9 @@ enum Step {
     AddFolder,
     Quit,
 }
+
+/// The time between steps.
+const STEP_EVERY: Duration = Duration::from_millis(400);
 
 const SCRIPT: &[Step] = &[
     Step::Dump,
@@ -63,17 +59,18 @@ const SCRIPT: &[Step] = &[
 
 struct Sidebar {
     open: bool,
+    /// Steps of [`SCRIPT`] played so far.
+    played: usize,
     selected: Option<usize>,
     folders: Vec<&'static str>,
     revision: u64,
     picks: usize,
 }
 
-impl App for Sidebar {
-    type Message = Step;
-
-    fn update(&mut self, step: Step) {
-        let mtm = MainThreadMarker::new().expect("update runs on the main thread");
+impl Sidebar {
+    /// Plays one step of the script.
+    fn play(&mut self, step: Step) {
+        let mtm = MainThreadMarker::new().expect("the view runs on the main thread");
         let window = NSApplication::sharedApplication(mtm)
             .windows()
             .firstObject()
@@ -113,8 +110,19 @@ impl App for Sidebar {
             Step::Quit => self.open = false,
         }
     }
+}
 
+impl App for Sidebar {
     fn view(&mut self, ui: &mut Ui) {
+        // Played before the view reads the state, so this pass shows the
+        // step.
+        let mut ticks = ui.stream("script", || appkit_executor::interval(STEP_EVERY));
+        while ticks.next().is_some() {
+            if let Some(step) = SCRIPT.get(self.played) {
+                self.played += 1;
+                self.play(*step);
+            }
+        }
         if ui.should_terminate() {
             self.open = false;
         }

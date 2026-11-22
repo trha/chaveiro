@@ -1,11 +1,6 @@
 //! The app interface and the loop that runs passes on the main thread.
 
-use crate::{
-    mailbox::{Handle, Mailbox},
-    pass::Ui,
-    tree::NodeId,
-    write_check,
-};
+use crate::{pass::Ui, tree::NodeId, write_check};
 use dispatch2::DispatchQueue;
 use objc2::{
     MainThreadMarker, MainThreadOnly,
@@ -21,35 +16,30 @@ use std::{
     any::Any,
     cell::{Cell, RefCell},
     panic::{AssertUnwindSafe, catch_unwind, resume_unwind},
-    rc::{Rc, Weak},
-    sync::Arc,
+    rc::Rc,
 };
 
-/// An app: state that the main thread updates from messages and shows
-/// through [`view`](Self::view).
+/// An app: state on the main thread that [`view`](Self::view) shows. Async
+/// work runs as task nodes the view declares, with [`Ui::task`].
 pub trait App: 'static {
-    /// A result sent to the main thread through a [`Handle`].
-    type Message: 'static + Send;
-
-    /// Applies one message. Runs on the main thread before the next pass.
-    fn update(&mut self, message: Self::Message);
-
     /// Declares every open window. Runs on every pass; a pass runs after
-    /// messages and after events.
+    /// events, after woken tasks, and when a pass asks for another. For
+    /// state that changes with time, declare a task that sleeps until the
+    /// change.
     fn view(&mut self, ui: &mut Ui);
 }
 
 /// Starts AppKit on this thread, builds the app with `make`, then runs
 /// passes until a pass declares no window. `make` runs once AppKit is up, so
-/// it may create AppKit objects; a message it sends waits for the first
-/// pass.
+/// it may create AppKit objects.
 ///
 /// Installs a main menu with Quit, the Edit commands and the Window
-/// commands. A panic in [`App::update`] or [`App::view`] closes every window,
-/// and `run` then resumes it.
+/// commands. A panic in [`App::view`] closes every window, and `run` then
+/// resumes it. The tree drops with the runner before `run` returns, so
+/// every task node is dropped by then.
 ///
 /// Panics when called off the main thread.
-pub fn run<A: App>(make: impl FnOnce(Handle<A::Message>) -> A) {
+pub fn run<A: App>(make: impl FnOnce() -> A) {
     let mtm = MainThreadMarker::new().expect("run is called on the main thread");
     write_check::install();
     // Until `NSApplication::run` starts, no run-loop pool exists, and AppKit
@@ -59,31 +49,26 @@ pub fn run<A: App>(make: impl FnOnce(Handle<A::Message>) -> A) {
         let application = NSApplication::sharedApplication(mtm);
         application.setActivationPolicy(NSApplicationActivationPolicy::Regular);
         application.setMainMenu(Some(&main_menu(mtm)));
-        let mailbox = Arc::new(Mailbox::new(|| {
-            // The block captures nothing, so it can be built on any thread;
-            // it finds the runner through the main thread's local.
+        // Every callback finds the runner through the thread local, so none
+        // holds it and no cycle forms. The post block captures nothing, so a
+        // task's waker can queue it from any thread.
+        let post = || {
             DispatchQueue::main().exec_async(turn_current);
             true
-        }));
-        let app = make(Handle::new(Arc::clone(&mailbox)));
-        let runner = Rc::new_cyclic(|weak: &Weak<Runner<A>>| {
-            let weak = weak.clone();
-            let wake = Rc::new(move || {
-                if let Some(runner) = weak.upgrade() {
-                    runner.schedule();
-                }
-            });
-            Runner {
-                ui: RefCell::new(Ui::new(mtm, wake)),
-                app: RefCell::new(app),
-                mailbox,
-                messages: RefCell::new(Vec::new()),
-                scheduled: Cell::new(false),
-                running: Cell::new(false),
-                panic: RefCell::new(None),
-                deferred_reloads: RefCell::new(Vec::new()),
-                deferred_recycles: RefCell::new(Vec::new()),
+        };
+        let wake = Rc::new(|| {
+            if let Some(current) = CURRENT.with_borrow(Option::clone) {
+                current.schedule();
             }
+        });
+        let runner = Rc::new(Runner {
+            ui: RefCell::new(Ui::new(mtm, wake, post)),
+            app: RefCell::new(make()),
+            scheduled: Cell::new(false),
+            running: Cell::new(false),
+            panic: RefCell::new(None),
+            deferred_reloads: RefCell::new(Vec::new()),
+            deferred_recycles: RefCell::new(Vec::new()),
         });
         runner.ui.borrow().adopt_application(&application);
         CURRENT.set(Some(Rc::clone(&runner) as Rc<dyn Turn>));
@@ -142,9 +127,11 @@ fn turn_current() {
 }
 
 trait Turn {
-    /// Applies queued messages and runs one pass. Returns whether a window
-    /// is still open.
+    /// Polls woken tasks and runs one pass. Returns whether a window is
+    /// still open.
     fn turn(&self) -> bool;
+    /// Queues a turn, unless one is already queued.
+    fn schedule(&self);
     /// Builds a table row; [`None`] when it cannot be built now.
     fn realize(&self, table: NodeId, row: usize) -> Option<Retained<NSView>>;
     fn recycle(&self, table: NodeId, view: usize);
@@ -153,9 +140,6 @@ trait Turn {
 struct Runner<A: App> {
     ui: RefCell<Ui>,
     app: RefCell<A>,
-    mailbox: Arc<Mailbox<A::Message>>,
-    /// Reused buffer for draining the mailbox.
-    messages: RefCell<Vec<A::Message>>,
     /// Whether a pass is queued on the main queue.
     scheduled: Cell<bool>,
     /// Whether `NSApplication::run` was entered and must be stopped.
@@ -169,33 +153,17 @@ struct Runner<A: App> {
 }
 
 impl<A: App> Runner<A> {
-    /// Queues one pass, unless one is already queued.
-    fn schedule(&self) {
-        if !self.scheduled.replace(true) {
-            DispatchQueue::main().exec_async(turn_current);
-        }
-    }
-
-    /// Applies messages and runs one pass, then in debug builds the idle
+    /// Polls woken tasks and runs one pass, then in debug builds the idle
     /// check. Returns whether events arrived and how many windows are open.
     fn pass(&self) -> (bool, usize) {
-        let drained = {
-            let mut app = self.app.borrow_mut();
-            let mut messages = self.messages.borrow_mut();
-            self.mailbox.drain(&mut messages);
-            let drained = !messages.is_empty();
-            for message in messages.drain(..) {
-                app.update(message);
-            }
-            drained
-        };
+        let woken = self.ui.borrow_mut().poll_woken_tasks();
         let (consumed, windows) = self.view();
         // A pass that took nothing new in and asked for no rewrite has
         // caught up, so the same view again must write nothing.
         let ui = self.ui.borrow();
         let settled = !ui.invalidated && !ui.requested.get();
         drop(ui);
-        if cfg!(debug_assertions) && !consumed && !drained && settled && windows > 0 {
+        if cfg!(debug_assertions) && !consumed && !woken && settled && windows > 0 {
             write_check::begin();
             let (consumed, windows) = self.view();
             let writes = write_check::end();
@@ -259,7 +227,6 @@ impl<A: App> Runner<A> {
     fn fail(&self, payload: Box<dyn Any + Send>) {
         *self.panic.borrow_mut() = Some(payload);
         autoreleasepool(|_| self.ui.borrow_mut().close_all());
-        self.mailbox.close();
         if self.running.replace(false) {
             stop(self.ui.borrow().mtm);
         }
@@ -267,6 +234,12 @@ impl<A: App> Runner<A> {
 }
 
 impl<A: App> Turn for Runner<A> {
+    fn schedule(&self) {
+        if !self.scheduled.replace(true) {
+            DispatchQueue::main().exec_async(turn_current);
+        }
+    }
+
     fn realize(&self, table: NodeId, row: usize) -> Option<Retained<NSView>> {
         if self.panic.borrow().is_some() {
             return None;
@@ -334,7 +307,6 @@ impl<A: App> Turn for Runner<A> {
         if windows > 0 {
             return true;
         }
-        self.mailbox.close();
         if self.running.replace(false) {
             stop(self.ui.borrow().mtm);
         }

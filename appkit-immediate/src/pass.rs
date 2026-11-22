@@ -6,8 +6,8 @@ use crate::{
     events::{EventKind, Events},
     tree::{Key, NodeId, Tree, Visit},
     widget::{
-        Align, Control, Field, GridRule as Rule, Pane, Style, TextColor, ToolbarSource,
-        grid_constraints, grid_rules, pane_item,
+        Align, Control, Field, GridRule as Rule, Pane, StreamNode, Style, TaskNode, TaskWakes,
+        TextColor, ToolbarSource, grid_constraints, grid_rules, pane_item,
     },
 };
 use objc2::{MainThreadMarker, rc::Retained, runtime::ProtocolObject};
@@ -53,11 +53,20 @@ pub struct Ui {
     pub(crate) focus: Option<NodeId>,
     /// Schedules a pass.
     wake: Rc<dyn Fn()>,
+    /// Shared with the waker of every task node.
+    pub(crate) tasks: std::sync::Arc<TaskWakes>,
 }
 
 impl Ui {
-    pub(crate) fn new(mtm: MainThreadMarker, wake: Rc<dyn Fn()>) -> Self {
+    /// A UI whose events call `wake`, and whose woken tasks call `post`
+    /// from any thread to ask for a turn.
+    pub(crate) fn new(
+        mtm: MainThreadMarker,
+        wake: Rc<dyn Fn()>,
+        post: impl 'static + Send + Sync + Fn() -> bool,
+    ) -> Self {
         Ui {
+            tasks: TaskWakes::new(post),
             tree: Tree::new(Payload::Root),
             frames: Vec::new(),
             events: Events::new(mtm, Rc::clone(&wake)),
@@ -90,7 +99,8 @@ impl Ui {
 
     /// Ends a pass, closing every window it did not declare, and moves the
     /// focus a [`make_first_responder`](crate::Response::make_first_responder)
-    /// asked for. Returns the number of open windows.
+    /// asked for. Drops every task it did not declare. Returns the number of
+    /// open windows; tasks at the root do not count.
     pub(crate) fn end(&mut self) -> usize {
         self.close();
         self.show_new_windows();
@@ -106,7 +116,12 @@ impl Ui {
                 window.makeFirstResponder(Some(&view));
             }
         }
-        self.tree.children(self.tree.root()).len()
+        let root = self.tree.root();
+        self.tree
+            .children(root)
+            .iter()
+            .filter(|node| matches!(self.tree.node(**node).payload, Payload::Window(_)))
+            .count()
     }
 
     /// Closes every window, as a pass that declares none would. Used after a
@@ -281,6 +296,9 @@ impl Ui {
                     .extend_from_slice(&cache.emitted);
             }
             Payload::State(_) => unreachable!("state nodes are never opened"),
+            Payload::Task(_) | Payload::Stream(_) => {
+                unreachable!("task and stream nodes are never opened")
+            }
             Payload::ToolbarItem(_) => self.apply_toolbar_group(node, declared),
             Payload::Toolbar(_) => self.apply_toolbar(node, declared),
             Payload::Window(window) => {
@@ -543,6 +561,10 @@ pub(crate) enum Payload {
     State(Box<dyn Any>),
     Toolbar(ToolbarNode),
     ToolbarItem(ToolbarItemNode),
+    /// From [`Ui::task`]. Dropping it drops the future.
+    Task(TaskNode),
+    /// From [`Ui::stream`]. Dropping it drops the stream.
+    Stream(StreamNode),
 }
 
 /// A window's toolbar.
@@ -790,7 +812,11 @@ struct Frame {
 /// releases the view.
 fn release(events: &Events, payload: Payload) {
     match payload {
-        Payload::Root | Payload::Cache(_) | Payload::State(_) => {}
+        Payload::Root
+        | Payload::Cache(_)
+        | Payload::State(_)
+        | Payload::Task(_)
+        | Payload::Stream(_) => {}
         Payload::Toolbar(toolbar) => toolbar.window.setToolbar(None),
         Payload::ToolbarItem(item) => {
             if let Some(item) = &item.item {

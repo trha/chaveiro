@@ -17,7 +17,7 @@ check() { # name, command that must succeed
 labels() { osascript -e "$process to get value of static texts of $main"; }
 wait_exit() { for _ in $(seq 50); do kill -0 "$1" 2>/dev/null || return 0; sleep 0.1; done; return 1; }
 
-# Run 1: clicks, the background message, closing the second window, Quit.
+# Run 1: clicks, the background task's answer, closing the second window, Quit.
 OBJC_DEBUG_MISSING_POOLS=YES "$binary" >"$log" 2>&1 &
 pid=$!
 sleep 1.5
@@ -25,7 +25,7 @@ main_thread=$(sed -n 's/^main thread //p' "$log")
 check "no missing autorelease pools on the main thread" "[ -n '$main_thread' ] && ! grep -q 'MISSING POOLS: ($main_thread)' '$log'"
 size() { osascript -e "$process to get size of $main"; }
 check "a new window opens at least 360x200" "size | awk -F', ' '{ exit !(\$1 >= 360 && \$2 >= 200) }'"
-check "background message arrives" "labels | grep -q 'hello from a background thread'"
+check "background task answer arrives" "labels | grep -q 'hello from a background thread'"
 osascript -e "$process to click button \"Click me\" of $main" >/dev/null
 sleep 0.4
 check "one click counts once" "labels | grep -q '^1 clicks'"

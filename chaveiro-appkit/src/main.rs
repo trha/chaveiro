@@ -16,12 +16,12 @@ mod second_factor;
 mod vault;
 mod wipe;
 
-use appkit_immediate::{App, Handle, Orientation, Style, Ui, run};
+use appkit_immediate::{App, Orientation, Style, Ui, run};
 use chaveiro_core::{
     core::{Config, Core, Input, LoginError, Screen, StoredAccount, UserAction},
     vault::VaultIndex,
 };
-use io::{Io, Settings, TaskId};
+use io::{Io, Settings};
 use login::{LoginAction, LoginForm, LoginState};
 use rand_core::OsRng;
 use second_factor::{SecondFactorAction, SecondFactorForm, SecondFactorState};
@@ -39,12 +39,6 @@ fn main() {
         .with_writer(std::io::stderr)
         .init();
     run(Chaveiro::new);
-}
-
-/// A message to the main thread: an answer for the core.
-pub enum Message {
-    /// `task` is [`None`] for an answer [`Io`] sent without a task.
-    Io { task: Option<TaskId>, input: Input },
 }
 
 struct Chaveiro {
@@ -69,15 +63,6 @@ struct Chaveiro {
 const LOCK_AFTER: Duration = Duration::from_secs(15 * 60);
 
 impl App for Chaveiro {
-    type Message = Message;
-
-    fn update(&mut self, Message::Io { task, input }: Message) {
-        if let Some(task) = task {
-            self.io.finish(task);
-        }
-        self.handle_input(input);
-    }
-
     fn view(&mut self, ui: &mut Ui) {
         if ui.should_terminate() {
             self.quit();
@@ -85,10 +70,39 @@ impl App for Chaveiro {
         if !self.open {
             return;
         }
+        // Effects run as tasks at the root, so a screen change does not end
+        // them. Answers are applied after the loop, because applying one
+        // may add effects, and before the screen is read, so this pass
+        // shows them.
+        let mut answers = Vec::new();
+        for (task, work) in self.io.pending() {
+            let answer = ui
+                .task(("io", *task), || {
+                    work.take()
+                        .expect("a pending effect starts on its first pass")
+                })
+                .take();
+            if let Some(answer) = answer {
+                tracing::debug!(?task, "effect answered");
+                answers.push((*task, answer));
+            }
+        }
+        for (task, answer) in answers {
+            self.io.answered(task);
+            // A derivation that panicked has no answer; its message is on
+            // stderr, and the core keeps waiting, as for a lost request.
+            if let Some(input) = answer {
+                self.handle_input(input);
+            }
+        }
         match self.body(ui) {
             None => {}
             Some(Next::Quit) => self.quit(),
             Some(Next::User(action)) => self.handle_input(Input::User(action)),
+        }
+        // An effect added after the tasks were declared starts next pass.
+        if self.io.unstarted() {
+            ui.request_pass();
         }
     }
 }
@@ -111,8 +125,8 @@ enum Next {
 
 impl Chaveiro {
     /// Reads the settings, makes the core and boots it.
-    fn new(handle: Handle<Message>) -> Self {
-        let io = Io::new(handle);
+    fn new() -> Self {
+        let io = Io::new();
         let (settings, settings_error) = match io.load_settings() {
             Ok(Some(settings)) => (settings, None),
             // A first start: the new device id is a changed setting.

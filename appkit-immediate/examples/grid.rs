@@ -9,7 +9,7 @@
 use appkit_immediate::{App, Length, Ui, run};
 
 fn main() {
-    run(|_| Grid { open: true });
+    run(|| Grid { open: true });
 }
 
 struct Grid {
@@ -17,10 +17,6 @@ struct Grid {
 }
 
 impl App for Grid {
-    type Message = ();
-
-    fn update(&mut self, (): ()) {}
-
     fn view(&mut self, ui: &mut Ui) {
         if ui.should_terminate() {
             self.open = false;

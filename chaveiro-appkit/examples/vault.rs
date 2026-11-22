@@ -4,8 +4,8 @@
 //! made-up vault and print to stderr. Lock prints `lock` and closes the
 //! window.
 //!
-//! A thread plays a script from `App::update`, which works where System
-//! Events cannot reach the window. It picks rows of the list through the
+//! An interval stream plays a script at the start of the view, which works
+//! where System Events cannot reach the window. It picks rows of the list through the
 //! table as a click would, and after each pick prints the details heading
 //! of every pass, panicking when one shows no heading: the details must not
 //! blank while the core opens the picked item. It also clicks Show on the
@@ -41,20 +41,13 @@ use objc2_foundation::{NSIndexSet, NSNotFound, NSRange, NSString};
 use std::{
     alloc::{GlobalAlloc, Layout, System},
     cell::Cell,
-    thread,
     time::Duration,
 };
 use uuid::Uuid;
 use vault::{VaultAction, VaultApp, VaultForm};
 
 fn main() {
-    run(|handle| {
-        thread::spawn(move || {
-            for step in SCRIPT {
-                thread::sleep(Duration::from_millis(300));
-                handle.send(*step);
-            }
-        });
+    run(|| {
         let index = sample();
         let views = index.ciphers.iter().map(view_of).collect();
         Preview {
@@ -64,6 +57,8 @@ fn main() {
             opened: None,
             form: VaultForm::default(),
             open: true,
+            played: 0,
+            server: url::Url::parse("https://vault.bitwarden.com").expect("a valid URL"),
             watch: 0,
             steady: None,
         }
@@ -91,6 +86,9 @@ enum Step {
     Report,
     Quit,
 }
+
+/// The time between steps.
+const STEP_EVERY: Duration = Duration::from_millis(300);
 
 const SCRIPT: &[Step] = &[
     Step::Dump,
@@ -162,17 +160,20 @@ struct Preview {
     opened: Option<Uuid>,
     form: VaultForm,
     open: bool,
+    /// Steps of [`SCRIPT`] played so far.
+    played: usize,
+    /// Parsed once, so steady passes allocate nothing.
+    server: url::Url,
     /// Passes left whose details heading is printed and checked.
     watch: u32,
     /// The allocation count when measuring began.
     steady: Option<usize>,
 }
 
-impl App for Preview {
-    type Message = Step;
-
-    fn update(&mut self, step: Step) {
-        let mtm = MainThreadMarker::new().expect("update runs on the main thread");
+impl Preview {
+    /// Plays one step of the script.
+    fn play(&mut self, step: Step) {
+        let mtm = MainThreadMarker::new().expect("the view runs on the main thread");
         let content = content(mtm);
         match step {
             Step::Dump => dump(&content),
@@ -251,8 +252,19 @@ impl App for Preview {
             Step::Quit => self.open = std::env::var("QUIT").ok().as_deref() == Some("0"),
         }
     }
+}
 
+impl App for Preview {
     fn view(&mut self, ui: &mut Ui) {
+        // Played before the view reads the state, so this pass shows the
+        // step.
+        let mut ticks = ui.stream("script", || appkit_executor::interval(STEP_EVERY));
+        while ticks.next().is_some() {
+            if let Some(step) = SCRIPT.get(self.played) {
+                self.played += 1;
+                self.play(*step);
+            }
+        }
         if ui.should_terminate() {
             self.open = false;
         }
@@ -260,10 +272,9 @@ impl App for Preview {
             return;
         }
         let now_ms = 1_800_000_000_000;
-        let server = url::Url::parse("https://vault.bitwarden.com").expect("a valid URL");
         let screen = VaultScreen {
             email: "alex@example.com",
-            server: &server,
+            server: &self.server,
             index: &self.index,
             index_revision: self.revision,
             open: None,

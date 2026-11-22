@@ -11,7 +11,7 @@
 use appkit_immediate::{App, Orientation, Ui, run};
 
 fn main() {
-    run(|_| Form {
+    run(|| Form {
         open: true,
         name: String::new(),
         upper: String::new(),
@@ -30,10 +30,6 @@ struct Form {
 }
 
 impl App for Form {
-    type Message = ();
-
-    fn update(&mut self, (): ()) {}
-
     fn view(&mut self, ui: &mut Ui) {
         if ui.should_terminate() {
             self.open = false;

@@ -139,5 +139,5 @@ fn test_ui() -> Ui {
     // The tests create no AppKit object; the shared target is a plain
     // NSObject subclass, which any thread may create.
     let mtm = unsafe { MainThreadMarker::new_unchecked() };
-    Ui::new(mtm, Rc::new(|| {}))
+    Ui::new(mtm, Rc::new(|| {}), || true)
 }

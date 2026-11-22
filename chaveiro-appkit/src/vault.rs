@@ -1246,6 +1246,16 @@ fn sync_status(ui: &mut Ui, screen: &VaultScreen<'_>, now_ms: u64) {
     let ago = screen
         .synced_at
         .map(|synced_at| Ago(now_ms.saturating_sub(synced_at) / 1000));
+    // The text counts minutes, so the line draws again on the next one.
+    // Counted from the sync, so every pass in a minute names one deadline.
+    if let Some(synced_at) = screen.synced_at {
+        let elapsed = now_ms.saturating_sub(synced_at);
+        let next_minute = synced_at + (elapsed / 60_000 + 1) * 60_000;
+        let deadline = std::time::UNIX_EPOCH + std::time::Duration::from_millis(next_minute);
+        ui.task(("next minute", deadline), move || {
+            appkit_executor::sleep_until_clock(deadline)
+        });
+    }
     ui.label(
         "sync",
         format_args!(

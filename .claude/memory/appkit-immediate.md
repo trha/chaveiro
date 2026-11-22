@@ -38,8 +38,8 @@ rows off screen are wrong.
 
 ## Idle pass check (plans/idle-pass-check.md)
 
-- Debug builds rerun `view` after each pass that took no events and no
-  messages; that rerun must record zero writes (`src/write_check.rs`).
+- Debug builds rerun `view` after each pass that took no events and polled
+  no woken task; that rerun must record zero writes (`src/write_check.rs`).
 - Setter hooks: hook a selector only on the highest class that defines
   it. Hooking a subclass and its superclass both loops forever, because
   the subclass's `super` call reaches a trampoline that looks up the
@@ -63,8 +63,10 @@ rows off screen are wrong.
 - From the Claude Code session, System Events sees 0 windows and
   `screencapture` fails, so `tools/smoke.sh` cannot run there. To check
   layout, render the content view in the app with
-  `cacheDisplayInRect:toBitmapImageRep:` from `App::update`, never from
-  `view`, where the layout writes trip the idle check.
+  `cacheDisplayInRect:toBitmapImageRep:` from a script step taken off an
+  interval stream at the start of `view`: that pass polled a task, so no
+  idle rerun checks its layout writes. (Before 2026-11-22 this was
+  `App::update`, which is gone.)
 
 ## Learned while building the two-step screen (2026-11-21)
 
@@ -84,7 +86,7 @@ rows off screen are wrong.
   dropped. `Control::senders` now lists what each control registered.
 - `examples/code_boxes.rs` plays edits through the field editor
   (`insertText:replacementRange:`, `doCommandBySelector:`) from
-  `App::update`, which works from the Claude Code session where System
+  script steps, which works from the Claude Code session where System
   Events does not.
 
 ## Learned while building the vault sidebar (2026-11-21)
@@ -106,7 +108,7 @@ rows off screen are wrong.
 - On SDK 26+ an `NSButton`'s title is drawn by a SwiftUI hosting view, so a
   dump of `NSTextField`s no longer lists button titles.
 - `examples/sidebar.rs` and `chaveiro-appkit/examples/vault.rs` drive
-  picks through the table from `App::update` and print the text; the vault
+  picks through the table from script steps and print the text; the vault
   example checks steady passes allocate 0.
 - `WindowResponse::full_size_content` lets the sidebar reach the window's
   top. Panes after the first pin their top to the safe area guide, and the

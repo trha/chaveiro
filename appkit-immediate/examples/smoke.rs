@@ -1,8 +1,8 @@
 //! Two windows. The first counts clicks; closing it, or Cmd+Q, ends the app.
-//! The second closes on its own when asked, and a message from a background
-//! thread updates the first window's status line.
+//! The second closes on its own when asked, and a task that waits on a
+//! background thread updates the first window's status line.
 //!
-//! With `SMOKE_PANIC=1`, the second pass (the background message) panics, to check that `run` closes
+//! With `SMOKE_PANIC=1`, the pass that takes the task's answer panics, to check that `run` closes
 //! the windows and resumes the panic.
 
 // The program is macOS only. On other targets it is empty, so it checks but
@@ -10,10 +10,9 @@
 #![cfg_attr(not(target_os = "macos"), no_main)]
 #![cfg(target_os = "macos")]
 
-use appkit_immediate::{App, Handle, Orientation, Ui, run};
+use appkit_immediate::{App, Orientation, Ui, run};
 use objc2_app_kit::NSTextField;
 use objc2_foundation::NSString;
-use std::thread::JoinHandle;
 
 fn main() {
     if std::env::var_os("OBJC_DEBUG_MISSING_POOLS").is_some() {
@@ -21,18 +20,12 @@ fn main() {
         // script checks only lines for this thread.
         eprintln!("main thread {:#x}", unsafe { pthread_self() });
     }
-    run(|handle: Handle<String>| Smoke {
+    run(|| Smoke {
         clicks: 0,
-        passes: 0,
         panic: std::env::var_os("SMOKE_PANIC").is_some(),
         second_open: true,
         main_open: true,
         status: String::from("waiting for the background thread"),
-        worker: Some(std::thread::spawn(move || {
-            std::thread::sleep(std::time::Duration::from_millis(500));
-            // The window may already be gone, which needs no message.
-            let _ = handle.send(String::from("hello from a background thread"));
-        })),
     });
     eprintln!("run returned");
 }
@@ -43,34 +36,34 @@ unsafe extern "C" {
 
 struct Smoke {
     clicks: u32,
-    passes: u32,
     panic: bool,
     second_open: bool,
     main_open: bool,
     status: String,
-    /// Joined when the app is dropped, so the thread never outlives it.
-    worker: Option<JoinHandle<()>>,
 }
 
 impl Drop for Smoke {
     fn drop(&mut self) {
-        if let Some(worker) = self.worker.take() {
-            worker.join().expect("the worker does not panic");
-        }
         eprintln!("app dropped");
     }
 }
 
 impl App for Smoke {
-    type Message = String;
-
-    fn update(&mut self, message: String) {
-        self.status = message;
-    }
-
     fn view(&mut self, ui: &mut Ui) {
-        self.passes += 1;
-        assert!(!(self.panic && self.passes == 2), "planned panic");
+        // Taken before the status line is declared, so this pass shows it.
+        // Declared at the root, so closing a window keeps it.
+        let answer = ui
+            .task("background", || {
+                appkit_executor::off_thread(|| {
+                    std::thread::sleep(std::time::Duration::from_millis(500));
+                    String::from("hello from a background thread")
+                })
+            })
+            .take();
+        if let Some(Some(status)) = answer {
+            assert!(!self.panic, "planned panic");
+            self.status = status;
+        }
         if ui.should_terminate() {
             eprintln!("should terminate");
             self.main_open = false;
