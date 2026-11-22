@@ -1,13 +1,17 @@
 //! WinUI events as data: shared delegates queue `(sender, kind)`, and each
 //! pass resolves them to nodes.
 
+mod delegate;
+
+pub(crate) use delegate::Delegate;
+
 use crate::{
     bindings::*,
     tree::{NodeId, Tree},
 };
 use ahash::AHashMap;
 use std::{cell::RefCell, rc::Rc};
-use windows_core::{IInspectable, IUnknown, Interface, Ref, Result};
+use windows_core::{IUnknown, Interface, Result};
 
 /// The event state of one window set.
 ///
@@ -43,7 +47,7 @@ impl Events {
             contexts: RefCell::new(Vec::new()),
             wake,
         });
-        tracing::debug!(count = Delegates::COUNT, "shared delegates");
+        tracing::debug!(count = EventKind::ALL.len() + 1, "shared delegates");
         Events {
             delegates: Delegates::new(&inbox),
             senders: AHashMap::new(),
@@ -141,74 +145,81 @@ impl Events {
         if subscribed.contains(kind) {
             return Ok(());
         }
+        let delegate = self.delegates.get(kind);
         match kind {
             // A split button is no ButtonBase, and its click has its own
             // delegate type.
             EventKind::Click => match (source.cast::<IButtonBase>(), source.cast::<ISplitButton>())
             {
-                (Ok(button), _) => button.add_click(&self.delegates.click)?,
-                (_, Ok(button)) => button.add_click(&self.delegates.split_click)?,
-                _ => source
-                    .cast::<IMenuFlyoutItem>()?
-                    .add_click(&self.delegates.click)?,
+                (Ok(button), _) => delegate.register(&button, |table| table.Click)?,
+                (_, Ok(button)) => delegate.register(&button, |table| table.Click)?,
+                _ => delegate.register(&source.cast::<IMenuFlyoutItem>()?, |table| table.Click)?,
             },
-            EventKind::ContextRequested => source
-                .cast::<IUIElement>()?
-                .add_context_requested(&self.delegates.context_requested)?,
-            EventKind::Invoked => source
-                .cast::<IKeyboardAccelerator>()?
-                .add_invoked(&self.delegates.invoked)?,
-            EventKind::DialogPrimary => source
-                .cast::<IContentDialog>()?
-                .add_primary_button_click(&self.delegates.dialog_primary)?,
-            EventKind::DialogClosed => source
-                .cast::<IContentDialog>()?
-                .add_closed(&self.delegates.dialog_closed)?,
-            EventKind::FlyoutClosed => source
-                .cast::<IFlyoutBase>()?
-                .add_closed(&self.delegates.flyout_closed)?,
-            EventKind::CloseRequested => source
-                .cast::<IAppWindow>()?
-                .add_closing(&self.delegates.close_requested)?,
-            EventKind::TextChanged => source
-                .cast::<ITextBox>()?
-                .add_text_changed(&self.delegates.text_changed)?,
-            EventKind::CompositionStarted => source
-                .cast::<ITextBox>()?
-                .add_text_composition_started(&self.delegates.composition_started)?,
-            EventKind::CompositionEnded => source
-                .cast::<ITextBox>()?
-                .add_text_composition_ended(&self.delegates.composition_ended)?,
-            EventKind::Enter => source
-                .cast::<IUIElement>()?
-                .add_key_down(&self.delegates.enter)?,
-            EventKind::DropDownClosed => source
-                .cast::<IComboBox>()?
-                .add_drop_down_closed(&self.delegates.drop_down_closed)?,
-            EventKind::TextSubmitted => source
-                .cast::<IComboBox>()?
-                .add_text_submitted(&self.delegates.text_submitted)?,
-            EventKind::LostFocus => source
-                .cast::<IUIElement>()?
-                .add_lost_focus(&self.delegates.lost_focus)?,
-            EventKind::PasswordChanged => source
-                .cast::<IPasswordBox>()?
-                .add_password_changed(&self.delegates.password_changed)?,
-            EventKind::SizeChanged => source
-                .cast::<IFrameworkElement>()?
-                .add_size_changed(&self.delegates.size_changed)?,
-            EventKind::SelectionChanged => source
-                .cast::<ISelector>()?
-                .add_selection_changed(&self.delegates.selection_changed)?,
-            EventKind::Key => source
-                .cast::<IUIElement>()?
-                .add_preview_key_down(&self.delegates.key)?,
-            EventKind::BackRequested => source
-                .cast::<ITitleBar>()?
-                .add_back_requested(&self.delegates.back_requested)?,
-            EventKind::NavigationSelectionChanged => source
-                .cast::<INavigationView>()?
-                .add_selection_changed(&self.delegates.navigation_selection_changed)?,
+            EventKind::ContextRequested => delegate
+                .register(&source.cast::<IUIElement>()?, |table| {
+                    table.ContextRequested
+                })?,
+            EventKind::Invoked => delegate
+                .register(&source.cast::<IKeyboardAccelerator>()?, |table| {
+                    table.Invoked
+                })?,
+            EventKind::DialogPrimary => delegate
+                .register(&source.cast::<IContentDialog>()?, |table| {
+                    table.PrimaryButtonClick
+                })?,
+            EventKind::DialogClosed => {
+                delegate.register(&source.cast::<IContentDialog>()?, |table| table.Closed)?
+            }
+            EventKind::FlyoutClosed => {
+                delegate.register(&source.cast::<IFlyoutBase>()?, |table| table.Closed)?
+            }
+            EventKind::CloseRequested => {
+                delegate.register(&source.cast::<IAppWindow>()?, |table| table.Closing)?
+            }
+            EventKind::TextChanged => {
+                delegate.register(&source.cast::<ITextBox>()?, |table| table.TextChanged)?
+            }
+            EventKind::CompositionStarted => delegate
+                .register(&source.cast::<ITextBox>()?, |table| {
+                    table.TextCompositionStarted
+                })?,
+            EventKind::CompositionEnded => delegate
+                .register(&source.cast::<ITextBox>()?, |table| {
+                    table.TextCompositionEnded
+                })?,
+            EventKind::Enter => {
+                delegate.register(&source.cast::<IUIElement>()?, |table| table.KeyDown)?
+            }
+            EventKind::DropDownClosed => {
+                delegate.register(&source.cast::<IComboBox>()?, |table| table.DropDownClosed)?
+            }
+            EventKind::TextSubmitted => {
+                delegate.register(&source.cast::<IComboBox>()?, |table| table.TextSubmitted)?
+            }
+            EventKind::LostFocus => {
+                delegate.register(&source.cast::<IUIElement>()?, |table| table.LostFocus)?
+            }
+            EventKind::PasswordChanged => delegate
+                .register(&source.cast::<IPasswordBox>()?, |table| {
+                    table.PasswordChanged
+                })?,
+            EventKind::SizeChanged => delegate
+                .register(&source.cast::<IFrameworkElement>()?, |table| {
+                    table.SizeChanged
+                })?,
+            EventKind::SelectionChanged => {
+                delegate.register(&source.cast::<ISelector>()?, |table| table.SelectionChanged)?
+            }
+            EventKind::Key => {
+                delegate.register(&source.cast::<IUIElement>()?, |table| table.PreviewKeyDown)?
+            }
+            EventKind::BackRequested => {
+                delegate.register(&source.cast::<ITitleBar>()?, |table| table.BackRequested)?
+            }
+            EventKind::NavigationSelectionChanged => delegate
+                .register(&source.cast::<INavigationView>()?, |table| {
+                    table.SelectionChanged
+                })?,
         };
         let identity = identity(source)?;
         tracing::trace!(?kind, source = identity, "subscribe");
@@ -221,9 +232,9 @@ impl Events {
     /// next key or paste replaces it. The handler runs at once, before any
     /// key that follows, and ends with the control.
     pub(crate) fn select_all_on_focus(&self, text_box: &TextBox) -> Result<()> {
-        text_box
-            .cast::<IUIElement>()?
-            .add_got_focus(&self.delegates.select_all)?;
+        self.delegates
+            .select_all
+            .register(&text_box.cast::<IUIElement>()?, |table| table.GotFocus)?;
         Ok(())
     }
 
@@ -274,6 +285,44 @@ pub(crate) enum EventKind {
     DialogPrimary,
     /// A dialog closed, by any button or Escape.
     DialogClosed,
+}
+
+impl EventKind {
+    /// Every kind, in discriminant order, so `ALL[kind as usize] == kind`.
+    pub(crate) const ALL: [EventKind; 20] = {
+        use EventKind::*;
+        let all = [
+            Click,
+            CloseRequested,
+            TextChanged,
+            CompositionStarted,
+            CompositionEnded,
+            Enter,
+            SelectionChanged,
+            SizeChanged,
+            LostFocus,
+            PasswordChanged,
+            TextSubmitted,
+            DropDownClosed,
+            BackRequested,
+            Key,
+            NavigationSelectionChanged,
+            ContextRequested,
+            FlyoutClosed,
+            Invoked,
+            DialogPrimary,
+            DialogClosed,
+        ];
+        let mut index = 0;
+        while index < all.len() {
+            assert!(
+                all[index] as usize == index,
+                "kinds out of discriminant order"
+            );
+            index += 1;
+        }
+        all
+    };
 }
 
 /// A key a control reports through [`TextBoxResponse::keys`]. Enter is not
@@ -334,25 +383,19 @@ struct Inbox {
 }
 
 impl Inbox {
-    fn push_key(&self, sender: Option<&IUnknown>, key: Key) {
-        // A delegate without a sender cannot be routed to a node.
-        let Some(sender) = sender else { return };
+    fn push_key(&self, sender: &IUnknown, key: Key) {
         self.keys.borrow_mut().push((sender.as_raw() as usize, key));
         (self.wake)();
     }
 
-    fn push_context(&self, sender: Option<&IUnknown>, position: Option<Point>) {
-        // A delegate without a sender cannot be routed to a node.
-        let Some(sender) = sender else { return };
+    fn push_context(&self, sender: &IUnknown, position: Option<Point>) {
         self.contexts
             .borrow_mut()
             .push((sender.as_raw() as usize, position));
         (self.wake)();
     }
 
-    fn push(&self, sender: Option<&IUnknown>, kind: EventKind) {
-        // A delegate without a sender cannot be routed to a node.
-        let Some(sender) = sender else { return };
+    fn push(&self, sender: &IUnknown, kind: EventKind) {
         self.queued
             .borrow_mut()
             .push((sender.as_raw() as usize, kind));
@@ -362,281 +405,22 @@ impl Inbox {
 
 /// One delegate object per event kind, registered on every source.
 struct Delegates {
-    click: RoutedEventHandler,
-    /// A split button's main part; its chevron opens its menu and raises
-    /// nothing.
-    split_click: TypedEventHandler<SplitButton, SplitButtonClickEventArgs>,
-    close_requested: TypedEventHandler<AppWindow, AppWindowClosingEventArgs>,
-    text_changed: TextChangedEventHandler,
-    composition_started: TypedEventHandler<TextBox, TextCompositionStartedEventArgs>,
-    composition_ended: TypedEventHandler<TextBox, TextCompositionEndedEventArgs>,
-    enter: KeyEventHandler,
-    selection_changed: SelectionChangedEventHandler,
-    size_changed: SizeChangedEventHandler,
-    lost_focus: RoutedEventHandler,
-    password_changed: RoutedEventHandler,
-    text_submitted: TypedEventHandler<ComboBox, ComboBoxTextSubmittedEventArgs>,
-    drop_down_closed: EventHandler<IInspectable>,
-    back_requested: TypedEventHandler<TitleBar, IInspectable>,
-    key: KeyEventHandler,
-    navigation_selection_changed:
-        TypedEventHandler<NavigationView, NavigationViewSelectionChangedEventArgs>,
-    context_requested: TypedEventHandler<UIElement, ContextRequestedEventArgs>,
-    flyout_closed: EventHandler<IInspectable>,
-    invoked: TypedEventHandler<KeyboardAccelerator, KeyboardAcceleratorInvokedEventArgs>,
-    dialog_primary: TypedEventHandler<ContentDialog, ContentDialogButtonClickEventArgs>,
-    dialog_closed: TypedEventHandler<ContentDialog, ContentDialogClosedEventArgs>,
+    /// Indexed by [`EventKind`].
+    events: [Delegate; EventKind::ALL.len()],
     /// Not an event the app sees: it selects the sender's text.
-    select_all: RoutedEventHandler,
+    select_all: Delegate,
 }
 
 impl Delegates {
-    /// The number of delegate objects, one per event kind. Each field is one
-    /// interface pointer, so the size gives the count.
-    const COUNT: usize = size_of::<Delegates>() / size_of::<usize>();
-
     fn new(inbox: &Rc<Inbox>) -> Self {
-        let click = {
-            let inbox = Rc::clone(inbox);
-            RoutedEventHandler::shared(move |sender: Ref<'_, IInspectable>, _| {
-                inbox.push(canonical(sender.ok().ok()).as_ref(), EventKind::Click)
-            })
-        };
-        let split_click = {
-            let inbox = Rc::clone(inbox);
-            TypedEventHandler::shared(move |sender: Ref<'_, SplitButton>, _| {
-                inbox.push(canonical(sender.ok().ok()).as_ref(), EventKind::Click)
-            })
-        };
-        let close_requested = {
-            let inbox = Rc::clone(inbox);
-            TypedEventHandler::shared(
-                move |sender: Ref<'_, AppWindow>, arguments: Ref<'_, AppWindowClosingEventArgs>| {
-                    // The app decides: it closes the window by no longer
-                    // declaring it. If cancelling fails, the window closes
-                    // and the next pass drops its node anyway.
-                    if let Ok(arguments) = arguments.ok() {
-                        let _ = arguments.SetCancel(true);
-                    }
-                    inbox.push(
-                        canonical(sender.ok().ok()).as_ref(),
-                        EventKind::CloseRequested,
-                    );
-                },
-            )
-        };
-        let text_changed = {
-            let inbox = Rc::clone(inbox);
-            TextChangedEventHandler::shared(move |sender: Ref<'_, IInspectable>, _| {
-                inbox.push(canonical(sender.ok().ok()).as_ref(), EventKind::TextChanged)
-            })
-        };
-        let composition_started = {
-            let inbox = Rc::clone(inbox);
-            TypedEventHandler::shared(move |sender: Ref<'_, TextBox>, _| {
-                inbox.push(
-                    canonical(sender.ok().ok()).as_ref(),
-                    EventKind::CompositionStarted,
-                )
-            })
-        };
-        let composition_ended = {
-            let inbox = Rc::clone(inbox);
-            TypedEventHandler::shared(move |sender: Ref<'_, TextBox>, _| {
-                inbox.push(
-                    canonical(sender.ok().ok()).as_ref(),
-                    EventKind::CompositionEnded,
-                )
-            })
-        };
-        let enter = {
-            let inbox = Rc::clone(inbox);
-            KeyEventHandler::shared(
-                move |sender: Ref<'_, IInspectable>, arguments: Ref<'_, KeyRoutedEventArgs>| {
-                    let Ok(arguments) = arguments.ok() else {
-                        return;
-                    };
-                    if arguments.Key().ok() != Some(VirtualKey::Enter) {
-                        return;
-                    }
-                    // Marked handled so a parent does not act on it too. If
-                    // the write fails the key only bubbles on.
-                    let _ = arguments.SetHandled(true);
-                    inbox.push(canonical(sender.ok().ok()).as_ref(), EventKind::Enter);
-                },
-            )
-        };
-        let selection_changed = {
-            let inbox = Rc::clone(inbox);
-            SelectionChangedEventHandler::shared(move |sender: Ref<'_, IInspectable>, _| {
-                inbox.push(
-                    canonical(sender.ok().ok()).as_ref(),
-                    EventKind::SelectionChanged,
-                )
-            })
-        };
-        let size_changed = {
-            let inbox = Rc::clone(inbox);
-            SizeChangedEventHandler::shared(move |sender: Ref<'_, IInspectable>, _| {
-                inbox.push(canonical(sender.ok().ok()).as_ref(), EventKind::SizeChanged)
-            })
-        };
-        let lost_focus = {
-            let inbox = Rc::clone(inbox);
-            RoutedEventHandler::shared(move |sender: Ref<'_, IInspectable>, _| {
-                inbox.push(canonical(sender.ok().ok()).as_ref(), EventKind::LostFocus)
-            })
-        };
-        let password_changed = {
-            let inbox = Rc::clone(inbox);
-            RoutedEventHandler::shared(move |sender: Ref<'_, IInspectable>, _| {
-                inbox.push(
-                    canonical(sender.ok().ok()).as_ref(),
-                    EventKind::PasswordChanged,
-                )
-            })
-        };
-        let text_submitted = {
-            let inbox = Rc::clone(inbox);
-            TypedEventHandler::shared(move |sender: Ref<'_, ComboBox>, _| {
-                inbox.push(
-                    canonical(sender.ok().ok()).as_ref(),
-                    EventKind::TextSubmitted,
-                )
-            })
-        };
-        let drop_down_closed = {
-            let inbox = Rc::clone(inbox);
-            EventHandler::<IInspectable>::shared(move |sender: Ref<'_, IInspectable>, _| {
-                inbox.push(
-                    canonical(sender.ok().ok()).as_ref(),
-                    EventKind::DropDownClosed,
-                )
-            })
-        };
-        let back_requested = {
-            let inbox = Rc::clone(inbox);
-            TypedEventHandler::shared(move |sender: Ref<'_, TitleBar>, _| {
-                inbox.push(
-                    canonical(sender.ok().ok()).as_ref(),
-                    EventKind::BackRequested,
-                )
-            })
-        };
-        let key = {
-            let inbox = Rc::clone(inbox);
-            KeyEventHandler::shared(
-                move |sender: Ref<'_, IInspectable>, arguments: Ref<'_, KeyRoutedEventArgs>| {
-                    // Left unhandled, so the control still acts on the key.
-                    let pressed = arguments.ok().and_then(|arguments| arguments.Key());
-                    if let Some(key) = pressed.ok().and_then(Key::from_virtual) {
-                        inbox.push_key(canonical(sender.ok().ok()).as_ref(), key);
-                    }
-                },
-            )
-        };
-        let navigation_selection_changed = {
-            let inbox = Rc::clone(inbox);
-            TypedEventHandler::shared(move |sender: Ref<'_, NavigationView>, _| {
-                inbox.push(
-                    canonical(sender.ok().ok()).as_ref(),
-                    EventKind::NavigationSelectionChanged,
-                )
-            })
-        };
-        let context_requested = {
-            let inbox = Rc::clone(inbox);
-            TypedEventHandler::shared(
-                move |sender: Ref<'_, UIElement>, arguments: Ref<'_, ContextRequestedEventArgs>| {
-                    let (Ok(sender), Ok(arguments)) = (sender.ok(), arguments.ok()) else {
-                        return;
-                    };
-                    // Handled, so a parent does not open its own menu too; if
-                    // the write fails, a parent may also act on it.
-                    let _ = arguments.SetHandled(true);
-                    let mut point = Point::default();
-                    // From the keyboard there is no position, and the menu
-                    // opens at its control.
-                    let position = arguments
-                        .TryGetPosition(sender, &mut point)
-                        .unwrap_or(false)
-                        .then_some(point);
-                    inbox.push_context(canonical(Some(sender)).as_ref(), position);
-                },
-            )
-        };
-        let flyout_closed = {
-            let inbox = Rc::clone(inbox);
-            EventHandler::<IInspectable>::shared(move |sender: Ref<'_, IInspectable>, _| {
-                inbox.push(
-                    canonical(sender.ok().ok()).as_ref(),
-                    EventKind::FlyoutClosed,
-                )
-            })
-        };
-        let invoked = {
-            let inbox = Rc::clone(inbox);
-            TypedEventHandler::shared(
-                move |sender: Ref<'_, KeyboardAccelerator>,
-                      arguments: Ref<'_, KeyboardAcceleratorInvokedEventArgs>| {
-                    // Handled, so no other accelerator acts on the key; if the
-                    // write fails, the key only goes on to others.
-                    if let Ok(arguments) = arguments.ok() {
-                        let _ = arguments.SetHandled(true);
-                    }
-                    inbox.push(canonical(sender.ok().ok()).as_ref(), EventKind::Invoked)
-                },
-            )
-        };
-        let dialog_primary = {
-            let inbox = Rc::clone(inbox);
-            TypedEventHandler::shared(move |sender: Ref<'_, ContentDialog>, _| {
-                inbox.push(
-                    canonical(sender.ok().ok()).as_ref(),
-                    EventKind::DialogPrimary,
-                )
-            })
-        };
-        let dialog_closed = {
-            let inbox = Rc::clone(inbox);
-            TypedEventHandler::shared(move |sender: Ref<'_, ContentDialog>, _| {
-                inbox.push(
-                    canonical(sender.ok().ok()).as_ref(),
-                    EventKind::DialogClosed,
-                )
-            })
-        };
-        let select_all = RoutedEventHandler::shared(|sender: Ref<'_, IInspectable>, _| {
-            // Only text boxes register it; a failed selection leaves the
-            // caret where WinUI put it, which is still usable.
-            if let Ok(text_box) = sender.ok().and_then(|sender| sender.cast::<TextBox>()) {
-                let _ = text_box.SelectAll();
-            }
-        });
         Delegates {
-            navigation_selection_changed,
-            context_requested,
-            flyout_closed,
-            invoked,
-            dialog_primary,
-            dialog_closed,
-            back_requested,
-            select_all,
-            key,
-            click,
-            split_click,
-            close_requested,
-            text_changed,
-            composition_started,
-            composition_ended,
-            enter,
-            selection_changed,
-            size_changed,
-            lost_focus,
-            password_changed,
-            text_submitted,
-            drop_down_closed,
+            events: std::array::from_fn(|index| Delegate::event(EventKind::ALL[index], inbox)),
+            select_all: Delegate::select_all(),
         }
+    }
+
+    fn get(&self, kind: EventKind) -> &Delegate {
+        &self.events[kind as usize]
     }
 }
 
@@ -644,9 +428,4 @@ impl Delegates {
 /// interface of one object.
 pub(crate) fn identity(source: &impl Interface) -> Result<usize> {
     Ok(source.cast::<IUnknown>()?.as_raw() as usize)
-}
-
-/// The [`IUnknown`] of a delegate's sender, or [`None`] when there is none.
-fn canonical(sender: Option<&impl Interface>) -> Option<IUnknown> {
-    sender.and_then(|sender| sender.cast::<IUnknown>().ok())
 }

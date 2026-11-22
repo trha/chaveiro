@@ -1,12 +1,11 @@
 use super::{Control, Response, boxed, resource};
 use crate::{
     bindings::{
-        Control as XamlControl, FocusState, FontIcon, FrameworkElement, Grid, HorizontalAlignment,
-        IKeyboardAccelerator, KeyboardAccelerator, KeyboardAcceleratorInvokedEventArgs,
-        KeyboardAcceleratorPlacementMode, Panel, TextBox, Thickness, TypedEventHandler, UIElement,
-        VerticalAlignment, VirtualKey, VirtualKeyModifiers,
+        Control as XamlControl, FontIcon, FrameworkElement, Grid, HorizontalAlignment,
+        IKeyboardAccelerator, KeyboardAccelerator, KeyboardAcceleratorPlacementMode, Panel,
+        TextBox, Thickness, UIElement, VerticalAlignment, VirtualKey, VirtualKeyModifiers,
     },
-    events::{EventKind, Key},
+    events::{Delegate, EventKind, Key},
     pass::{ChildKind, ControlNode, Ui},
 };
 use std::{
@@ -14,7 +13,7 @@ use std::{
     ops::{Deref, DerefMut},
 };
 use windows_collections::IMap;
-use windows_core::{IInspectable, Interface, Ref, Result};
+use windows_core::{IInspectable, Interface, Result};
 
 impl Ui {
     /// A search box bound to `value`, in the look of the Microsoft Store's
@@ -87,26 +86,9 @@ fn set_shortcut(element: &UIElement, text_box: &TextBox, letter: char) -> Result
     // The handler holds the box weakly, because the box's grid holds the
     // accelerator, which holds the handler.
     let target = text_box.downgrade()?;
-    accelerator
-        .cast::<IKeyboardAccelerator>()?
-        .add_invoked(&TypedEventHandler::shared(
-            move |_: Ref<'_, KeyboardAccelerator>,
-                  arguments: Ref<'_, KeyboardAcceleratorInvokedEventArgs>| {
-                // A box that is gone, or that refuses focus, leaves focus where
-                // it was, and the key does nothing else.
-                if let Some(text_box) = target.upgrade()
-                    && let Ok(element) = text_box.cast::<UIElement>()
-                    && element.Focus(FocusState::Keyboard).unwrap_or(false)
-                {
-                    let _ = text_box.SelectAll();
-                }
-                if let Ok(arguments) = arguments.ok() {
-                    // Handled, so no other accelerator acts on the key; if the
-                    // write fails, the key only goes on to others.
-                    let _ = arguments.SetHandled(true);
-                }
-            },
-        ))?;
+    Delegate::focus(target).register(&accelerator.cast::<IKeyboardAccelerator>()?, |table| {
+        table.Invoked
+    })?;
     let accelerators = element.KeyboardAccelerators()?;
     accelerators.Clear()?;
     accelerators.Append(&accelerator)?;
@@ -170,16 +152,17 @@ impl SearchBoxResponse<'_> {
             "a shortcut is Ctrl and a letter"
         );
         let letter = letter.to_ascii_uppercase();
-        let control = self.response.ui.control_mut(self.response.node);
-        let element = control.element.clone();
+        let ControlNode {
+            element, control, ..
+        } = self.response.ui.control_mut(self.response.node);
         let Control::SearchBox {
             text_box, shortcut, ..
-        } = &mut control.control
+        } = control
         else {
             unreachable!("search box keys hold search boxes")
         };
         if *shortcut != Some(letter) {
-            set_shortcut(&element, text_box, letter)?;
+            set_shortcut(element, text_box, letter)?;
             *shortcut = Some(letter);
         }
         Ok(self)
@@ -191,15 +174,10 @@ impl SearchBoxResponse<'_> {
     /// is empty.
     pub fn keys(&mut self) -> Result<impl Iterator<Item = Key>> {
         let Response { ui, node } = &mut self.response;
-        let control = ui.control_mut(*node);
-        let Control::SearchBox { text_box, .. } = &control.control else {
-            unreachable!("search box keys hold search boxes")
-        };
-        let text_box = text_box.clone();
-        let mut subscribed = control.subscribed;
-        ui.events
-            .subscribe(*node, &mut subscribed, &text_box, EventKind::Key)?;
-        ui.control_mut(*node).subscribed = subscribed;
+        ui.subscribe(*node, &[EventKind::Key], |control| match &control.control {
+            Control::SearchBox { text_box, .. } => text_box,
+            _ => unreachable!("search box keys hold search boxes"),
+        })?;
         Ok(ui.events.keys(*node))
     }
 }
