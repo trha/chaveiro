@@ -12,12 +12,13 @@ use chaveiro_core::{
     crypto::SecretString,
     filter::{Counts, Filter, KINDS},
     search::{Query, Tier},
+    totp,
     vault::{
         CardView, CipherContent, CipherKind, CipherSummary, CipherView, CopyField, FolderSummary,
         IdentityView, LoginView, SshKeyView, VaultIndex,
     },
 };
-use std::fmt::Write as _;
+use std::{fmt::Write as _, time::Duration};
 use url::Url;
 use uuid::Uuid;
 use windows_core::Result;
@@ -706,7 +707,12 @@ fn details_pane(
                 )?;
                 return Ok(());
             }
-            fields(ui, view, revealed)?;
+            if let Some(field) = fields(ui, view, revealed)? {
+                pass.asked = Some(UserAction::Copy {
+                    id: summary.id,
+                    field,
+                });
+            }
             footer(ui, details.index, view)
         })?
         .padding([24.0, 16.0, 24.0, 24.0])?;
@@ -915,10 +921,16 @@ fn heading(ui: &mut Ui, kind: CipherKind, name: &str) -> Result<()> {
 }
 
 /// The field groups of `view`'s type, from the design's "Details per item
-/// type", then its custom fields and notes.
-fn fields(ui: &mut Ui, view: &CipherView, revealed: &mut Vec<FieldId>) -> Result<()> {
+/// type", then its custom fields and notes. Gives the field whose Copy
+/// button was clicked.
+fn fields(
+    ui: &mut Ui,
+    view: &CipherView,
+    revealed: &mut Vec<FieldId>,
+) -> Result<Option<CopyField>> {
+    let mut copied = None;
     match &view.content {
-        CipherContent::Login(login) => login_fields(ui, login, revealed)?,
+        CipherContent::Login(login) => copied = login_fields(ui, login, revealed)?,
         CipherContent::Card(card) => card_fields(ui, card, revealed)?,
         CipherContent::Identity(identity) => identity_fields(ui, identity, revealed)?,
         CipherContent::SshKey(ssh_key) => ssh_key_fields(ui, ssh_key, revealed)?,
@@ -932,150 +944,139 @@ fn fields(ui: &mut Ui, view: &CipherView, revealed: &mut Vec<FieldId>) -> Result
             )?;
         }
     }
-    let custom: Vec<Field<'_>> = view
-        .fields
-        .iter()
-        .enumerate()
-        .map(|(position, field)| {
-            let caption = field.name.as_ref().map_or("", |name| name.as_str());
-            let value = field.value.as_ref().map(|value| value.as_str());
-            match field.kind {
-                CUSTOM_HIDDEN => Field::secret(("custom", position), caption, value),
-                CUSTOM_BOOLEAN => Field::text(
-                    ("custom", position),
-                    caption,
-                    Some(match value {
-                        Some("true") => "Yes",
-                        _ => "No",
-                    }),
-                ),
-                CUSTOM_LINKED => match field.linked_id.and_then(|id| linked(view, id)) {
-                    Some((value, true)) => Field::secret(("custom", position), caption, value),
-                    Some((value, false)) => Field::text(("custom", position), caption, value),
-                    None => Field::text(("custom", position), caption, Some("Linked field")),
-                },
-                _ => Field::text(("custom", position), caption, value),
-            }
-        })
-        .collect();
-    group(
-        ui,
-        "custom fields",
-        Some("Custom fields"),
-        &custom,
-        revealed,
-    )?;
-    let note = view.notes.as_ref().map(|notes| notes.as_str());
+    let custom = view.fields.iter().enumerate().map(|(position, field)| {
+        let id = ("custom", position);
+        let caption = field.name.as_ref().map_or("", |name| name.as_str());
+        let value = text(&field.value);
+        match field.kind {
+            CUSTOM_HIDDEN => Field::secret(id, caption, value),
+            CUSTOM_BOOLEAN => Field::text(
+                id,
+                caption,
+                Some(match value {
+                    Some("true") => "Yes",
+                    _ => "No",
+                }),
+            ),
+            CUSTOM_LINKED => match field
+                .linked_id
+                .and_then(|linked_id| linked(view, linked_id))
+            {
+                Some((value, true)) => Field::secret(id, caption, value),
+                Some((value, false)) => Field::text(id, caption, value),
+                None => Field::text(id, caption, Some("Linked field")),
+            },
+            _ => Field::text(id, caption, value),
+        }
+    });
+    group(ui, "custom fields", Some("Custom fields"), custom, revealed)?;
     let caption = match view.kind {
         CipherKind::SecureNote => "Note",
         _ => "Notes",
     };
-    group(
-        ui,
-        "notes",
-        None,
-        &[Field::lines(("notes", 0), caption, note)],
-        revealed,
-    )
+    let notes = [Field::lines(("notes", 0), caption, text(&view.notes))];
+    group(ui, "notes", None, notes.into_iter(), revealed)?;
+    Ok(copied)
 }
 
-fn login_fields(ui: &mut Ui, login: &LoginView, revealed: &mut Vec<FieldId>) -> Result<()> {
-    let passkeys: Vec<SecretString> = login
-        .fido2_credentials
-        .iter()
-        .map(|passkey| {
-            let mut shown = SecretString::default();
-            shown.push_str(&passkey.rp_id);
-            if let Some(user) = &passkey.user_name {
-                shown.push_str(" · ");
-                shown.push_str(user);
-            }
-            shown
-        })
-        .collect();
-    let mut account = vec![
+/// Gives [`CopyField::Totp`] when the code's Copy button was clicked.
+fn login_fields(
+    ui: &mut Ui,
+    login: &LoginView,
+    revealed: &mut Vec<FieldId>,
+) -> Result<Option<CopyField>> {
+    // The code changes with the clock, so the pane draws again on each
+    // second while it shows.
+    let clock = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    let code = login
+        .totp
+        .as_ref()
+        .and_then(|secret| totp::now(secret, clock.as_secs()));
+    if code.is_some() {
+        let into_second = Duration::from_nanos(u64::from(clock.subsec_nanos()));
+        ui.request_pass_after(Duration::from_secs(1) - into_second);
+    }
+    let account = [
         Field::text(("username", 0), "Username", text(&login.username)),
         Field::secret(("password", 0), "Password", text(&login.password)),
-    ];
-    account.extend(
-        passkeys
+    ]
+    .into_iter()
+    .chain(code.as_ref().map(|code| Field {
+        id: ("totp", 0),
+        caption: "Authenticator code",
+        value: Value::Code(code),
+        kind: Kind::Code {
+            seconds_left: code.seconds_left(clock.as_secs()),
+        },
+    }))
+    .chain(
+        login
+            .fido2_credentials
             .iter()
             .enumerate()
-            .map(|(position, shown)| Field::text(("passkey", position), "Passkey", Some(shown))),
+            .map(|(position, passkey)| Field {
+                value: Value::Passkey {
+                    site: &passkey.rp_id,
+                    user: passkey.user_name.as_deref().map(|user| user.as_str()),
+                },
+                ..Field::text(("passkey", position), "Passkey", None)
+            }),
     );
-    group(ui, "account", None, &account, revealed)?;
-    let websites: Vec<Field<'_>> = login
-        .uris
-        .iter()
-        .enumerate()
-        .map(|(position, uri)| {
-            let caption = match uri.match_rule {
-                None => "Website",
-                Some(0) => "Website · match: base domain",
-                Some(1) => "Website · match: host",
-                Some(2) => "Website · match: starts with",
-                Some(3) => "Website · match: exact",
-                Some(4) => "Website · match: regular expression",
-                Some(5) => "Website · match: never",
-                Some(_) => "Website",
-            };
-            Field::text(("website", position), caption, text(&uri.uri))
-        })
-        .collect();
-    group(ui, "websites", None, &websites, revealed)
+    let copied = group(ui, "account", None, account, revealed)?;
+    let websites = login.uris.iter().enumerate().map(|(position, uri)| {
+        let caption = match uri.match_rule {
+            None => "Website",
+            Some(0) => "Website · match: base domain",
+            Some(1) => "Website · match: host",
+            Some(2) => "Website · match: starts with",
+            Some(3) => "Website · match: exact",
+            Some(4) => "Website · match: regular expression",
+            Some(5) => "Website · match: never",
+            Some(_) => "Website",
+        };
+        Field::text(("website", position), caption, text(&uri.uri))
+    });
+    group(ui, "websites", None, websites, revealed)?;
+    Ok(copied
+        .filter(|id| *id == ("totp", 0))
+        .map(|_| CopyField::Totp))
 }
 
 fn card_fields(ui: &mut Ui, card: &CardView, revealed: &mut Vec<FieldId>) -> Result<()> {
+    let mut number = Field::secret(("number", 0), "Number", text(&card.number));
     // The masked number keeps its last 4 digits.
-    let masked = card
+    if let Some(last) = card
         .number
         .as_ref()
         .filter(|number| number.len() > 4)
         .and_then(|number| number.get(number.len() - 4..))
-        .map(|last| {
-            let mut masked = SecretString::new(String::from("•••• •••• •••• "));
-            masked.push_str(last);
-            masked
-        });
-    let expiration = match (text(&card.exp_month), text(&card.exp_year)) {
-        (None, None) => None,
-        (month, year) => {
-            let mut shown = SecretString::default();
-            let month = month.unwrap_or("");
-            if month.len() == 1 {
-                shown.push('0');
-            }
-            shown.push_str(month);
-            shown.push_str(" / ");
-            shown.push_str(year.unwrap_or(""));
-            Some(shown)
-        }
-    };
-    let mut number = Field::secret(("number", 0), "Number", text(&card.number));
-    if let Some(masked) = &masked {
-        number.kind = Kind::Secret { hidden: masked };
+    {
+        number.kind = Kind::Secret {
+            hidden: Value::Masked(last),
+        };
     }
-    group(
-        ui,
-        "card",
-        None,
-        &[
-            Field::text(
-                ("cardholder", 0),
-                "Cardholder name",
-                text(&card.cardholder_name),
-            ),
-            Field::text(("brand", 0), "Brand", text(&card.brand)),
-            number,
-            Field::monospace(
-                ("expiration", 0),
-                "Expiration",
-                expiration.as_ref().map(|shown| shown.as_str()),
-            ),
-            Field::secret(("code", 0), "Security code", text(&card.code)),
-        ],
-        revealed,
-    )
+    let expiration = match (text(&card.exp_month), text(&card.exp_year)) {
+        (None, None) => Value::Text(None),
+        (month, year) => Value::Expiration(month.unwrap_or(""), year.unwrap_or("")),
+    };
+    let fields = [
+        Field::text(
+            ("cardholder", 0),
+            "Cardholder name",
+            text(&card.cardholder_name),
+        ),
+        Field::text(("brand", 0), "Brand", text(&card.brand)),
+        number,
+        Field {
+            value: expiration,
+            ..Field::monospace(("expiration", 0), "Expiration", None)
+        },
+        Field::secret(("code", 0), "Security code", text(&card.code)),
+    ];
+    group(ui, "card", None, fields.into_iter(), revealed)?;
+    Ok(())
 }
 
 fn identity_fields(
@@ -1083,96 +1084,95 @@ fn identity_fields(
     identity: &IdentityView,
     revealed: &mut Vec<FieldId>,
 ) -> Result<()> {
-    let name = joined(
-        [
-            &identity.title,
-            &identity.first_name,
-            &identity.middle_name,
-            &identity.last_name,
-        ],
-        " ",
-    );
-    let place = joined(
-        [&identity.city, &identity.state, &identity.postal_code],
-        " ",
-    );
-    let mut address = SecretString::default();
-    let lines = [
-        text(&identity.address1),
-        text(&identity.address2),
-        text(&identity.address3),
-        place.as_ref().map(|place| place.as_str()),
-        text(&identity.country),
-    ];
-    for line in lines.into_iter().flatten().filter(|line| !line.is_empty()) {
-        if !address.is_empty() {
-            address.push('\n');
-        }
-        address.push_str(line);
+    fn part(value: &Option<SecretString>) -> Value<'_> {
+        Value::Text(text(value))
     }
+    let name = [
+        part(&identity.title),
+        part(&identity.first_name),
+        part(&identity.middle_name),
+        part(&identity.last_name),
+    ];
+    let place = [
+        part(&identity.city),
+        part(&identity.state),
+        part(&identity.postal_code),
+    ];
+    let address = [
+        part(&identity.address1),
+        part(&identity.address2),
+        part(&identity.address3),
+        Value::Joined(&place, " "),
+        part(&identity.country),
+    ];
+    let personal = [
+        Field {
+            value: Value::Joined(&name, " "),
+            ..Field::text(("name", 0), "Name", None)
+        },
+        Field::text(("username", 0), "Username", text(&identity.username)),
+        Field::text(("company", 0), "Company", text(&identity.company)),
+    ];
     group(
         ui,
         "personal",
         Some("Personal"),
-        &[
-            Field::text(("name", 0), "Name", name.as_ref().map(|name| name.as_str())),
-            Field::text(("username", 0), "Username", text(&identity.username)),
-            Field::text(("company", 0), "Company", text(&identity.company)),
-        ],
+        personal.into_iter(),
         revealed,
     )?;
+    let identification = [
+        Field::secret(
+            ("passport", 0),
+            "Passport number",
+            text(&identity.passport_number),
+        ),
+        Field::secret(("ssn", 0), "Tax number", text(&identity.ssn)),
+        Field::monospace(
+            ("license", 0),
+            "Driver's license",
+            text(&identity.license_number),
+        ),
+    ];
     group(
         ui,
         "identification",
         Some("Identification"),
-        &[
-            Field::secret(
-                ("passport", 0),
-                "Passport number",
-                text(&identity.passport_number),
-            ),
-            Field::secret(("ssn", 0), "Tax number", text(&identity.ssn)),
-            Field::monospace(
-                ("license", 0),
-                "Driver's license",
-                text(&identity.license_number),
-            ),
-        ],
+        identification.into_iter(),
         revealed,
     )?;
+    let contact = [
+        Field::text(("email", 0), "Email", text(&identity.email)),
+        Field::text(("phone", 0), "Phone", text(&identity.phone)),
+        Field {
+            value: Value::Joined(&address, "\n"),
+            ..Field::lines(("address", 0), "Address", None)
+        },
+    ];
     group(
         ui,
         "contact",
         Some("Contact"),
-        &[
-            Field::text(("email", 0), "Email", text(&identity.email)),
-            Field::text(("phone", 0), "Phone", text(&identity.phone)),
-            Field::lines(("address", 0), "Address", Some(&address)),
-        ],
+        contact.into_iter(),
         revealed,
-    )
+    )?;
+    Ok(())
 }
 
 fn ssh_key_fields(ui: &mut Ui, ssh_key: &SshKeyView, revealed: &mut Vec<FieldId>) -> Result<()> {
-    group(
-        ui,
-        "ssh key",
-        None,
-        &[
-            Field::monospace(("public key", 0), "Public key", text(&ssh_key.public_key)),
-            Field::monospace(
-                ("fingerprint", 0),
-                "Fingerprint",
-                text(&ssh_key.key_fingerprint),
-            ),
-            Field::secret(
-                ("private key", 0),
-                "Private key",
-                text(&ssh_key.private_key),
-            ),
-        ],
-        revealed,
-    )?;
+    let fields = [
+        Field::monospace(("public key", 0), "Public key", text(&ssh_key.public_key)),
+        Field::monospace(
+            ("fingerprint", 0),
+            "Fingerprint",
+            text(&ssh_key.key_fingerprint),
+        ),
+        Field::secret(
+            ("private key", 0),
+            "Private key",
+            text(&ssh_key.private_key),
+        ),
+    ];
+    group(ui, "ssh key", None, fields.into_iter(), revealed)?;
     ui.label(
         "agent",
         format_args!("The SSH agent offers this key. Chaveiro asks you before each use."),
@@ -1181,7 +1181,6 @@ fn ssh_key_fields(ui: &mut Ui, ssh_key: &SshKeyView, revealed: &mut Vec<FieldId>
     .secondary(true)?;
     Ok(())
 }
-
 /// The line under the fields: the folder and when the password last
 /// changed.
 fn footer(ui: &mut Ui, index: &VaultIndex, view: &CipherView) -> Result<()> {
@@ -1221,13 +1220,73 @@ fn footer(ui: &mut Ui, index: &VaultIndex, view: &CipherView) -> Result<()> {
 }
 
 /// One field row of a group, before it is drawn.
+#[derive(Clone, Copy)]
 struct Field<'a> {
     id: FieldId,
     caption: &'a str,
-    /// [`None`] or empty for a field the item leaves empty, which is
-    /// hidden.
-    value: Option<&'a str>,
+    /// Empty for a field the item leaves empty, which is hidden.
+    value: Value<'a>,
     kind: Kind<'a>,
+}
+
+/// What a field shows, written straight into its label, so drawing it
+/// copies no secret into a buffer of its own.
+#[derive(Clone, Copy)]
+enum Value<'a> {
+    Text(Option<&'a str>),
+    /// The site, then ` · ` and the user name when there is one.
+    Passkey {
+        site: &'a str,
+        user: Option<&'a str>,
+    },
+    /// A card number's dots, then its last digits.
+    Masked(&'a str),
+    /// `MM / YYYY`, padding a one-digit month.
+    Expiration(&'a str, &'a str),
+    /// The parts that are not empty, joined by the separator.
+    Joined(&'a [Value<'a>], &'a str),
+    Code(&'a totp::Code),
+}
+
+impl Value<'_> {
+    fn is_empty(&self) -> bool {
+        match self {
+            Value::Text(text) => text.is_none_or(str::is_empty),
+            Value::Passkey { .. } | Value::Masked(_) | Value::Expiration(..) | Value::Code(_) => {
+                false
+            }
+            Value::Joined(parts, _) => parts.iter().all(Value::is_empty),
+        }
+    }
+}
+
+impl std::fmt::Display for Value<'_> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Value::Text(text) => formatter.write_str(text.unwrap_or("")),
+            Value::Passkey { site, user } => match user {
+                Some(user) => write!(formatter, "{site} · {user}"),
+                None => formatter.write_str(site),
+            },
+            Value::Masked(last) => write!(formatter, "•••• •••• •••• {last}"),
+            Value::Expiration(month, year) => {
+                let pad = if month.len() == 1 { "0" } else { "" };
+                write!(formatter, "{pad}{month} / {year}")
+            }
+            Value::Joined(parts, separator) => {
+                let mut first = true;
+                for part in parts.iter().filter(|part| !part.is_empty()) {
+                    if !first {
+                        formatter.write_str(separator)?;
+                    }
+                    first = false;
+                    write!(formatter, "{part}")?;
+                }
+                Ok(())
+            }
+            Value::Code(code) => write!(formatter, "{code}"),
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -1239,7 +1298,12 @@ enum Kind<'a> {
     /// A monospace value that shows `hidden` until its Show button
     /// reveals it.
     Secret {
-        hidden: &'a str,
+        hidden: Value<'a>,
+    },
+    /// An authenticator code: large digits, the seconds it has left after
+    /// the caption, and a Copy button.
+    Code {
+        seconds_left: u64,
     },
 }
 
@@ -1248,7 +1312,7 @@ impl<'a> Field<'a> {
         Field {
             id,
             caption,
-            value,
+            value: Value::Text(value),
             kind: Kind::Text,
         }
     }
@@ -1269,109 +1333,115 @@ impl<'a> Field<'a> {
 
     fn secret(id: FieldId, caption: &'a str, value: Option<&'a str>) -> Self {
         Field {
-            kind: Kind::Secret { hidden: DOTS },
+            kind: Kind::Secret {
+                hidden: Value::Text(Some(DOTS)),
+            },
             ..Field::text(id, caption, value)
         }
     }
 }
 
 /// Draws the fields of `fields` that have a value, in a card group under
-/// `header`. Draws nothing when none has a value.
-fn group(
+/// `header`. Draws nothing when none has a value. Gives the field whose
+/// Copy button was clicked.
+fn group<'a>(
     ui: &mut Ui,
     id: &'static str,
     header: Option<&str>,
-    fields: &[Field<'_>],
+    fields: impl Clone + Iterator<Item = Field<'a>>,
     revealed: &mut Vec<FieldId>,
-) -> Result<()> {
-    let has_value = |field: &&Field<'_>| field.value.is_some_and(|value| !value.is_empty());
-    if !fields.iter().any(|field| has_value(&field)) {
-        return Ok(());
+) -> Result<Option<FieldId>> {
+    let mut shown = fields.filter(|field| !field.value.is_empty());
+    if shown.clone().next().is_none() {
+        return Ok(None);
     }
+    let mut copied = None;
     ui.stack(id, Orientation::Vertical, 8.0, |ui| {
         if let Some(header) = header {
             ui.label("header", format_args!("{header}"))?
                 .style("BodyStrongTextBlockStyle")?;
         }
         ui.card_group("fields", |ui| {
-            for (position, field) in fields.iter().filter(has_value).enumerate() {
-                field_row(ui, field, position > 0, revealed)?;
+            let mut divider = false;
+            for field in shown.by_ref() {
+                if field_row(ui, &field, divider, revealed)? {
+                    copied = Some(field.id);
+                }
+                divider = true;
             }
             Ok(())
         })?;
         Ok(())
     })?;
-    Ok(())
+    Ok(copied)
 }
 
-/// One row: the caption over the value, and a Show button for a secret.
+/// One row: the caption over the value, a Show button for a secret and a
+/// Copy button for a code. Gives whether Copy was clicked.
 fn field_row(
     ui: &mut Ui,
     field: &Field<'_>,
     divider: bool,
     revealed: &mut Vec<FieldId>,
-) -> Result<()> {
-    let value = field.value.unwrap_or("");
+) -> Result<bool> {
     let shown = revealed.contains(&field.id);
+    let mut copied = false;
     ui.card_row(
         field.id,
         divider,
         &[Length::Star(1.0), Length::Auto],
         |ui| {
             ui.stack("text", Orientation::Vertical, 0.0, |ui| {
-                ui.label("caption", format_args!("{}", field.caption))?
-                    .secondary(true)?
-                    .style("CaptionTextBlockStyle")?;
-                let (text, monospace, overflow) = match field.kind {
-                    Kind::Text => (value, false, Overflow::Ellipsis),
-                    Kind::Monospace => (value, true, Overflow::Ellipsis),
-                    Kind::Lines => (value, false, Overflow::Wrap),
-                    Kind::Secret { .. } if shown => (value, true, Overflow::Ellipsis),
+                let caption = field.caption;
+                let mut label = match field.kind {
+                    Kind::Code { seconds_left } => {
+                        ui.label("caption", format_args!("{caption} · {seconds_left} s"))?
+                    }
+                    _ => ui.label("caption", format_args!("{caption}"))?,
+                };
+                label.secondary(true)?.style("CaptionTextBlockStyle")?;
+                let (value, monospace, overflow) = match field.kind {
+                    Kind::Text | Kind::Code { .. } => (field.value, false, Overflow::Ellipsis),
+                    Kind::Monospace => (field.value, true, Overflow::Ellipsis),
+                    Kind::Lines => (field.value, false, Overflow::Wrap),
+                    Kind::Secret { .. } if shown => (field.value, true, Overflow::Ellipsis),
                     Kind::Secret { hidden } => (hidden, true, Overflow::Ellipsis),
                 };
-                ui.label("value", format_args!("{text}"))?
-                    .monospace(monospace)?
-                    .overflow(overflow)?;
+                let mut label = ui.label("value", format_args!("{value}"))?;
+                label.monospace(monospace)?.overflow(overflow)?;
+                // The design's 20px digits; Segoe UI's figures are tabular.
+                if let Kind::Code { .. } = field.kind {
+                    label.style("SubtitleTextBlockStyle")?;
+                }
                 Ok(())
             })?;
-            if let Kind::Secret { .. } = field.kind {
-                let (glyph, label) = match shown {
-                    true => ('\u{ED1A}', "Hide"),
-                    false => ('\u{E890}', "Show"),
-                };
-                if ui.icon_button("reveal", glyph, label)?.clicked()? {
-                    match shown {
-                        true => revealed.retain(|id| *id != field.id),
-                        false => revealed.push(field.id),
+            match field.kind {
+                Kind::Secret { .. } => {
+                    let (glyph, label) = match shown {
+                        true => ('\u{ED1A}', "Hide"),
+                        false => ('\u{E890}', "Show"),
+                    };
+                    if ui.icon_button("reveal", glyph, label)?.clicked()? {
+                        match shown {
+                            true => revealed.retain(|id| *id != field.id),
+                            false => revealed.push(field.id),
+                        }
                     }
                 }
+                Kind::Code { .. } => {
+                    copied = ui.icon_button("copy", '\u{E8C8}', "Copy code")?.clicked()?;
+                }
+                Kind::Text | Kind::Monospace | Kind::Lines => {}
             }
             Ok(())
         },
     )?;
-    Ok(())
+    Ok(copied)
 }
 
 fn text(secret: &Option<SecretString>) -> Option<&str> {
     secret.as_ref().map(|secret| secret.as_str())
 }
-
-/// The parts of `parts` that have text, joined by `separator`; [`None`]
-/// when none has.
-fn joined<const N: usize>(
-    parts: [&Option<SecretString>; N],
-    separator: &str,
-) -> Option<SecretString> {
-    let mut text = SecretString::default();
-    for part in parts.into_iter().flatten().filter(|part| !part.is_empty()) {
-        if !text.is_empty() {
-            text.push_str(separator);
-        }
-        text.push_str(part);
-    }
-    (!text.is_empty()).then_some(text)
-}
-
 /// The value a linked custom field shows: the item field `id` names, and
 /// whether it is a secret. [`None`] for an id this type does not have.
 fn linked(view: &CipherView, id: u32) -> Option<(Option<&str>, bool)> {

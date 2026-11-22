@@ -40,7 +40,8 @@ function Send-Ctrl([char]$letter) {
 function Menu-Item([string]$name) { Menu-Items | Where-Object { $_.Current.Name -eq $name } | Select-Object -First 1 }
 
 (Named $window "GitHub").GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke(); Start-Sleep -Milliseconds 700
-"Ctrl+U, Ctrl+P and Ctrl+T on GitHub, the selected item"; Send-Ctrl 'U'; Send-Ctrl 'P'; Send-Ctrl 'T'
+"Ctrl+U, Ctrl+P and Ctrl+T on GitHub, the selected item, then its Copy code button"; Send-Ctrl 'U'; Send-Ctrl 'P'; Send-Ctrl 'T'
+(Named $window "Copy code").GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke(); Start-Sleep -Milliseconds 700
 (Named $window "Amazon").GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke(); Start-Sleep -Milliseconds 700
 "Amazon open: footer $([bool](Named $window 'Folder: Personal'))"
 Click-At (Named $window "GitHub") 2

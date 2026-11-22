@@ -429,9 +429,19 @@ fn view_of(summary: &CipherSummary) -> CipherView {
     }
 }
 
-/// The text a copy of `field` gives, as the core gives it. A TOTP copy
-/// gives the secret, because the preview has no clock to make the code.
+/// The text a copy of `field` gives, as the core gives it: for a TOTP
+/// secret, the code at this moment.
 fn copy_text(view: &CipherView, field: CopyField) -> Option<String> {
+    if field == CopyField::Totp {
+        let CipherContent::Login(login) = &view.content else {
+            return None;
+        };
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default();
+        let code = chaveiro_core::totp::code(login.totp.as_ref()?, now.as_secs())?;
+        return Some(code.to_string());
+    }
     let login = match &view.content {
         CipherContent::Login(login) => Some(login),
         _ => None,
