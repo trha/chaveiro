@@ -5,8 +5,8 @@ use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use chaveiro_core::{
     core::{
         AgentRequestId, Body, CODE_PROVIDERS, Challenge, Config, Core, DeviceKeyError, Effect,
-        HttpRequest, HttpResponse, Input, LoginError, Method, PasskeyCatalogEntry, PasskeyError,
-        PasskeyReply, PasskeyRequest, RequestId, Screen, Settings, SshAsk, StoreSlot,
+        HttpRequest, HttpResponse, Input, ItemError, LoginError, Method, PasskeyCatalogEntry,
+        PasskeyError, PasskeyReply, PasskeyRequest, RequestId, Screen, Settings, SshAsk, StoreSlot,
         StoredAccount, UnlockError, UserAction, VaultScreen,
         ssh_agent::{AgentRequest, parse_request},
     },
@@ -1545,6 +1545,59 @@ fn create_posts_with_encrypted_for() {
     "#]]
     .assert_eq(&render(request, &[]));
     assert_eq!(json_object(request)["encryptedFor"], USER_ID.to_string());
+}
+
+/// The server's answer to a personal create: the sent cipher plus an id and
+/// a date.
+fn stored(request: &HttpRequest, id: Uuid) -> Value {
+    let mut cipher = json_object(request);
+    cipher.insert("id".into(), Value::String(id.to_string()));
+    cipher.insert("revisionDate".into(), "2026-11-21T00:00:00.000Z".into());
+    Value::Object(cipher)
+}
+
+#[test]
+fn create_in_flight_refuses_a_second_create() {
+    let mut harness = Harness::unlocked(REVISION);
+    let mut view = edited("New login");
+    view.id = None;
+    harness.user(UserAction::Save(Box::new(view.clone())));
+    let effects = harness.user(UserAction::Save(Box::new(view)));
+    assert!(http(&effects).is_empty(), "a second save sends nothing");
+    let screen = vault(&harness.core);
+    assert!(screen.creating);
+    assert!(matches!(screen.error, Some(ItemError::Busy)));
+}
+
+#[test]
+fn landed_create_opens_the_new_item() {
+    let mut harness = Harness::unlocked(REVISION);
+    harness.user(UserAction::Close);
+    let mut view = edited("New login");
+    view.id = None;
+    let effects = harness.user(UserAction::Save(Box::new(view)));
+    let (post, request) = one_http(&effects);
+    let new_id = Uuid::from_u128(0xC0FFEE);
+    harness.answer(post, 200, &stored(request, new_id));
+    let screen = vault(&harness.core);
+    assert!(!screen.creating);
+    let open = screen.open.expect("the new item opens");
+    assert_eq!(open.view.id, Some(new_id));
+    assert_eq!(open.view.name.as_str(), "New login");
+}
+
+#[test]
+fn landed_create_replaces_the_open_item() {
+    let mut harness = Harness::unlocked(REVISION);
+    let other = vault(&harness.core).index.ciphers[0].id;
+    harness.user(UserAction::Open(other));
+    let mut view = edited("New login");
+    view.id = None;
+    let effects = harness.user(UserAction::Save(Box::new(view)));
+    let (post, request) = one_http(&effects);
+    let new_id = Uuid::from_u128(0xC0FFEE);
+    harness.answer(post, 200, &stored(request, new_id));
+    assert_eq!(vault(&harness.core).open.unwrap().view.id, Some(new_id));
 }
 
 // WP-11: org create, folders, cloned passkeys, password history, server URLs

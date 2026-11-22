@@ -1427,9 +1427,10 @@ impl Core {
             (State::Unlocked(mut unlocked), Input::User(UserAction::Save(view)), None) => {
                 effects.push(Effect::Rerender);
                 let user_id = unlocked.account.user_id;
-                let busy = view
-                    .id
-                    .is_some_and(|cipher_id| writing(requests, &unlocked.account, cipher_id));
+                let busy = match view.id {
+                    Some(cipher_id) => writing(requests, &unlocked.account, cipher_id),
+                    None => creating(requests, &unlocked.account),
+                };
                 match view.id {
                     _ if busy => unlocked.error = Some(ItemError::Busy),
                     None => match unlocked.keys.outer_key(view.organization_id) {
@@ -1888,16 +1889,22 @@ impl Core {
                             (_, Some(saved)) if success && unlocked.account.cache.is_some() => {
                                 let user_create =
                                     write.action == WriteAction::Create && write.passkey.is_none();
-                                if let Some(open) = unlocked
-                                    .open
-                                    .as_mut()
-                                    .filter(|open| open.base.id == saved.id || user_create)
+                                // A user create opens the new item, whatever
+                                // was open, so the shell can select it.
+                                let reopen = user_create
+                                    || unlocked
+                                        .open
+                                        .as_ref()
+                                        .is_some_and(|open| open.base.id == saved.id);
+                                if reopen
                                     && let Ok(view) = CipherView::decrypt(&saved, &unlocked.keys)
                                 {
-                                    open.view = view;
-                                    open.base = saved.clone();
-                                    open.stale = false;
-                                    open.conflict = ConflictStage::None;
+                                    unlocked.open = Some(OpenItem {
+                                        view,
+                                        base: saved.clone(),
+                                        stale: false,
+                                        conflict: ConflictStage::None,
+                                    });
                                 }
                                 let cache = unlocked
                                     .account
@@ -2600,6 +2607,7 @@ impl Core {
                     _ => None,
                 },
                 error: unlocked.error.as_ref(),
+                creating: creating(&self.requests, &unlocked.account),
                 revision: unlocked.account.cache.as_ref().map(|cache| cache.revision),
                 synced_at: unlocked.account.cache.as_ref().map(|cache| cache.synced_at),
                 device_unlock: unlocked.account.device_wrap.is_some(),
@@ -3057,6 +3065,10 @@ pub struct VaultScreen<'a> {
     /// one.
     pub sync_error: Option<&'a str>,
     pub error: Option<&'a ItemError>,
+    /// A new item the user saved waits for the server. A second
+    /// [`UserAction::Save`] of a new item meanwhile gets
+    /// [`ItemError::Busy`]. Once it lands, [`open`](Self::open) holds it.
+    pub creating: bool,
     /// The cache's account revision (epoch ms); [`None`] before the first
     /// sync after login.
     pub revision: Option<u64>,
@@ -3882,6 +3894,17 @@ fn writing(requests: &Table, account: &Account, cipher_id: Uuid) -> bool {
     let write_to = |kind: &ApiKind| matches!(kind, ApiKind::Write(write) if write.cipher_id == Some(cipher_id));
     requests.any(|purpose| matches!(purpose, Purpose::Api(call) if write_to(&call.kind)))
         || account.waiting.iter().any(|call| write_to(&call.kind))
+}
+
+/// A create the user saved is in flight or waits to be sent. A passkey
+/// create does not count, because the user did not save it from a form.
+fn creating(requests: &Table, account: &Account) -> bool {
+    let create = |kind: &ApiKind| {
+        matches!(kind, ApiKind::Write(write)
+            if write.action == WriteAction::Create && write.passkey.is_none())
+    };
+    requests.any(|purpose| matches!(purpose, Purpose::Api(call) if create(&call.kind)))
+        || account.waiting.iter().any(|call| create(&call.kind))
 }
 
 fn store_cache(requests: &mut Table, account: &Account, effects: &mut Vec<Effect>) {
