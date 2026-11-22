@@ -116,7 +116,16 @@ Send "{UP}{UP}{UP}"
 "Up past the top: $(Details) (expect This item didn't decrypt.)"
 Send "{END}"
 for ($step = 0; $step -lt 12; $step++) { Send "{DOWN}" }
+Send "{END}"
 "Down past the end: last row 'Shared drive' shown $([bool](Button 'Shared drive')), details $(Details) (expect True, Chaveiro can't show this type...)"
+# A click selects the row; focus alone, as UI Automation sets it, does not.
+Invoke "Amazon"
+(Button "Amazon").SetFocus()
+Send "{DOWN}"
+"Down on the Amazon row: $(Details), focus on '$($automation::FocusedElement.Current.Name)'"
+"  (expect Deploy key: dots, Folder: Work; focus on Deploy key)"
+Send "{DOWN}{DOWN}{UP}"
+"Down, Down, Up on the rows: focus on '$($automation::FocusedElement.Current.Name)' (expect GitHub)"
 if ($Shot) {
     Pick "All items"
     Invoke "GitHub"
@@ -133,5 +142,5 @@ Pick "All items"
 Invoke "Lock"
 if (-not $process.WaitForExit(5000)) { Stop-Process $process -Confirm:$false; "did not exit after Lock" }
 "stderr (expect open 11, save 11 favorite=false, open 12, close, open 15, open 14, trash 14, restore 14,"
-"  then the keys: open 10 16 11 16 10 14, close, open 14 10 16 11 15 12 18 13 17, lock):"
+"  then the keys: open 10 16 11 16 10 14, close, open 14 10 16 11 15 12 18 13 17, then the rows: open 10 16 11 15 11, lock):"
 Get-Content $log

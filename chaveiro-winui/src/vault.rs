@@ -319,13 +319,6 @@ pub fn view<A: VaultApp>(
                 };
                 list.refresh(index, revision, filter, search);
                 let searching = !search.query.is_empty();
-                // The next pass opens the row the keys moved to, as a click
-                // would.
-                let reveal = moved(&list.rows, index, selected_item, step);
-                if let Some(position) = reveal {
-                    *clicked = Some(index.ciphers[list.rows[position]].id);
-                    ui.request_pass();
-                }
                 ui.columns(
                     "panes",
                     &[Length::Pixels(LIST_WIDTH), Length::Star(1.0)],
@@ -343,8 +336,27 @@ pub fn view<A: VaultApp>(
                                 _ => "No items here yet.",
                             },
                         };
-                        if list_pane::<A>(ui, list, heading, reveal)? {
+                        let pane = list_pane::<A>(ui, list, heading)?;
+                        if pane.lock {
                             action = Some(VaultAction::User(UserAction::Lock));
+                        }
+                        // Up and Down move the selection, from the search box
+                        // or from the list. The next pass opens the row they
+                        // moved to, as a click would. From the list, focus
+                        // follows the selection.
+                        if let Some(items) = pane.items {
+                            for (step, focus) in [(step, false), (pane.step, true)] {
+                                let Some(position) = moved(&list.rows, index, selected_item, step)
+                                else {
+                                    continue;
+                                };
+                                *clicked = Some(index.ciphers[list.rows[position]].id);
+                                ui.request_pass();
+                                match focus {
+                                    true => ui.focus_row(items, position),
+                                    false => ui.bring_into_view(items, position),
+                                }
+                            }
                         }
                         let details = Details {
                             index,
@@ -423,15 +435,25 @@ fn moved(rows: &[usize], index: &VaultIndex, selected: Option<Uuid>, step: isize
     (current != Some(target)).then_some(target)
 }
 
-/// Draws the list pane: the filter's name and count over its items, with
-/// row `reveal` scrolled into view. Returns whether Lock was clicked.
+/// What the user did in the list pane in a pass.
+struct ListPane {
+    /// Lock was clicked.
+    lock: bool,
+    /// The item list; [`None`] while the list is empty and shows a note.
+    items: Option<ListId>,
+    /// Rows that Up and Down in the list move the selection by.
+    step: isize,
+}
+
+/// Draws the list pane: the filter's name and count over its items.
 fn list_pane<A: VaultApp>(
     ui: &mut Ui,
     list: &ItemList,
     heading: ListHeading<'_>,
-    reveal: Option<usize>,
-) -> Result<bool> {
+) -> Result<ListPane> {
     let mut lock = false;
+    let mut items = None;
+    let mut step = 0;
     ui.grid("list pane", &[Length::Auto, Length::Star(1.0)], |ui| {
         ui.columns("header", &[Length::Star(1.0), Length::Auto], 8.0, |ui| {
             ui.stack("heading", Orientation::Vertical, 0.0, |ui| {
@@ -455,17 +477,22 @@ fn list_pane<A: VaultApp>(
                     .margin([16.0, 24.0, 16.0, 0.0])?;
             }
             false => {
-                let items = ui.list("items", list.rows.len(), list.revision, row::<A>)?;
-                if let Some(position) = reveal {
-                    ui.bring_into_view(items, position);
+                let list = ui.list("items", list.rows.len(), list.revision, row::<A>)?;
+                for key in ui.list_keys(list)? {
+                    match key {
+                        Key::Down => step += 1,
+                        Key::Up => step -= 1,
+                        _ => {}
+                    }
                 }
+                items = Some(list);
             }
         }
         Ok(())
     })?
     // The line between the list and the details.
     .dividers([false, false, true, false])?;
-    Ok(lock)
+    Ok(ListPane { lock, items, step })
 }
 
 /// One row of the item list: the type icon, the name over the subtitle,
