@@ -150,9 +150,13 @@ impl App for Chaveiro {
                 let open = screen.open.map(|item| &item.view);
                 let pass = vault::view::<Self>(ui, &mut self.vault, &screen, open)?;
                 self.io.set_window(pass.window);
-                pass.action.map(|action| match action {
-                    VaultAction::Close => Next::Close,
-                    VaultAction::User(action) => Next::User(action),
+                pass.action.and_then(|action| match action {
+                    VaultAction::Close => Some(Next::Close),
+                    VaultAction::User(action) => Some(Next::User(action)),
+                    VaultAction::OpenWebsite(url) => {
+                        io::open_website(&url);
+                        None
+                    }
                 })
             }
             Route::Login | Route::Methods | Route::SecondFactor | Route::Locked => {

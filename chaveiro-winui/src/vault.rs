@@ -18,11 +18,12 @@ use chaveiro_core::{
     },
 };
 use std::fmt::Write as _;
+use url::Url;
 use uuid::Uuid;
 use windows_core::Result;
 use winui_immediate::{
-    App, Key, Length, ListId, NavigationEntry, NavigationSelection, Orientation, Overflow,
-    Severity, Ui,
+    App, Key, Length, ListId, MenuAnchor, NavigationEntry, NavigationSelection, Orientation,
+    Overflow, Severity, Ui,
 };
 use zeroize::{Zeroize, Zeroizing};
 
@@ -56,6 +57,7 @@ pub struct VaultForm {
     /// The secrets of the selected item shown in clear. Emptied when
     /// another item is selected.
     revealed: Vec<FieldId>,
+    menus: ItemMenus,
 }
 
 impl Default for VaultForm {
@@ -70,6 +72,7 @@ impl Default for VaultForm {
             opened: None,
             clicked: None,
             revealed: Vec::new(),
+            menus: ItemMenus::default(),
         }
     }
 }
@@ -95,6 +98,7 @@ impl VaultForm {
         self.opened = None;
         self.clicked = None;
         self.revealed.clear();
+        self.menus.open = None;
     }
 
     /// Selects `id`, hiding the secrets of the item selected before.
@@ -176,6 +180,37 @@ impl ItemList {
     }
 }
 
+/// The item menu, the design's ItemMenu, opened by a right-click on a row
+/// or by the details pane's More button.
+#[derive(Default)]
+struct ItemMenus {
+    /// The menu while it is open.
+    open: Option<ItemMenu>,
+    /// How many menus opened, so each one is a menu of its own, which
+    /// opens at its own anchor.
+    opened: u64,
+}
+
+impl ItemMenus {
+    /// Opens the menu of the item `id` at `anchor`, closing any other.
+    fn open(&mut self, id: Uuid, anchor: MenuAnchor) {
+        self.opened += 1;
+        self.open = Some(ItemMenu {
+            item: id,
+            anchor,
+            serial: self.opened,
+        });
+    }
+}
+
+#[derive(Clone, Copy)]
+struct ItemMenu {
+    item: Uuid,
+    anchor: MenuAnchor,
+    /// The value of [`ItemMenus::opened`] when this menu opened.
+    serial: u64,
+}
+
 /// Names one field of the selected item: a static name, and the position
 /// of a website or custom field, or 0.
 type FieldId = (&'static str, usize);
@@ -185,6 +220,8 @@ pub enum VaultAction {
     User(UserAction),
     /// The window's close button.
     Close,
+    /// Open this `http` or `https` address in the default browser.
+    OpenWebsite(Url),
 }
 
 /// What one pass of the vault window gives back.
@@ -274,6 +311,7 @@ pub fn view<A: VaultApp>(
     let list = &mut form.list;
     let clicked = &mut form.clicked;
     let revealed = &mut form.revealed;
+    let menus = &mut form.menus;
     let selected_item = form.selected;
     let mut window = ui.window("vault", "Chaveiro", |ui| {
         ui.grid("window", &[Length::Auto, Length::Star(1.0)], |ui| {
@@ -365,14 +403,42 @@ pub fn view<A: VaultApp>(
                             opening,
                             error: screen.error,
                         };
-                        if let Some(asked) = details_pane(ui, details, revealed)? {
+                        let pass = details_pane(ui, details, revealed)?;
+                        if let Some(asked) = pass.asked {
                             action = Some(VaultAction::User(asked));
+                        }
+                        if let Some((id, anchor)) = pass.more {
+                            menus.open(id, anchor);
+                            ui.request_pass();
                         }
                         Ok(())
                     },
                 )?;
                 Ok(())
             })?;
+            if let Some(open_menu) = menus.open {
+                match index
+                    .ciphers
+                    .iter()
+                    .find(|cipher| cipher.id == open_menu.item)
+                {
+                    // The item left the vault, as after a sync.
+                    None => menus.open = None,
+                    Some(summary) => {
+                        let mut picked = None;
+                        let id = ("item menu", open_menu.serial);
+                        let menu = ui.menu(id, open_menu.anchor, |ui| {
+                            item_menu(ui, index, summary, &mut picked)
+                        })?;
+                        if menu.closed() {
+                            menus.open = None;
+                        }
+                        if picked.is_some() {
+                            action = picked;
+                        }
+                    }
+                }
+            }
             Ok(())
         })?;
         Ok(())
@@ -546,6 +612,11 @@ fn row<A: VaultApp>(app: &mut A, ui: &mut Ui, _: ListId, position: usize) -> Res
     if row.clicked()? {
         form.clicked = Some(cipher.id);
     }
+    // The menu acts on this row's item and leaves the selection alone.
+    if let Some(anchor) = row.context_requested()? {
+        form.menus.open(cipher.id, anchor);
+        ui.request_pass();
+    }
     Ok(())
 }
 
@@ -560,14 +631,22 @@ struct Details<'a> {
     error: Option<&'a ItemError>,
 }
 
-/// Draws the selected item's details in a scroll area. Returns what the
-/// user asked for with the command bar.
+/// What the user did in the details pane in a pass.
+#[derive(Default)]
+struct DetailsPass {
+    /// What the command bar asked for.
+    asked: Option<UserAction>,
+    /// More was clicked: the item and the button to open its menu under.
+    more: Option<(Uuid, MenuAnchor)>,
+}
+
+/// Draws the selected item's details in a scroll area.
 fn details_pane(
     ui: &mut Ui,
     details: Details<'_>,
     revealed: &mut Vec<FieldId>,
-) -> Result<Option<UserAction>> {
-    let mut asked = None;
+) -> Result<DetailsPass> {
+    let mut pass = DetailsPass::default();
     // Drawing the item before until the new one opens keeps the pane's
     // controls in place, so the pane does not blank for a pass.
     let shown = match details.open {
@@ -600,7 +679,7 @@ fn details_pane(
             let Some(view) = details.open.filter(|view| view.id == Some(summary.id)) else {
                 return Ok(());
             };
-            asked = commands(ui, summary, view)?;
+            pass = commands(ui, summary, view)?;
             heading(ui, view.kind, view.name.as_str())?;
             if view.reprompt {
                 ui.info_bar(
@@ -617,13 +696,14 @@ fn details_pane(
         .padding([24.0, 16.0, 24.0, 24.0])?;
         Ok(())
     })?;
-    Ok(asked)
+    Ok(pass)
 }
 
-/// The command bar over the details: Favorite and Move to trash, or
-/// Restore for an item in the trash.
-fn commands(ui: &mut Ui, summary: &CipherSummary, view: &CipherView) -> Result<Option<UserAction>> {
+/// The command bar over the details: Favorite, Move to trash and More, or
+/// Restore and More for an item in the trash.
+fn commands(ui: &mut Ui, summary: &CipherSummary, view: &CipherView) -> Result<DetailsPass> {
     let mut asked = None;
+    let mut more = None;
     ui.command_bar("commands", |ui| {
         if summary.deleted {
             if ui
@@ -632,26 +712,126 @@ fn commands(ui: &mut Ui, summary: &CipherSummary, view: &CipherView) -> Result<O
             {
                 asked = Some(UserAction::Restore(summary.id));
             }
-            return Ok(());
+        } else {
+            asked = favorite_and_trash(ui, summary, view)?;
         }
-        let (glyph, label) = match view.favorite {
-            true => (FILLED_STAR, "Unfavorite"),
-            false => ('\u{E734}', "Favorite"),
-        };
-        if ui.app_bar_button("favorite", glyph, label)?.clicked()? {
-            let mut edited = view.clone();
-            edited.favorite = !edited.favorite;
-            asked = Some(UserAction::Save(Box::new(edited)));
-        }
-        if ui
-            .app_bar_button("trash", '\u{E74D}', "Move to trash")?
-            .clicked()?
-        {
-            asked = Some(UserAction::Trash(summary.id));
+        let mut button = ui.app_bar_button("more", '\u{E712}', "More")?;
+        if button.clicked()? {
+            more = Some((summary.id, button.anchor()));
         }
         Ok(())
     })?;
+    Ok(DetailsPass { asked, more })
+}
+
+/// Favorite and Move to trash, for an item outside the trash.
+fn favorite_and_trash(
+    ui: &mut Ui,
+    summary: &CipherSummary,
+    view: &CipherView,
+) -> Result<Option<UserAction>> {
+    let mut asked = None;
+    let (glyph, label) = match view.favorite {
+        true => (FILLED_STAR, "Unfavorite"),
+        false => ('\u{E734}', "Favorite"),
+    };
+    if ui.app_bar_button("favorite", glyph, label)?.clicked()? {
+        let mut edited = view.clone();
+        edited.favorite = !edited.favorite;
+        asked = Some(UserAction::Save(Box::new(edited)));
+    }
+    if ui
+        .app_bar_button("trash", '\u{E74D}', "Move to trash")?
+        .clicked()?
+    {
+        asked = Some(UserAction::Trash(summary.id));
+    }
     Ok(asked)
+}
+
+/// The entries of the item menu for `summary`, from the design's ItemMenu,
+/// with what the core can do today. Sets `picked` to what the user picked.
+/// The entries act on the item by id, so it need not be open.
+fn item_menu(
+    ui: &mut Ui,
+    index: &VaultIndex,
+    summary: &CipherSummary,
+    picked: &mut Option<VaultAction>,
+) -> Result<()> {
+    let id = summary.id;
+    if summary.deleted {
+        if ui.menu_item("restore", '\u{E777}', "Restore")?.clicked()? {
+            *picked = Some(VaultAction::User(UserAction::Restore(id)));
+        }
+        return Ok(());
+    }
+    // An item that did not decrypt offers only Move to trash.
+    if summary.readable {
+        if let Some(url) = website(&summary.uris) {
+            if ui
+                .menu_item("website", '\u{E8A7}', "Open website")?
+                .clicked()?
+            {
+                *picked = Some(VaultAction::OpenWebsite(url));
+            }
+            ui.menu_separator("links")?;
+        }
+        ui.submenu("folder", '\u{E8B7}', "Move to folder", |ui| {
+            // A folder the vault lacks counts as no folder, as in the pane.
+            let current = summary
+                .folder_id
+                .filter(|folder| index.folders.iter().any(|known| known.id == *folder));
+            let mut target = None;
+            if ui
+                .menu_toggle("none", None, "No folder", current.is_none())?
+                .clicked()?
+            {
+                target = Some(None);
+            }
+            for folder in &index.folders {
+                let here = current == Some(folder.id);
+                if ui
+                    .menu_toggle(folder.id, None, folder_label(folder), here)?
+                    .clicked()?
+                {
+                    target = Some(Some(folder.id));
+                }
+            }
+            if let Some(folder) = target.filter(|folder| *folder != current) {
+                *picked = Some(VaultAction::User(UserAction::MoveToFolder { id, folder }));
+            }
+            Ok(())
+        })?;
+        let on = summary.reprompt;
+        if ui
+            .menu_toggle("reprompt", Some('\u{E72E}'), "Ask for master password", on)?
+            .clicked()?
+        {
+            *picked = Some(VaultAction::User(UserAction::SetReprompt { id, on: !on }));
+        }
+        ui.menu_separator("end")?;
+    }
+    let mut trash = ui.menu_item("trash", '\u{E74D}', "Move to trash")?;
+    trash.critical(true)?;
+    if trash.clicked()? {
+        *picked = Some(VaultAction::User(UserAction::Trash(id)));
+    }
+    Ok(())
+}
+
+/// The first of `uris` the browser can open: an `http` or `https` address,
+/// with `https://` put in front of one without a scheme, such as
+/// `github.com`. Other schemes, such as an app link or `file:`, are left
+/// out, because a shared item could name any program.
+fn website(uris: &[SecretString]) -> Option<Url> {
+    uris.iter().find_map(|uri| {
+        let uri = uri.trim();
+        let url = Url::parse(uri)
+            .ok()
+            .filter(Url::has_host)
+            .or_else(|| Url::parse(&format!("https://{uri}")).ok())?;
+        matches!(url.scheme(), "http" | "https").then_some(url)
+    })
 }
 
 /// The item's type icon and name, in the subtitle style.

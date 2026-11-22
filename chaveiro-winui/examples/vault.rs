@@ -46,8 +46,10 @@ fn main() -> Result<()> {
         }
         let mut index = sample();
         let views: Vec<CipherView> = index.ciphers.iter().map(view_of).collect();
-        // The index holds a login's addresses for search, as the core's does.
+        // The index holds a login's addresses for search and the reprompt
+        // flag, as the core's does.
         for (summary, view) in index.ciphers.iter_mut().zip(&views) {
+            summary.reprompt = view.reprompt;
             if let CipherContent::Login(login) = &view.content {
                 summary.uris = login
                     .uris
@@ -120,6 +122,8 @@ impl App for Preview {
             None => {}
             Some(VaultAction::Close) => self.open = false,
             Some(VaultAction::User(action)) => self.act(action),
+            // The preview opens no browser, so a test can check the address.
+            Some(VaultAction::OpenWebsite(url)) => eprintln!("website {url}"),
         }
         Ok(())
     }
@@ -166,6 +170,24 @@ impl Preview {
                 self.index.ciphers[position].deleted = deleted;
                 self.revision += 1;
             }
+            UserAction::MoveToFolder { id, folder } => {
+                eprintln!(
+                    "move {} to {}",
+                    id.as_u128(),
+                    folder.map_or(0, |folder| folder.as_u128())
+                );
+                let position = self.position(id);
+                self.index.ciphers[position].folder_id = folder;
+                self.views[position].folder_id = folder;
+                self.revision += 1;
+            }
+            UserAction::SetReprompt { id, on } => {
+                eprintln!("reprompt {} {on}", id.as_u128());
+                let position = self.position(id);
+                self.index.ciphers[position].reprompt = on;
+                self.views[position].reprompt = on;
+                self.revision += 1;
+            }
             _ => {}
         }
     }
@@ -198,6 +220,7 @@ fn sample() -> VaultIndex {
             folder_id: (folder != 0).then(|| Uuid::from_u128(folder)),
             organization_id: None,
             favorite,
+            reprompt: false,
             deleted,
             readable: true,
         };

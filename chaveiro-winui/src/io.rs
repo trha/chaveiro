@@ -240,11 +240,38 @@ impl Io {
     }
 }
 
+/// Opens `url` in the default browser. The caller passes only `http` and
+/// `https` addresses, because the shell opens whatever program a scheme
+/// names. A failure only logs: the user sees nothing open and can try
+/// again.
+pub fn open_website(url: &url::Url) {
+    use windows_sys::Win32::UI::{Shell::ShellExecuteW, WindowsAndMessaging::SW_SHOWNORMAL};
+    let wide = |text: &str| text.encode_utf16().chain([0]).collect::<Vec<u16>>();
+    let (verb, target) = (wide("open"), wide(url.as_str()));
+    // SAFETY: both strings end in a NUL and outlive the call; the null
+    // window, parameters and directory are allowed.
+    let result = unsafe {
+        ShellExecuteW(
+            std::ptr::null_mut(),
+            verb.as_ptr(),
+            target.as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            SW_SHOWNORMAL,
+        )
+    };
+    // A value of 32 or less is an error code.
+    if result as usize <= 32 {
+        tracing::warn!(code = result as usize, "the browser did not open");
+    }
+}
+
 /// Runs `job` on the process thread pool and returns its result, or
 /// [`None`] when it panicked (the panic message is then on stderr).
 ///
 /// Dropping the future does not stop the job: it runs to the end and its
 /// result is dropped on the pool thread.
+
 pub async fn off_thread<T: 'static + Send>(job: impl 'static + Send + FnOnce() -> T) -> Option<T> {
     let slot = Arc::new(Mutex::new(None));
     let result = Arc::clone(&slot);
