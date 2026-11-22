@@ -316,14 +316,17 @@ impl Ui {
                 Ok(())
             }
             Payload::Control(ControlNode {
-                control: Control::CommandBar { commands },
+                control: Control::CommandBar { .. },
                 visual,
                 ..
             }) => {
-                let commands = commands.clone();
                 // Afterwards `declared` holds the old list.
                 std::mem::swap(visual, declared);
+                // Borrowed again shared, so the commands list needs no clone.
                 let Payload::Control(control) = self.core.tree.native(node) else {
+                    unreachable!("matched above")
+                };
+                let Control::CommandBar { commands } = &control.control else {
                     unreachable!("matched above")
                 };
                 for edit in edits(declared, &control.visual) {
@@ -338,16 +341,21 @@ impl Ui {
                 Ok(())
             }
             Payload::Control(ControlNode {
-                control: Control::SubMenu { items, .. },
+                control: Control::SubMenu { .. } | Control::SplitButton(_),
                 visual,
                 ..
             }) => {
-                let items = items.clone();
                 std::mem::swap(visual, declared);
+                // Borrowed again shared, so the items list needs no clone.
                 let Payload::Control(control) = self.core.tree.native(node) else {
                     unreachable!("matched above")
                 };
-                self.apply_menu_items(&items, declared, &control.visual)
+                let items = match &control.control {
+                    Control::SubMenu { items, .. } => items,
+                    Control::SplitButton(parts) => &parts.items,
+                    _ => unreachable!("matched above"),
+                };
+                self.apply_menu_items(items, declared, &control.visual)
             }
             Payload::Flyout(popup) => {
                 assert!(declared.len() <= 1, "a flyout declares one control");
@@ -414,6 +422,7 @@ impl Ui {
                 Ok(())
             }
             Payload::Shortcut(_) => unreachable!("shortcut nodes are never opened"),
+            Payload::Dialog(_) => unreachable!("dialog nodes are never opened"),
         }
     }
 
@@ -502,6 +511,14 @@ pub(crate) enum Payload {
     Shortcut(ShortcutNode),
     /// From [`Ui::flyout`].
     Flyout(Box<FlyoutNode>),
+    /// From [`Ui::dialog`].
+    Dialog(Box<DialogNode>),
+}
+
+/// A dialog, shown on its first pass and hidden when its node drops.
+pub(crate) struct DialogNode {
+    pub(crate) dialog: ContentDialog,
+    pub(crate) subscribed: EventSet,
 }
 
 /// A flyout, shown on its first pass and hidden when its node drops.
@@ -648,6 +665,12 @@ fn release(events: &mut Events, payload: Payload) {
                 .flyout
                 .cast::<FlyoutBase>()
                 .and_then(|flyout| flyout.Hide());
+        }
+        Payload::Dialog(dialog) => {
+            events.forget(&dialog.dialog);
+            // Hiding fails only for a dialog WinUI already closed, which is
+            // the state this asks for.
+            let _ = dialog.dialog.Hide();
         }
         Payload::Menu(menu) => {
             events.forget(&menu.flyout);

@@ -1,8 +1,8 @@
-use super::{Control, Response, must_write, resource};
+use super::{Control, Response, boxed, must_write, resource};
 use crate::{
     bindings::{
-        AutomationProperties, Button, ContentControl, DependencyObject, FrameworkElement, IPanel,
-        Orientation, ProgressRing, StackPanel, Style, TextBlock, UIElement, Visibility,
+        AutomationProperties, Button, ContentControl, DependencyObject, FontIcon, FrameworkElement,
+        IPanel, Orientation, ProgressRing, StackPanel, Style, TextBlock, ToolTipService, UIElement, Visibility,
     },
     events::EventKind,
     pass::{ChildKind, ControlNode, Ui},
@@ -27,7 +27,9 @@ impl Ui {
                     content,
                     label: String::new(),
                     accent: false,
-                    ring: None,
+                    row: None,
+                    glyph: None,
+                    tooltip: String::new(),
                     busy: false,
                 },
             ))
@@ -95,16 +97,65 @@ impl ButtonResponse<'_> {
         Ok(self)
     }
 
+    /// Shows `text` on hover, such as the key that does the same:
+    /// "Save (Ctrl+S)".
+    pub fn tooltip(&mut self, text: &str) -> Result<&mut Self> {
+        let control = self.0.ui.control_mut(self.0.node);
+        let stale = control.stale;
+        let Control::Button {
+            button,
+            tooltip: written,
+            ..
+        } = &mut control.control
+        else {
+            unreachable!("button keys hold buttons")
+        };
+        if must_write(stale, written.as_str(), text) {
+            ToolTipService::SetToolTip(&button.cast::<DependencyObject>()?, &boxed(text))?;
+            written.clear();
+            written.push_str(text);
+        }
+        Ok(self)
+    }
+
+    /// Shows `glyph`, a Segoe Fluent Icons glyph, before the label, as for
+    /// Save.
+    pub fn icon(&mut self, glyph: char) -> Result<&mut Self> {
+        let control = self.0.ui.control_mut(self.0.node);
+        let stale = control.stale;
+        let Control::Button {
+            button,
+            content,
+            row,
+            glyph: written,
+            busy,
+            ..
+        } = &mut control.control
+        else {
+            unreachable!("button keys hold buttons")
+        };
+        if must_write(stale, written, &Some(glyph)) {
+            let row = row_of(button, content, row)?;
+            row.icon
+                .SetGlyph(glyph.encode_utf8(&mut [0; 4]) as &str)?;
+            row.icon.cast::<UIElement>()?.SetVisibility(shown(!*busy))?;
+            *written = Some(glyph);
+        }
+        Ok(self)
+    }
+
     /// While `on`, the button is disabled and shows a 16px progress ring
-    /// before its label, for a request it started. It keeps its width only
-    /// when the layout gives it one, such as a full-width button.
+    /// before its label, in place of its icon, for a request it started. It
+    /// keeps its width only when the layout gives it one, such as a
+    /// full-width button.
     pub fn busy(&mut self, on: bool) -> Result<&mut Self> {
         let control = self.0.ui.control_mut(self.0.node);
         let stale = control.stale;
         let Control::Button {
             button,
             content,
-            ring,
+            row,
+            glyph,
             busy,
             ..
         } = &mut control.control
@@ -112,27 +163,15 @@ impl ButtonResponse<'_> {
             unreachable!("button keys hold buttons")
         };
         if must_write(stale, busy, &on) {
-            if ring.is_none() && on {
-                // The content becomes a row of the ring and the label.
-                let row = StackPanel::new()?;
-                row.SetOrientation(Orientation::Horizontal)?;
-                row.SetSpacing(8.0)?;
-                let made = ProgressRing::new()?;
-                let frame = made.cast::<FrameworkElement>()?;
-                frame.SetWidth(16.0)?;
-                frame.SetHeight(16.0)?;
-                button.cast::<ContentControl>()?.SetContent(&row)?;
-                let children = row.cast::<IPanel>()?.Children()?;
-                children.Append(&made.cast::<UIElement>()?)?;
-                children.Append(&content.cast::<UIElement>()?)?;
-                *ring = Some(made);
-            }
-            if let Some(ring) = ring {
-                ring.SetIsActive(on)?;
-                ring.cast::<UIElement>()?.SetVisibility(match on {
-                    true => Visibility::Visible,
-                    false => Visibility::Collapsed,
-                })?;
+            // A button that was never busy and has no icon keeps its plain
+            // label, with no row.
+            if row.is_some() || on {
+                let row = row_of(button, content, row)?;
+                row.ring.SetIsActive(on)?;
+                row.ring.cast::<UIElement>()?.SetVisibility(shown(on))?;
+                row.icon
+                    .cast::<UIElement>()?
+                    .SetVisibility(shown(!on && glyph.is_some()))?;
             }
             *busy = on;
         }
@@ -141,6 +180,50 @@ impl ButtonResponse<'_> {
     }
 }
 
+/// The parts of a button whose content became a row: the icon and the ring,
+/// both collapsed until used, then the label.
+pub(crate) struct ButtonRow {
+    icon: FontIcon,
+    ring: ProgressRing,
+}
+
+/// The row of `button`, made on first use: the content becomes a row of
+/// the icon, the ring and `content`, the label.
+fn row_of<'r>(
+    button: &Button,
+    content: &TextBlock,
+    row: &'r mut Option<ButtonRow>,
+) -> Result<&'r ButtonRow> {
+    if row.is_none() {
+        let panel = StackPanel::new()?;
+        panel.SetOrientation(Orientation::Horizontal)?;
+        panel.SetSpacing(8.0)?;
+        let icon = FontIcon::new()?;
+        icon.SetFontSize(16.0)?;
+        let ring = ProgressRing::new()?;
+        let frame = ring.cast::<FrameworkElement>()?;
+        frame.SetWidth(16.0)?;
+        frame.SetHeight(16.0)?;
+        for part in [icon.cast::<UIElement>()?, ring.cast::<UIElement>()?] {
+            part.SetVisibility(Visibility::Collapsed)?;
+        }
+        // Set first, so the label leaves the button before the row takes it.
+        button.cast::<ContentControl>()?.SetContent(&panel)?;
+        let children = panel.cast::<IPanel>()?.Children()?;
+        children.Append(&icon.cast::<UIElement>()?)?;
+        children.Append(&ring.cast::<UIElement>()?)?;
+        children.Append(&content.cast::<UIElement>()?)?;
+        *row = Some(ButtonRow { icon, ring });
+    }
+    Ok(row.as_ref().expect("made above"))
+}
+
+fn shown(visible: bool) -> Visibility {
+    match visible {
+        true => Visibility::Visible,
+        false => Visibility::Collapsed,
+    }
+}
 impl<'u> Deref for ButtonResponse<'u> {
     type Target = Response<'u>;
 

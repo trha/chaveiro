@@ -127,7 +127,7 @@ impl App for Widgets {
                 }
                 ui.native("switch", toggle_switch, |_| Ok(()))?;
                 ui.stack("picker", Orientation::Vertical, 8.0, |ui| {
-                    ui.combo_box("color", &COLORS, &mut self.color)?
+                    ui.combo_box("color", COLORS, &mut self.color)?
                         .header("Color")?
                         .enabled(self.enters < 3)?;
                     ui.label(

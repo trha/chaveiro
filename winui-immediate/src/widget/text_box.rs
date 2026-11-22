@@ -1,6 +1,6 @@
 use super::{Control, Response, must_write};
 use crate::{
-    bindings::TextBox,
+    bindings::{FrameworkElement, ITextBox, TextBox, TextWrapping},
     events::{EventKind, Key},
     pass::{ChildKind, ControlNode, Ui},
     tree::NodeId,
@@ -26,13 +26,51 @@ impl Ui {
         placeholder: &str,
         value: &mut String,
     ) -> Result<TextBoxResponse<'_>> {
+        let capacity = value.capacity();
         let (node, _) = self.visit(id, ChildKind::Visual, || {
             let text_box = TextBox::new()?;
             Ok(ControlNode::new(
                 text_box.cast()?,
                 Control::TextBox {
                     text_box,
-                    text: String::new(),
+                    // As roomy as the app's buffer, so the layer's copy
+                    // does not grow on a keystroke either.
+                    text: String::with_capacity(capacity),
+                    placeholder: String::new(),
+                    composing: false,
+                },
+            ))
+        })?;
+        let changed = self.bind_text(node, placeholder, value)?;
+        Ok(TextBoxResponse {
+            response: Response { ui: self, node },
+            changed,
+        })
+    }
+
+    /// A text box for several lines, such as a note: Enter starts a new
+    /// line, so [`TextBoxResponse::enter_pressed`] never fires, and long
+    /// lines wrap. Otherwise it binds `value` as [`text_box`](Self::text_box)
+    /// does.
+    pub fn text_area(
+        &mut self,
+        id: impl Hash,
+        placeholder: &str,
+        value: &mut String,
+    ) -> Result<TextBoxResponse<'_>> {
+        let capacity = value.capacity();
+        let (node, _) = self.visit(id, ChildKind::Visual, || {
+            let text_box = TextBox::new()?;
+            text_box.SetAcceptsReturn(true)?;
+            text_box.SetTextWrapping(TextWrapping::Wrap)?;
+            text_box.cast::<FrameworkElement>()?.SetMinHeight(80.0)?;
+            Ok(ControlNode::new(
+                text_box.cast()?,
+                Control::TextBox {
+                    text_box,
+                    // As roomy as the app's buffer, so the layer's copy
+                    // does not grow on a keystroke either.
+                    text: String::with_capacity(capacity),
                     placeholder: String::new(),
                     composing: false,
                 },
@@ -105,11 +143,19 @@ impl Ui {
         }
         let mut changed = false;
         if typed {
-            let current = text_box.Text()?;
+            let current = text_box.cast::<ITextBox>()?.text_string()?;
             // An echo of this layer's own write reads back the stored text.
-            if current != *text {
-                value.clone_from(&current);
-                *text = current;
+            // The compare and the copies reuse the strings' buffers, so a
+            // keystroke allocates only when the text outgrows them.
+            let units = || char::decode_utf16(current.iter().copied());
+            let same = units()
+                .map(|unit| unit.unwrap_or(char::REPLACEMENT_CHARACTER))
+                .eq(text.chars());
+            if !same {
+                for target in [&mut *value, &mut *text] {
+                    target.clear();
+                    target.extend(units().map(|unit| unit.unwrap_or(char::REPLACEMENT_CHARACTER)));
+                }
                 changed = true;
             }
         } else if !*composing && must_write(stale, text.as_str(), value.as_str()) {

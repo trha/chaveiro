@@ -181,9 +181,26 @@ add_handler!(IAppWindow, add_closing, Closing, TypedEventHandler<AppWindow, AppW
 add_handler!(ITitleBar, add_back_requested, BackRequested, TypedEventHandler<TitleBar, windows_core::IInspectable>);
 add_handler!(IKeyboardAccelerator, add_invoked, Invoked, TypedEventHandler<KeyboardAccelerator, KeyboardAcceleratorInvokedEventArgs>);
 add_handler!(IMenuFlyoutItem, add_click, Click, RoutedEventHandler);
+add_handler!(ISplitButton, add_click, Click, TypedEventHandler<SplitButton, SplitButtonClickEventArgs>);
+add_handler!(IContentDialog, add_primary_button_click, PrimaryButtonClick, TypedEventHandler<ContentDialog, ContentDialogButtonClickEventArgs>);
+add_handler!(IContentDialog, add_closed, Closed, TypedEventHandler<ContentDialog, ContentDialogClosedEventArgs>);
 add_handler!(IFlyoutBase, add_closed, Closed, EventHandler<IInspectable>);
 add_handler!(IUIElement, add_context_requested, ContextRequested, TypedEventHandler<UIElement, ContextRequestedEventArgs>);
 add_handler!(INavigationView, add_selection_changed, SelectionChanged, TypedEventHandler<NavigationView, NavigationViewSelectionChangedEventArgs>);
+
+impl ITextBox {
+    /// The text as the `HSTRING` WinUI returns, which the Windows string
+    /// heap holds, so reading it allocates nothing on the Rust heap.
+    pub(crate) fn text_string(&self) -> windows_core::Result<windows_core::HSTRING> {
+        // SAFETY: the slot's signature is `HRESULT(this, *mut HSTRING)`; on
+        // success the out value is an owned HSTRING.
+        unsafe {
+            let mut result = core::mem::zeroed();
+            (Interface::vtable(self).Text)(Interface::as_raw(self), &mut result)
+                .map(|| core::mem::transmute::<_, windows_core::HSTRING>(result))
+        }
+    }
+}
 
 impl IPasswordBox {
     /// The password as the `HSTRING` WinUI returns, unconverted, so the

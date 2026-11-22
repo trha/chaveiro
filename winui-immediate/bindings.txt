@@ -221,6 +221,18 @@ Microsoft.UI.Xaml.Controls.MenuFlyoutSubItem::{CreateInstance, get_Items, put_Te
 Microsoft.UI.Xaml.Controls.MenuFlyoutSeparator::{}
 Microsoft.UI.Xaml.Controls.IMenuFlyoutSeparatorFactory::CreateInstance
 Microsoft.UI.Xaml.Controls.MenuFlyoutItemBase::{}
+Microsoft.UI.Xaml.Controls.SplitButton::{put_Flyout, add_Click, remove_Click}
+Microsoft.UI.Xaml.Controls.ISplitButtonFactory::CreateInstance
+Microsoft.UI.Xaml.Controls.SplitButtonClickEventArgs::{}
+Microsoft.UI.Xaml.Controls.TextBox::{put_AcceptsReturn, put_TextWrapping}
+Microsoft.UI.Xaml.FrameworkElement::{put_MinHeight}
+Microsoft.UI.Xaml.Controls.ContentDialog::{put_Title, put_PrimaryButtonText, put_CloseButtonText, put_DefaultButton, ShowAsync, Hide, add_PrimaryButtonClick, remove_PrimaryButtonClick, add_Closed, remove_Closed}
+Microsoft.UI.Xaml.Controls.IContentDialogFactory::CreateInstance
+Microsoft.UI.Xaml.Controls.ContentDialogButton
+Microsoft.UI.Xaml.Controls.ContentDialogResult
+Microsoft.UI.Xaml.Controls.ContentDialogButtonClickEventArgs::{}
+Microsoft.UI.Xaml.Controls.ContentDialogClosedEventArgs::{}
+Microsoft.UI.Xaml.UIElement::{put_XamlRoot}
 Microsoft.UI.Xaml.UIElement::{add_ContextRequested, remove_ContextRequested}
 Microsoft.UI.Xaml.Input.ContextRequestedEventArgs::{TryGetPosition, put_Handled}
 Microsoft.UI.Xaml.Controls.Control::{put_Foreground}

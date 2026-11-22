@@ -142,9 +142,13 @@ impl Events {
             return Ok(());
         }
         match kind {
-            EventKind::Click => match source.cast::<IButtonBase>() {
-                Ok(button) => button.add_click(&self.delegates.click)?,
-                Err(_) => source
+            // A split button is no ButtonBase, and its click has its own
+            // delegate type.
+            EventKind::Click => match (source.cast::<IButtonBase>(), source.cast::<ISplitButton>())
+            {
+                (Ok(button), _) => button.add_click(&self.delegates.click)?,
+                (_, Ok(button)) => button.add_click(&self.delegates.split_click)?,
+                _ => source
                     .cast::<IMenuFlyoutItem>()?
                     .add_click(&self.delegates.click)?,
             },
@@ -154,6 +158,12 @@ impl Events {
             EventKind::Invoked => source
                 .cast::<IKeyboardAccelerator>()?
                 .add_invoked(&self.delegates.invoked)?,
+            EventKind::DialogPrimary => source
+                .cast::<IContentDialog>()?
+                .add_primary_button_click(&self.delegates.dialog_primary)?,
+            EventKind::DialogClosed => source
+                .cast::<IContentDialog>()?
+                .add_closed(&self.delegates.dialog_closed)?,
             EventKind::FlyoutClosed => source
                 .cast::<IFlyoutBase>()?
                 .add_closed(&self.delegates.flyout_closed)?,
@@ -260,6 +270,10 @@ pub(crate) enum EventKind {
     FlyoutClosed,
     /// A keyboard accelerator's key was pressed.
     Invoked,
+    /// A dialog's primary button was clicked; the dialog then closes.
+    DialogPrimary,
+    /// A dialog closed, by any button or Escape.
+    DialogClosed,
 }
 
 /// A key a control reports through [`TextBoxResponse::keys`]. Enter is not
@@ -349,6 +363,9 @@ impl Inbox {
 /// One delegate object per event kind, registered on every source.
 struct Delegates {
     click: RoutedEventHandler,
+    /// A split button's main part; its chevron opens its menu and raises
+    /// nothing.
+    split_click: TypedEventHandler<SplitButton, SplitButtonClickEventArgs>,
     close_requested: TypedEventHandler<AppWindow, AppWindowClosingEventArgs>,
     text_changed: TextChangedEventHandler,
     composition_started: TypedEventHandler<TextBox, TextCompositionStartedEventArgs>,
@@ -367,6 +384,8 @@ struct Delegates {
     context_requested: TypedEventHandler<UIElement, ContextRequestedEventArgs>,
     flyout_closed: EventHandler<IInspectable>,
     invoked: TypedEventHandler<KeyboardAccelerator, KeyboardAcceleratorInvokedEventArgs>,
+    dialog_primary: TypedEventHandler<ContentDialog, ContentDialogButtonClickEventArgs>,
+    dialog_closed: TypedEventHandler<ContentDialog, ContentDialogClosedEventArgs>,
     /// Not an event the app sees: it selects the sender's text.
     select_all: RoutedEventHandler,
 }
@@ -380,6 +399,12 @@ impl Delegates {
         let click = {
             let inbox = Rc::clone(inbox);
             RoutedEventHandler::shared(move |sender: Ref<'_, IInspectable>, _| {
+                inbox.push(canonical(sender.ok().ok()).as_ref(), EventKind::Click)
+            })
+        };
+        let split_click = {
+            let inbox = Rc::clone(inbox);
+            TypedEventHandler::shared(move |sender: Ref<'_, SplitButton>, _| {
                 inbox.push(canonical(sender.ok().ok()).as_ref(), EventKind::Click)
             })
         };
@@ -563,6 +588,24 @@ impl Delegates {
                 },
             )
         };
+        let dialog_primary = {
+            let inbox = Rc::clone(inbox);
+            TypedEventHandler::shared(move |sender: Ref<'_, ContentDialog>, _| {
+                inbox.push(
+                    canonical(sender.ok().ok()).as_ref(),
+                    EventKind::DialogPrimary,
+                )
+            })
+        };
+        let dialog_closed = {
+            let inbox = Rc::clone(inbox);
+            TypedEventHandler::shared(move |sender: Ref<'_, ContentDialog>, _| {
+                inbox.push(
+                    canonical(sender.ok().ok()).as_ref(),
+                    EventKind::DialogClosed,
+                )
+            })
+        };
         let select_all = RoutedEventHandler::shared(|sender: Ref<'_, IInspectable>, _| {
             // Only text boxes register it; a failed selection leaves the
             // caret where WinUI put it, which is still usable.
@@ -575,10 +618,13 @@ impl Delegates {
             context_requested,
             flyout_closed,
             invoked,
+            dialog_primary,
+            dialog_closed,
             back_requested,
             select_all,
             key,
             click,
+            split_click,
             close_requested,
             text_changed,
             composition_started,

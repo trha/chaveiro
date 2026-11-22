@@ -13,6 +13,7 @@ immediate-tree = { path = "../immediate-tree" }
 tracing = "0.1"
 windows-collections = { version = "0.100.0", features = ["std"] }
 windows-core = "0.100.0"
+windows-future = "0.100.0"
 windows-numerics = "0.100.0"
 windows-reference = { version = "0.100.0", features = ["std"] }
 windows-time = "0.100.0"

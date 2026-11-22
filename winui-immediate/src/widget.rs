@@ -9,7 +9,7 @@ use crate::{
         AppBarButton, Application, AutomationProperties, Brush, Button, ComboBox,
         Control as XamlControl, DependencyObject, FocusState, FontIcon, FrameworkElement, Grid,
         HorizontalAlignment, ICommandBarElement, IPanel, IconElement, InfoBar, ItemsRepeater,
-        MenuFlyoutItem, MenuFlyoutItemBase, MenuFlyoutSubItem, PasswordBox, ProgressRing,
+        MenuFlyoutItem, MenuFlyoutItemBase, MenuFlyoutSubItem, PasswordBox,
         StackPanel, Style, TextBlock, TextBox, TextWrapping, Thickness, TitleBar,
         ToggleMenuFlyoutItem, UIElement, UIElementCollection, Visibility,
     },
@@ -27,6 +27,7 @@ mod check_box;
 mod code_boxes;
 mod combo_box;
 mod command_bar;
+mod dialog;
 mod drag_bar;
 mod flow;
 mod font_icon;
@@ -46,6 +47,7 @@ mod scroll;
 mod search_box;
 mod settings_card;
 pub(crate) mod shortcut;
+mod split_button;
 mod stack;
 mod status;
 mod task;
@@ -58,6 +60,7 @@ pub use check_box::CheckBoxResponse;
 pub use code_boxes::{CODE_LENGTH, CodeBoxes, CodeDigits};
 pub use combo_box::ComboBoxResponse;
 pub use command_bar::AppBarButtonResponse;
+pub use dialog::{DialogAnswer, DialogResponse};
 pub use flow::{Flow, FlowResponse, Lend, Lent, Owned, OwnedFamily, owned};
 pub use font_icon::FontIconResponse;
 pub use grid::Length;
@@ -75,6 +78,7 @@ pub use password_box::{PasswordField, PasswordHandle};
 pub use pressable::PressableResponse;
 pub use search_box::SearchBoxResponse;
 pub use settings_card::{ContentAlignment, SettingsCard, SettingsCardResponse};
+pub use split_button::SplitButtonResponse;
 pub use stack::Orientation;
 pub use status::ContentButtonResponse;
 pub use task::{StreamResponse, TaskResponse};
@@ -626,9 +630,13 @@ pub(crate) enum Control {
         content: TextBlock,
         label: String,
         accent: bool,
-        /// Made on the first busy pass; then the content is a row of the
-        /// ring and `content`.
-        ring: Option<ProgressRing>,
+        /// Made on the first busy or icon pass; then the content is a row
+        /// of the icon, the ring and `content`.
+        row: Option<button::ButtonRow>,
+        /// [`None`] until an icon is written.
+        glyph: Option<char>,
+        /// Empty until a tooltip is written.
+        tooltip: String,
         busy: bool,
     },
     ComboBox {
@@ -768,6 +776,8 @@ pub(crate) enum Control {
         look: menu::Look,
     },
     MenuSeparator,
+    /// From [`Ui::split_button`]: its parts and menu items.
+    SplitButton(Box<split_button::Parts>),
 }
 
 impl Control {
@@ -800,6 +810,7 @@ impl Control {
                 | Control::Link { .. }
                 | Control::Pressable(_)
                 | Control::Tag { .. }
+                | Control::SplitButton(_)
         )
     }
 

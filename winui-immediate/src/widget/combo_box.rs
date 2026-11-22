@@ -18,12 +18,17 @@ impl Ui {
     /// The user's pick is copied into `selected`, and a pick runs a pass.
     /// The pass writes `selected` into the control only when the app changed
     /// it. An index past the end shows no selection.
-    pub fn combo_box(
+    ///
+    /// `items` is read twice when it changed and once when it did not, so a
+    /// pass can name labels it already holds, such as folder names, without
+    /// collecting them: an unchanged list allocates nothing.
+    pub fn combo_box<'a>(
         &mut self,
         id: impl Hash,
-        items: &[&str],
+        items: impl IntoIterator<Item = &'a str, IntoIter: Clone>,
         selected: &mut usize,
     ) -> Result<ComboBoxResponse<'_>> {
+        let items = items.into_iter();
         let (node, _) = self.visit(id, ChildKind::Visual, || {
             let combo_box = ComboBox::new()?;
             combo_box
@@ -67,10 +72,10 @@ impl Ui {
         // Clearing the items clears the selection, which raises an echo that
         // the read below treats as no pick, since the index is written again
         // right after.
-        write_items(&combo_box, stale, written_items, items, written_selected)?;
+        let count = write_items(&combo_box, stale, written_items, items, written_selected)?;
         let declared = i32::try_from(*selected)
             .ok()
-            .filter(|&index| (index as usize) < items.len())
+            .filter(|&index| (index as usize) < count)
             .unwrap_or(-1);
         let mut changed = false;
         if picked {
@@ -153,7 +158,13 @@ impl Ui {
         else {
             unreachable!("editable combo box keys hold editable combo boxes")
         };
-        write_items(&combo_box, stale, written_items, items, written_selected)?;
+        write_items(
+            &combo_box,
+            stale,
+            written_items,
+            items.iter().copied(),
+            written_selected,
+        )?;
         let mut picked = None;
         if selection_changed {
             let current = combo_box.cast::<Selector>()?.SelectedIndex()?;
@@ -194,28 +205,29 @@ impl Ui {
 }
 
 /// Writes `items` into `combo_box` when they differ from `written`, which
-/// clears the selection.
-fn write_items(
+/// clears the selection. Returns how many items there are.
+fn write_items<'a>(
     combo_box: &ComboBox,
     stale: bool,
     written: &mut Vec<String>,
-    items: &[&str],
+    items: impl Clone + Iterator<Item = &'a str>,
     selected: &mut i32,
-) -> Result<()> {
-    if !stale && written.iter().map(String::as_str).eq(items.iter().copied()) {
-        return Ok(());
+) -> Result<usize> {
+    if !stale && written.iter().map(String::as_str).eq(items.clone()) {
+        return Ok(written.len());
     }
     let list = combo_box
         .cast::<ItemsControl>()?
         .Items()?
         .cast::<IVector<IInspectable>>()?;
     list.Clear()?;
+    written.clear();
     for item in items {
         list.Append(&boxed(item))?;
+        written.push(item.to_owned());
     }
-    *written = items.iter().map(|item| (*item).to_owned()).collect();
     *selected = -1;
-    Ok(())
+    Ok(written.len())
 }
 
 /// What [`Ui::combo_box`] and [`Ui::editable_combo_box`] return.

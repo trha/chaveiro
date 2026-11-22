@@ -2238,6 +2238,7 @@ dependencies = [
  "windows-bindgen",
  "windows-collections",
  "windows-core",
+ "windows-future",
  "windows-numerics",
  "windows-reference",
  "windows-time",
