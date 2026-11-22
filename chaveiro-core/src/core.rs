@@ -19,7 +19,10 @@ use crate::{
         identity::{ErrorResponse, PreloginResponse, TokenFailure, TokenResponse, prelogin_body},
         sync::{Profile, SyncResponse},
     },
-    vault::{CipherContent, CipherView, VaultError, VaultIndex, VaultKeys, decrypt_user_key},
+    vault::{
+        self, CipherContent, CipherView, CopyField, VaultError, VaultIndex, VaultKeys,
+        decrypt_user_key,
+    },
 };
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use passkey::{Pending, Target};
@@ -1568,7 +1571,30 @@ impl Core {
                         }
                     }
                     false => send_edit(config, requests, &mut unlocked, now_ms, id, edit, &mut effects),
-                }                State::Unlocked(unlocked)
+                }
+                State::Unlocked(unlocked)
+            }
+            (State::Unlocked(unlocked), Input::User(UserAction::Copy { id, field }), None) => {
+                let text = unlocked
+                    .account
+                    .cache
+                    .as_ref()
+                    .and_then(|cache| cache.ciphers.iter().find(|cipher| cipher.id == id))
+                    .filter(|cipher| !(field.guarded() && cipher.reprompt == 1))
+                    .and_then(|cipher| {
+                        // An unreadable field copies nothing, so the error goes.
+                        vault::decrypt_field(cipher, &unlocked.keys, field).ok().flatten()
+                    });
+                let text = match field {
+                    CopyField::Totp => {
+                        text.and_then(|secret| crate::totp::code(&secret, now_ms / 1000))
+                    }
+                    _ => text,
+                };
+                if let Some(text) = text {
+                    effects.push(Effect::Copy { text });
+                }
+                State::Unlocked(unlocked)
             }
             (
                 State::Unlocked(mut unlocked),
@@ -2149,6 +2175,7 @@ impl Core {
                     | UserAction::Trash(_)
                     | UserAction::MoveToFolder { .. }
                     | UserAction::SetReprompt { .. }
+                    | UserAction::Copy { .. }
                     | UserAction::Restore(_)
                     | UserAction::Delete(_)
                     | UserAction::CreateFolder { .. }
@@ -2183,6 +2210,7 @@ impl Core {
                     | UserAction::Trash(_)
                     | UserAction::MoveToFolder { .. }
                     | UserAction::SetReprompt { .. }
+                    | UserAction::Copy { .. }
                     | UserAction::Restore(_)
                     | UserAction::Delete(_)
                     | UserAction::CreateFolder { .. }
@@ -2219,6 +2247,7 @@ impl Core {
                     | UserAction::Trash(_)
                     | UserAction::MoveToFolder { .. }
                     | UserAction::SetReprompt { .. }
+                    | UserAction::Copy { .. }
                     | UserAction::Restore(_)
                     | UserAction::Delete(_)
                     | UserAction::CreateFolder { .. }
@@ -2259,6 +2288,7 @@ impl Core {
                     | UserAction::Trash(_)
                     | UserAction::MoveToFolder { .. }
                     | UserAction::SetReprompt { .. }
+                    | UserAction::Copy { .. }
                     | UserAction::Restore(_)
                     | UserAction::Delete(_)
                     | UserAction::CreateFolder { .. }
@@ -2295,6 +2325,7 @@ impl Core {
                     | UserAction::Trash(_)
                     | UserAction::MoveToFolder { .. }
                     | UserAction::SetReprompt { .. }
+                    | UserAction::Copy { .. }
                     | UserAction::Restore(_)
                     | UserAction::Delete(_)
                     | UserAction::CreateFolder { .. }
@@ -2328,6 +2359,7 @@ impl Core {
                     | UserAction::Trash(_)
                     | UserAction::MoveToFolder { .. }
                     | UserAction::SetReprompt { .. }
+                    | UserAction::Copy { .. }
                     | UserAction::Restore(_)
                     | UserAction::Delete(_)
                     | UserAction::CreateFolder { .. }
@@ -2361,6 +2393,7 @@ impl Core {
                     | UserAction::Trash(_)
                     | UserAction::MoveToFolder { .. }
                     | UserAction::SetReprompt { .. }
+                    | UserAction::Copy { .. }
                     | UserAction::Restore(_)
                     | UserAction::Delete(_)
                     | UserAction::CreateFolder { .. }
@@ -2819,6 +2852,15 @@ pub enum UserAction {
         id: Uuid,
         on: bool,
     },
+    /// Copy one field of an item to the clipboard through
+    /// [`Effect::Copy`]. The item need not be open, and the open item stays
+    /// as it is. An item with the master password re-prompt flag refuses a
+    /// [guarded](CopyField::guarded) field. A missing or unreadable field
+    /// does nothing.
+    Copy {
+        id: Uuid,
+        field: CopyField,
+    },
     CreateFolder {
         name: SecretString,
     },
@@ -2894,6 +2936,11 @@ pub enum Effect {
     },
     /// The shell renders again.
     Rerender,
+    /// Put `text` on the clipboard, kept out of clipboard history and
+    /// sync, and clear it later if nothing replaced it.
+    Copy {
+        text: SecretString,
+    },
     /// Ask the device key for its secret over `challenge`, behind a
     /// biometric prompt. `create` makes the key first if it is missing.
     DeviceSecret {

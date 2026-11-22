@@ -260,6 +260,8 @@ pub struct CipherSummary {
     /// Chaveiro does not ask for the password yet: an open item with it set
     /// shows a note in place of its fields.
     pub reprompt: bool,
+    /// The fields the item holds, found without decrypting them.
+    pub copyable: CopyFields,
     pub deleted: bool,
     /// False when a key or field failed; `name`, `subtitle` and `uris`
     /// are then empty.
@@ -296,6 +298,7 @@ impl CipherSummary {
             organization_id: cipher.organization_id,
             favorite: cipher.favorite,
             reprompt: cipher.reprompt == 1,
+            copyable: CopyFields::of(cipher),
             deleted: cipher.deleted_date.is_some(),
             readable,
         }
@@ -546,6 +549,102 @@ impl CipherView {
                 .collect::<Result<_, VaultError>>()?,
         })
     }
+}
+
+/// One field of an item that the user can copy.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CopyField {
+    Username,
+    Password,
+    /// The current code made from the login's TOTP secret.
+    Totp,
+    /// The first website.
+    Uri,
+    Notes,
+}
+
+impl CopyField {
+    /// The field is one Bitwarden guards with the master password re-prompt.
+    pub fn guarded(self) -> bool {
+        matches!(self, Self::Password | Self::Totp)
+    }
+}
+
+/// A set of [`CopyField`]s.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CopyFields {
+    mask: u8,
+}
+
+impl CopyFields {
+    /// The fields `cipher` holds. It reads only whether each is present.
+    pub fn of(cipher: &CipherResponse) -> Self {
+        let login = cipher
+            .login
+            .as_ref()
+            .filter(|_| CipherKind::from(cipher.kind) == CipherKind::Login);
+        let present = [
+            (
+                CopyField::Username,
+                login.is_some_and(|login| login.username.is_some()),
+            ),
+            (
+                CopyField::Password,
+                login.is_some_and(|login| login.password.is_some()),
+            ),
+            (
+                CopyField::Totp,
+                login.is_some_and(|login| login.totp.is_some()),
+            ),
+            (
+                CopyField::Uri,
+                login.is_some_and(|login| login.uris.iter().any(|uri| uri.uri.is_some())),
+            ),
+            (CopyField::Notes, cipher.notes.is_some()),
+        ];
+        present
+            .into_iter()
+            .filter_map(|(field, present)| present.then_some(field))
+            .collect()
+    }
+
+    pub fn contains(self, field: CopyField) -> bool {
+        self.mask & 1 << field as u8 != 0
+    }
+}
+
+impl FromIterator<CopyField> for CopyFields {
+    fn from_iter<I: IntoIterator<Item = CopyField>>(fields: I) -> Self {
+        Self {
+            mask: fields
+                .into_iter()
+                .fold(0, |mask, field| mask | 1 << field as u8),
+        }
+    }
+}
+
+/// Decrypts only `field` of `cipher`, for a copy. Gives [`None`] when the
+/// item has no such field. A [`CopyField::Totp`] gives the raw secret.
+pub fn decrypt_field(
+    cipher: &CipherResponse,
+    keys: &VaultKeys,
+    field: CopyField,
+) -> Result<Option<SecretString>, VaultError> {
+    let key = keys.cipher_key(cipher)?;
+    let login = cipher
+        .login
+        .as_ref()
+        .filter(|_| CipherKind::from(cipher.kind) == CipherKind::Login);
+    let encrypted = match field {
+        CopyField::Username => login.and_then(|login| login.username.as_ref()),
+        CopyField::Password => login.and_then(|login| login.password.as_ref()),
+        CopyField::Totp => login.and_then(|login| login.totp.as_ref()),
+        CopyField::Uri => {
+            login.and_then(|login| login.uris.iter().find_map(|uri| uri.uri.as_ref()))
+        }
+        CopyField::Notes => cipher.notes.as_ref(),
+    };
+    decrypt_option(encrypted, &key)
 }
 
 impl CipherView {

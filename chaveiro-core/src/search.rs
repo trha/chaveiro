@@ -240,6 +240,7 @@ mod tests {
             organization_id: None,
             favorite: false,
             reprompt: false,
+            copyable: Default::default(),
             deleted: false,
             readable: true,
         }

@@ -176,6 +176,7 @@ mod tests {
                         organization_id: None,
                         favorite,
                         reprompt: false,
+                        copyable: Default::default(),
                         deleted,
                         readable: true,
                     },

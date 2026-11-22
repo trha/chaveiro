@@ -7,4 +7,5 @@ pub mod filter;
 pub mod login_form;
 pub mod proto;
 pub mod search;
+pub mod totp;
 pub mod vault;

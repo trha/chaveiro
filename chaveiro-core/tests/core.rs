@@ -13,7 +13,8 @@ use chaveiro_core::{
     crypto::{EncString, Kdf, MasterKey, SecretString, SymmetricKey, derive_master_key},
     proto::{cache::CacheDocument, cipher::CipherResponse, sync::SyncResponse},
     vault::{
-        CipherContent, CipherView, PasswordHistoryEntry, VaultIndex, VaultKeys, decrypt_user_key,
+        CipherContent, CipherView, CopyField, PasswordHistoryEntry, VaultIndex, VaultKeys,
+        decrypt_user_key,
     },
 };
 use expect_test::expect;
@@ -1279,6 +1280,85 @@ fn set_reprompt_resends_the_cached_item_with_only_the_flag_changed() {
         vault(&harness.core).open.is_none(),
         "the flag opens nothing"
     );
+}
+
+fn copied(effects: &[Effect]) -> Option<String> {
+    let mut texts = effects.iter().filter_map(|effect| match effect {
+        Effect::Copy { text } => Some(text.to_string()),
+        _ => None,
+    });
+    let text = texts.next();
+    assert!(texts.next().is_none(), "one copy at most");
+    text
+}
+
+#[test]
+fn copy_gives_the_field_the_open_item_shows_and_opens_nothing() {
+    let mut harness = Harness::unlocked(REVISION);
+    let mut copy = |field| {
+        harness.user(UserAction::Copy {
+            id: EXAMPLE_ID,
+            field,
+        })
+    };
+    let username = copied(&copy(CopyField::Username));
+    let password = copied(&copy(CopyField::Password));
+    let uri = copied(&copy(CopyField::Uri));
+    let notes = copied(&copy(CopyField::Notes));
+    let totp = copied(&copy(CopyField::Totp));
+    assert!(vault(&harness.core).open.is_none(), "a copy opens nothing");
+    harness.user(UserAction::Open(EXAMPLE_ID));
+    let view = vault(&harness.core).open.unwrap().view.clone();
+    let CipherContent::Login(login) = &view.content else {
+        panic!("the example is a login")
+    };
+    let text = |value: &Option<SecretString>| value.as_ref().map(|value| value.to_string());
+    assert_eq!(username, text(&login.username));
+    assert_eq!(password, text(&login.password));
+    assert_eq!(uri, login.uris.iter().find_map(|uri| text(&uri.uri)));
+    assert_eq!(notes, text(&view.notes));
+    assert!(totp.is_some(), "the example's TOTP secret is valid");
+    let totp_secret = login.totp.as_ref().expect("the example has a TOTP secret");
+    assert_eq!(
+        totp,
+        chaveiro_core::totp::code(totp_secret, harness.now_ms / 1000).map(|code| code.to_string())
+    );
+}
+
+#[test]
+fn copy_of_an_unknown_item_does_nothing() {
+    let mut harness = Harness::unlocked(REVISION);
+    let effects = harness.user(UserAction::Copy {
+        id: Uuid::nil(),
+        field: CopyField::Username,
+    });
+    assert_eq!(copied(&effects), None);
+}
+
+#[test]
+fn an_item_with_reprompt_copies_only_unguarded_fields() {
+    let mut harness = Harness::unlocked(REVISION);
+    let effects = harness.user(UserAction::SetReprompt {
+        id: EXAMPLE_ID,
+        on: true,
+    });
+    let (put, _) = one_http(&effects);
+    let mut guarded = example_cipher().raw;
+    guarded.insert("reprompt".into(), 1.into());
+    harness.answer(put, 200, &Value::Object(guarded));
+    for field in [
+        CopyField::Username,
+        CopyField::Password,
+        CopyField::Totp,
+        CopyField::Uri,
+        CopyField::Notes,
+    ] {
+        let effects = harness.user(UserAction::Copy {
+            id: EXAMPLE_ID,
+            field,
+        });
+        assert_eq!(copied(&effects).is_some(), !field.guarded(), "{field:?}");
+    }
 }
 
 #[test]

@@ -111,6 +111,9 @@ impl Io {
             Effect::Clear { .. } => {}
             // A pass runs after each message, so there is nothing to do.
             Effect::Rerender => {}
+            // Dropped until the vault panes offer copy, because nothing here
+            // sends the copy action yet.
+            Effect::Copy { .. } => {}
             Effect::DeviceSecret { id, .. } => {
                 // Touch ID lands with the lock screen.
                 let _ = self.handle.send(Message::Io {
