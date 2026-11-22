@@ -12,8 +12,8 @@ use crate::{
 };
 use objc2::{MainThreadMarker, rc::Retained, runtime::ProtocolObject};
 use objc2_app_kit::{
-    NSApplication, NSGlassEffectView, NSLayoutConstraint, NSLayoutConstraintOrientation,
-    NSSearchField, NSStackView, NSTableView, NSToolbar, NSToolbarItem,
+    NSApplication, NSGlassEffectView, NSLayoutConstraint, NSLayoutConstraintOrientation, NSMenu,
+    NSMenuItem, NSSearchField, NSStackView, NSTableView, NSToolbar, NSToolbarItem,
     NSUserInterfaceLayoutOrientation, NSView, NSVisualEffectView, NSWindow,
 };
 use objc2_foundation::{NSArray, NSString};
@@ -36,6 +36,9 @@ pub struct Ui {
     /// Table views to reload after the pass, with no borrow held, because
     /// AppKit asks for rows inside `reloadData`.
     pub(crate) reloads: Vec<Retained<NSTableView>>,
+    /// Menus to open under their views after the pass, with no borrow held,
+    /// because opening one waits until it closes.
+    pub(crate) popups: Vec<(Retained<NSMenu>, Retained<NSView>)>,
     /// Table view selections to write after the reloads, so each names a
     /// row the table already has.
     pub(crate) selections: Vec<(Retained<NSTableView>, Option<usize>)>,
@@ -75,6 +78,7 @@ impl Ui {
             new_windows: Vec::new(),
             tables: Vec::new(),
             reloads: Vec::new(),
+            popups: Vec::new(),
             selections: Vec::new(),
             invalidated: false,
             requested: Cell::new(false),
@@ -301,6 +305,8 @@ impl Ui {
             }
             Payload::ToolbarItem(_) => self.apply_toolbar_group(node, declared),
             Payload::Toolbar(_) => self.apply_toolbar(node, declared),
+            Payload::Menu(_) => self.apply_menu(node, declared),
+            Payload::MenuItem(_) => unreachable!("menu items are never opened"),
             Payload::Window(window) => {
                 assert!(
                     declared.len() <= 1,
@@ -561,6 +567,9 @@ pub(crate) enum Payload {
     State(Box<dyn Any>),
     Toolbar(ToolbarNode),
     ToolbarItem(ToolbarItemNode),
+    /// A table view's context menu.
+    Menu(MenuNode),
+    MenuItem(MenuItemNode),
     /// From [`Ui::task`]. Dropping it drops the future.
     Task(TaskNode),
     /// From [`Ui::stream`]. Dropping it drops the stream.
@@ -593,6 +602,27 @@ pub(crate) struct ToolbarItemNode {
     /// For a search item, its field and the text last written or read
     /// back.
     pub(crate) search: Option<(Retained<NSSearchField>, String)>,
+}
+
+/// A menu the app declares while it is open.
+///
+/// Contract: `popup` is false for a menu that fills a control's probe,
+/// whose events go to that control's node, and true for one the crate
+/// opens itself, registered to this node.
+pub(crate) struct MenuNode {
+    pub(crate) menu: Retained<NSMenu>,
+    pub(crate) popup: bool,
+    /// The item nodes as last applied, in order.
+    pub(crate) items: Vec<NodeId>,
+    /// Whether the menu shows, so dropping the node closes it.
+    pub(crate) open: bool,
+}
+
+pub(crate) struct MenuItemNode {
+    pub(crate) item: Retained<NSMenuItem>,
+    /// The values last written.
+    pub(crate) title: String,
+    pub(crate) enabled: Option<bool>,
 }
 
 pub(crate) struct CacheNode {
@@ -658,6 +688,10 @@ pub(crate) struct ControlNode {
     pub(crate) flexible: bool,
     /// The header and error line of a form field.
     pub(crate) field: Option<Box<Field>>,
+    /// The empty menu that reports context menu requests, once
+    /// [`Response::context_requested`](crate::Response::context_requested)
+    /// asked for them. A [`Ui::menu`] at its anchor fills it.
+    pub(crate) probe: Option<Retained<NSMenu>>,
 }
 
 impl ControlNode {
@@ -685,6 +719,7 @@ impl ControlNode {
             text_color: None,
             flexible: false,
             field: None,
+            probe: None,
         })
     }
 
@@ -818,6 +853,24 @@ fn release(events: &Events, payload: Payload) {
         | Payload::Task(_)
         | Payload::Stream(_) => {}
         Payload::Toolbar(toolbar) => toolbar.window.setToolbar(None),
+        Payload::Menu(menu) => {
+            if menu.open {
+                menu.menu.cancelTracking();
+            }
+            // A probe belongs to its control, which forgets it.
+            if menu.popup {
+                events.forget(&menu.menu);
+                menu.menu.setDelegate(None);
+            }
+        }
+        // A probe outlives the menus that fill it, so each item leaves it.
+        Payload::MenuItem(item) => {
+            events.forget(&item.item);
+            // SAFETY: the item is alive, and a menu holds its items strongly.
+            if let Some(menu) = unsafe { item.item.menu() } {
+                menu.removeItem(&item.item);
+            }
+        }
         Payload::ToolbarItem(item) => {
             if let Some(item) = &item.item {
                 events.forget(item);
@@ -835,6 +888,10 @@ fn release(events: &Events, payload: Payload) {
         Payload::Control(control) => {
             for sender in control.control.senders() {
                 events.forget(sender);
+            }
+            if let Some(probe) = &control.probe {
+                events.forget(probe);
+                probe.setDelegate(None);
             }
         }
     }

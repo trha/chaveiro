@@ -18,10 +18,11 @@ pub use pass::Ui;
 pub use runner::{App, run};
 pub use widget::{
     Align, ButtonResponse, CODE_LENGTH, CheckBoxResponse, CodeBoxesResponse, CodeDigits,
-    ComboBoxResponse, FieldHandle, Key, Length, Orientation, PopUpButtonResponse, Response, RowFn,
-    SecureTextFieldHandle, SecureTextFieldResponse, SourceListEntries, SourceListResponse,
-    StreamResponse, Style, TableViewId, TableViewResponse, TaskResponse, TextColor,
-    TextFieldResponse, ToolbarItemResponse, ToolbarSearchResponse, WindowResponse,
+    ComboBoxResponse, FieldHandle, Key, Length, MenuAnchor, MenuItemResponse, MenuResponse,
+    Orientation, PopUpButtonResponse, Response, RowFn, SecureTextFieldHandle,
+    SecureTextFieldResponse, SourceListEntries, SourceListResponse, StreamResponse, Style,
+    TableViewId, TableViewResponse, TaskResponse, TextColor, TextFieldResponse,
+    ToolbarItemResponse, ToolbarSearchResponse, WindowResponse,
 };
 /// The type [`Ui::take_password`] returns.
 pub use zeroize::Zeroizing;

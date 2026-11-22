@@ -401,6 +401,14 @@ impl Ui {
                         }
                         "toolbar_item"
                     }
+                    Payload::Menu(menu) => {
+                        owners.insert(Retained::as_ptr(&menu.menu).addr(), *child);
+                        "menu"
+                    }
+                    Payload::MenuItem(item) => {
+                        owners.insert(Retained::as_ptr(&item.item).addr(), *child);
+                        "menu_item"
+                    }
                 };
                 let child_path = if path.is_empty() {
                     format!("{kind}[{index}]")

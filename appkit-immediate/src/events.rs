@@ -10,9 +10,9 @@ use objc2::{
 };
 use objc2_app_kit::{
     NSApplication, NSApplicationDelegate, NSApplicationTerminateReply, NSComboBoxDelegate,
-    NSControl, NSControlTextEditingDelegate, NSSearchFieldDelegate, NSTableColumn, NSTableRowView,
-    NSTableView, NSTableViewDataSource, NSTableViewDelegate, NSTextFieldDelegate, NSTextView,
-    NSView, NSWindowDelegate,
+    NSControl, NSControlTextEditingDelegate, NSMenu, NSMenuDelegate, NSSearchFieldDelegate,
+    NSTableColumn, NSTableRowView, NSTableView, NSTableViewDataSource, NSTableViewDelegate,
+    NSTextFieldDelegate, NSTextView, NSView, NSWindowDelegate,
 };
 use objc2_foundation::{NSInteger, NSNotification, NSObject, NSObjectProtocol};
 use std::{cell::RefCell, collections::hash_map::Entry, rc::Rc};
@@ -126,6 +126,11 @@ pub(crate) enum EventKind {
     /// A text field's editor took a command, such as an arrow key. Only
     /// the commands of [`Command`] are reported.
     Command(Command),
+    /// A menu is about to open: a control's context menu, or one the crate
+    /// opened.
+    MenuNeedsUpdate,
+    /// A menu closed. A chosen item's action comes after it.
+    MenuDidClose,
     /// The user changed a source list's or table view's selection.
     SelectionDidChange,
     ShouldClose,
@@ -295,6 +300,21 @@ define_class!(
             if let Some(table) = notification.object() {
                 self.push(&table, EventKind::SelectionDidChange);
             }
+        }
+    }
+
+    unsafe impl NSMenuDelegate for Target {
+        /// Runs a pass at once, so the app declares the items before
+        /// AppKit shows them.
+        #[unsafe(method(menuNeedsUpdate:))]
+        fn menu_needs_update(&self, menu: &NSMenu) {
+            self.push(menu, EventKind::MenuNeedsUpdate);
+            crate::runner::turn_now();
+        }
+
+        #[unsafe(method(menuDidClose:))]
+        fn menu_did_close(&self, menu: &NSMenu) {
+            self.push(menu, EventKind::MenuDidClose);
         }
     }
 

@@ -119,6 +119,18 @@ pub(crate) fn recycle_row(table: NodeId, view: usize) {
     }
 }
 
+/// Runs a turn now, from an AppKit callback that needs the app's answer
+/// before it returns, such as a menu about to open. Does nothing while a
+/// pass runs.
+pub(crate) fn turn_now() {
+    let current = CURRENT.with_borrow(Option::clone);
+    if let Some(current) = current
+        && !current.busy()
+    {
+        current.turn();
+    }
+}
+
 fn turn_current() {
     let current = CURRENT.with_borrow(Option::clone);
     if let Some(current) = current {
@@ -135,6 +147,8 @@ trait Turn {
     /// Builds a table row; [`None`] when it cannot be built now.
     fn realize(&self, table: NodeId, row: usize) -> Option<Retained<NSView>>;
     fn recycle(&self, table: NodeId, view: usize);
+    /// Whether a pass or a row build holds the app.
+    fn busy(&self) -> bool;
 }
 
 struct Runner<A: App> {
@@ -278,6 +292,10 @@ impl<A: App> Turn for Runner<A> {
         }
     }
 
+    fn busy(&self) -> bool {
+        self.ui.try_borrow_mut().is_err() || self.app.try_borrow_mut().is_err()
+    }
+
     fn turn(&self) -> bool {
         self.scheduled.set(false);
         if self.panic.borrow().is_some() {
@@ -290,6 +308,12 @@ impl<A: App> Turn for Runner<A> {
             Ok((consumed, windows)) => {
                 if windows > 0 {
                     autoreleasepool(|_| self.settle_tables());
+                    // Each waits until its menu closes, and passes run
+                    // meanwhile, so none may hold a borrow.
+                    let popups = std::mem::take(&mut self.ui.borrow_mut().popups);
+                    for (menu, view) in popups {
+                        autoreleasepool(|_| crate::widget::pop_up(&menu, &view));
+                    }
                 }
                 // A widget declared before the one that read an event shows
                 // the old state, so one more pass catches it up.
