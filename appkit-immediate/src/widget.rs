@@ -54,8 +54,8 @@ pub use stack_view::Orientation;
 pub(crate) use table_view::TableData;
 pub use table_view::{RowFn, TableViewId, TableViewResponse};
 pub use text_field::TextFieldResponse;
-pub use toolbar::ToolbarItemResponse;
 pub(crate) use toolbar::ToolbarSource;
+pub use toolbar::{Key, ToolbarItemResponse, ToolbarSearchResponse};
 pub use window::WindowResponse;
 
 /// Access to the view a widget declared, for what the widget does not cover.

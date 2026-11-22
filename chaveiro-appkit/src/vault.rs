@@ -1,21 +1,23 @@
 //! The vault window, from the "Vault" boards of the Chaveiro macOS design:
 //! a sidebar of filters with their item counts over the sync status, the
 //! list of the chosen filter's items, and the open item's details. The
-//! toolbar holds the item commands, Sync and Lock; search comes later.
+//! toolbar holds the item commands, the search field, Sync and Lock.
 //!
 //! The window stays open for most of the app's life, so a pass that finds
 //! the index, the filter and the open item unchanged allocates nothing:
 //! the counts, the sidebar's entries and the list's rows are rebuilt only
-//! when [`VaultScreen::index_revision`] or the filter changes, and the
+//! when [`VaultScreen::index_revision`], the filter or the search changes,
+//! and the
 //! details are drawn from the open item in place.
 
 use appkit_immediate::{
-    Align, App, Length, Orientation, SourceListEntries, Style, TableViewId, TextColor, Ui,
+    Align, App, Key, Length, Orientation, SourceListEntries, Style, TableViewId, TextColor, Ui,
 };
 use chaveiro_core::{
     core::{ItemError, UserAction, VaultScreen},
     crypto::SecretString,
     filter::{Counts, Filter, KINDS},
+    search::{Query, Tier},
     vault::{
         CipherContent, CipherKind, CipherSummary, CipherView, FolderSummary, LoginView, VaultIndex,
     },
@@ -38,6 +40,7 @@ pub struct VaultForm {
     /// to [`Filter::All`].
     pub filter: Filter,
     sidebar: Sidebar,
+    search: Search,
     list: ItemList,
     /// The item the list shows as selected, whose details show. It
     /// follows the core's open item, and the user's pick in the list.
@@ -45,6 +48,9 @@ pub struct VaultForm {
     /// The id of the core's open item on the last pass, to notice a new
     /// one.
     opened: Option<Uuid>,
+    /// The item Up or Down in the search field moved to last pass, which
+    /// this pass opens as a pick in the list would.
+    moved: Option<Uuid>,
     /// The secrets of the selected item shown in clear. Emptied when
     /// another item is selected.
     revealed: Vec<FieldId>,
@@ -58,9 +64,11 @@ impl Default for VaultForm {
         VaultForm {
             filter: Filter::All,
             sidebar: Sidebar::default(),
+            search: Search::default(),
             list: ItemList::default(),
             selected: None,
             opened: None,
+            moved: None,
             revealed: Vec::new(),
             subtitle: String::new(),
         }
@@ -68,19 +76,24 @@ impl Default for VaultForm {
 }
 
 impl VaultForm {
-    /// Selects All Items and no item again, and empties the cached counts,
-    /// filters and rows, keeping their capacity, so the next pass builds
-    /// them from the index it is given.
+    /// Selects All Items and no item again, empties the search, and
+    /// empties the cached counts, filters and rows, keeping their capacity,
+    /// so the next pass builds them from the index it is given.
     pub fn reset(&mut self) {
         self.filter = Filter::All;
         let sidebar = &mut self.sidebar;
         sidebar.revision = None;
         sidebar.counts.clear();
         sidebar.filters.clear();
+        self.search.text.clear();
+        self.search.query.set("");
+        self.search.revision += 1;
         self.list.shows = None;
         self.list.rows.clear();
+        self.list.ranked.clear();
         self.selected = None;
         self.opened = None;
+        self.moved = None;
         self.revealed.clear();
     }
 }
@@ -107,40 +120,77 @@ struct Sidebar {
     filters: Vec<Option<Filter>>,
 }
 
+/// The search field in the toolbar.
+///
+/// Contract: `query` is `text` parsed, and `revision` changes whenever
+/// `query` does.
+#[derive(Default)]
+struct Search {
+    text: String,
+    query: Query,
+    revision: u64,
+}
+
 /// The rows of the item list.
 ///
 /// Contract: `rows` holds the position in [`VaultIndex::ciphers`] of each
-/// item that the filter of `shows` matches, in index order, for the index
-/// of the revision in `shows`; `revision` changes whenever `rows` does.
+/// item that the filter of `shows` and the search match, best [`Tier`]
+/// first and in index order inside a tier, for the index and search of
+/// the revisions in `shows`; `revision` changes whenever `rows` does.
 #[derive(Default)]
 struct ItemList {
-    /// The index revision and filter `rows` were built for; [`None`] until
-    /// the first build and after [`VaultForm::reset`].
-    shows: Option<(u64, Filter)>,
+    /// The index revision, filter and search revision `rows` were built
+    /// for; [`None`] until the first build and after [`VaultForm::reset`].
+    shows: Option<(u64, Filter, u64)>,
     rows: Vec<usize>,
+    /// Scratch for sorting the rows, kept for its capacity.
+    ranked: Vec<(Tier, usize)>,
     revision: u64,
 }
 
 impl ItemList {
-    /// Builds the rows for `filter` over `index`, unless they are built for
-    /// that revision and filter already.
-    fn refresh(&mut self, index: &VaultIndex, revision: u64, filter: Filter) {
-        let shows = Some((revision, filter));
+    /// Builds the rows for `filter` and `search` over `index`, unless they
+    /// are built for those revisions and filter already.
+    fn refresh(&mut self, index: &VaultIndex, revision: u64, filter: Filter, search: &mut Search) {
+        let shows = Some((revision, filter, search.revision));
         if self.shows == shows {
             return;
         }
+        self.ranked.clear();
+        for (position, cipher) in index.ciphers.iter().enumerate() {
+            if filter.matches(cipher, &index.folders)
+                && let Some(tier) = search.query.rank(cipher)
+            {
+                self.ranked.push((tier, position));
+            }
+        }
+        // The keys are unique, so an unstable sort keeps index order inside
+        // a tier, and it does not allocate.
+        self.ranked.sort_unstable();
         self.rows.clear();
-        self.rows.extend(
-            index
-                .ciphers
-                .iter()
-                .enumerate()
-                .filter(|(_, cipher)| filter.matches(cipher, &index.folders))
-                .map(|(position, _)| position),
-        );
+        self.rows
+            .extend(self.ranked.iter().map(|(_, position)| *position));
         self.shows = shows;
         self.revision += 1;
     }
+}
+
+/// The row of `rows` that `step` rows of Up (negative) or Down (positive)
+/// move to from the row of `selected`, stopping at the ends; from no
+/// selected row, Down moves to the first and Up to the last. [`None`] when
+/// nothing moves.
+fn moved(rows: &[usize], index: &VaultIndex, selected: Option<Uuid>, step: isize) -> Option<usize> {
+    let last = rows.len().checked_sub(1)?;
+    let current = rows
+        .iter()
+        .position(|&row| Some(index.ciphers[row].id) == selected);
+    let target = match (current, step.signum()) {
+        (_, 0) => return None,
+        (Some(current), _) => current.saturating_add_signed(step).min(last),
+        (None, 1) => 0,
+        (None, _) => last,
+    };
+    (current != Some(target)).then_some(target)
 }
 
 /// Names one field of the selected item: a static name, and the position
@@ -189,9 +239,11 @@ pub fn view<A: VaultApp>(
     let VaultForm {
         filter,
         sidebar: sidebar_state,
+        search,
         list,
         selected: selected_item,
         opened: _,
+        moved: moved_item,
         revealed,
         subtitle,
     } = form;
@@ -228,15 +280,20 @@ pub fn view<A: VaultApp>(
             let shown = selected
                 .and_then(|entry| sidebar_state.filters[entry])
                 .unwrap_or(*filter);
-            list.refresh(index, revision, shown);
+            list.refresh(index, revision, shown, search);
 
-            let count = sidebar_state.counts.get(shown);
+            let searching = !search.query.is_empty();
+            let count = match searching {
+                true => list.rows.len(),
+                false => sidebar_state.counts.get(shown),
+            };
             let plural = if count == 1 { "" } else { "s" };
             subtitle.clear();
             write!(subtitle, "{count} item{plural} · {}", screen.email)
                 .expect("writing to a String does not fail");
 
             let empty = match shown {
+                _ if searching => "No items match your search.",
                 Filter::Trash => "Trash is empty.",
                 _ => "No items here yet.",
             };
@@ -245,7 +302,9 @@ pub fn view<A: VaultApp>(
             // A pick opens its item, or for an item that cannot be read,
             // closes the open one, because its details come from the list.
             let mut opening = false;
-            if let Some(id) = pane.picked {
+            // Up or Down in the search field last pass picks as a click
+            // does.
+            if let Some(id) = pane.picked.or(moved_item.take()) {
                 select(selected_item, revealed, Some(id));
                 let readable = index
                     .ciphers
@@ -288,6 +347,27 @@ pub fn view<A: VaultApp>(
                     action = Some(VaultAction::User(asked));
                 }
             });
+            let field = ui.toolbar_search("search", "Search", SEARCH_WIDTH, &mut search.text);
+            let changed = field.changed();
+            // Up and Down move the list's selection from the field.
+            let step: isize = field
+                .keys()
+                .map(|key| match key {
+                    Key::Up => -1,
+                    Key::Down => 1,
+                })
+                .sum();
+            if changed {
+                search.query.set(&search.text);
+                search.revision += 1;
+                // The list came before the field in this pass.
+                ui.request_pass();
+            }
+            if let Some(row) = moved(&list.rows, index, *selected_item, step) {
+                *moved_item = Some(index.ciphers[list.rows[row]].id);
+                ui.request_pass();
+            }
+
             ui.toolbar_group("vault", |ui| {
                 let mut sync = ui.toolbar_item("sync", "arrow.clockwise", "Sync");
                 sync.enabled(!screen.syncing);
@@ -1164,6 +1244,8 @@ const UNREADABLE_FOLDER: &str = "Unreadable folder";
 const UNREADABLE_ITEM: &str = "Can’t read this item";
 /// A hidden secret.
 const DOTS: &str = "••••••••••";
+/// The width of the toolbar's search field, from the design.
+const SEARCH_WIDTH: f64 = 190.0;
 /// The width of the list pane, from the design.
 const LIST_WIDTH: f64 = 300.0;
 /// The width of a field row's caption, from the design.

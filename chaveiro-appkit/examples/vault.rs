@@ -10,7 +10,8 @@
 //! of every pass, panicking when one shows no heading: the details must not
 //! blank while the core opens the picked item. It also clicks Show on the
 //! password and the toolbar's Favorite, Move to Trash, Restore and Sync,
-//! picks folders in the sidebar, and counts the Rust allocations of steady
+//! picks folders in the sidebar, searches and moves the selection with
+//! Down from the search field, and counts the Rust allocations of steady
 //! passes with an item open, which must be zero.
 
 // The program is macOS only. On other targets it is empty, so it checks but
@@ -31,12 +32,12 @@ use chaveiro_core::{
         LoginView, UriView, VaultIndex,
     },
 };
-use objc2::{MainThreadMarker, Message, rc::Retained};
+use objc2::{MainThreadMarker, Message, rc::Retained, sel};
 use objc2_app_kit::{
-    NSApplication, NSButton, NSSplitView, NSTableView, NSTableViewStyle, NSTextField,
-    NSToolbarItem, NSToolbarItemGroup, NSView,
+    NSApplication, NSButton, NSSearchToolbarItem, NSSplitView, NSTableView, NSTableViewStyle,
+    NSTextField, NSTextInputClient, NSTextView, NSToolbarItem, NSToolbarItemGroup, NSView,
 };
-use objc2_foundation::NSIndexSet;
+use objc2_foundation::{NSIndexSet, NSNotFound, NSRange, NSString};
 use std::{
     alloc::{GlobalAlloc, Layout, System},
     cell::Cell,
@@ -79,6 +80,10 @@ enum Step {
     PickFilter(&'static str),
     /// Clicks the button with this tooltip in the details.
     Click(&'static str),
+    /// Replaces the search field's text, as typing would.
+    Search(&'static str),
+    /// Presses Down in the search field.
+    SearchDown,
     /// Starts counting allocations.
     Measure,
     /// A message that changes nothing, so its pass is a steady one.
@@ -113,6 +118,21 @@ const SCRIPT: &[Step] = &[
     Step::Dump,
     Step::Click("Restore"),
     Step::Click("Sync"),
+    Step::Dump,
+    Step::PickFilter("All Items"),
+    Step::Search("hub"),
+    Step::Dump,
+    Step::Search("mail"),
+    Step::SearchDown,
+    Step::Dump,
+    Step::Measure,
+    Step::Tick,
+    Step::Tick,
+    Step::Tick,
+    Step::Report,
+    Step::Search("zzz"),
+    Step::Dump,
+    Step::Search(""),
     Step::Dump,
     Step::Quit,
 ];
@@ -189,6 +209,25 @@ impl App for Preview {
                     }
                 }
                 println!("-- clicked {tooltip}");
+            }
+            Step::Search(text) => {
+                let editor = search_editor(&content);
+                unsafe { editor.selectAll(None) };
+                match text {
+                    "" => unsafe { editor.doCommandBySelector(sel!(deleteBackward:)) },
+                    text => {
+                        // Typed text has no range to replace.
+                        let nowhere = NSRange::new(NSNotFound as usize, 0);
+                        unsafe {
+                            editor.insertText_replacementRange(&NSString::from_str(text), nowhere)
+                        };
+                    }
+                }
+                println!("-- searched {text:?}");
+            }
+            Step::SearchDown => {
+                unsafe { search_editor(&content).doCommandBySelector(sel!(moveDown:)) };
+                println!("-- pressed Down in the search field");
             }
             Step::Measure => self.steady = Some(ALLOCATIONS.get()),
             Step::Tick => {}
@@ -373,6 +412,26 @@ fn toolbar_items(content: &NSView) -> Vec<Retained<NSToolbarItem>> {
         .collect()
 }
 
+/// The field editor of the toolbar's search field, which takes the focus.
+fn search_editor(content: &NSView) -> Retained<NSTextView> {
+    let window = content.window().expect("the content is in a window");
+    let field = window
+        .toolbar()
+        .expect("the window has a toolbar")
+        .items()
+        .iter()
+        .find_map(|item| Some(item.downcast::<NSSearchToolbarItem>().ok()?.searchField()))
+        .expect("the toolbar has a search field");
+    if field.currentEditor().is_none() {
+        window.makeFirstResponder(Some(&field));
+    }
+    field
+        .currentEditor()
+        .expect("the focused field has an editor")
+        .downcast::<NSTextView>()
+        .expect("a field editor is a text view")
+}
+
 /// The labels of the toolbar's groups, one list per group.
 fn toolbar_groups(content: &NSView) -> Vec<Vec<String>> {
     let toolbar = content
@@ -397,6 +456,11 @@ fn toolbar_groups(content: &NSView) -> Vec<Vec<String>> {
 
 /// The details pane: the split view's third pane.
 fn details(content: &NSView) -> Retained<NSView> {
+    pane(content, 2)
+}
+
+/// Pane `position` of the window's split view.
+fn pane(content: &NSView, position: usize) -> Retained<NSView> {
     fn split(view: &NSView) -> Option<Retained<NSSplitView>> {
         if let Ok(split) = Retained::downcast::<NSSplitView>(view.retain()) {
             return Some(split);
@@ -404,7 +468,7 @@ fn details(content: &NSView) -> Retained<NSView> {
         view.subviews().iter().find_map(|child| split(&child))
     }
     let split = split(content).expect("the window has a split view");
-    split.arrangedSubviews().objectAtIndex(2)
+    split.arrangedSubviews().objectAtIndex(position)
 }
 
 /// The text of every text field in `view`, depth first.
@@ -422,13 +486,21 @@ fn texts(view: &NSView) -> Vec<String> {
 /// Prints the list's rows, with the selected one marked, and the details'
 /// text and buttons.
 fn dump(content: &NSView) {
-    let list = &tables(content)[1];
     println!("-- list");
-    for row in 0..list.numberOfRows() {
-        let mark = if list.selectedRow() == row { ">" } else { " " };
-        let cell = list.viewAtColumn_row_makeIfNecessary(0, row, false);
-        let text = cell.map(|cell| texts(&cell)).unwrap_or_default();
-        println!("{mark} {}", text.join(" | "));
+    // An empty list shows a note in place of its table.
+    let list = all_tables(content)
+        .into_iter()
+        .find(|table| table.style() != NSTableViewStyle::SourceList);
+    match list {
+        Some(list) => {
+            for row in 0..list.numberOfRows() {
+                let mark = if list.selectedRow() == row { ">" } else { " " };
+                let cell = list.viewAtColumn_row_makeIfNecessary(0, row, false);
+                let text = cell.map(|cell| texts(&cell)).unwrap_or_default();
+                println!("{mark} {}", text.join(" | "));
+            }
+        }
+        None => println!("  note {:?}", texts(&pane(content, 1))),
     }
     let details = details(content);
     println!("-- details {:?}", texts(&details));

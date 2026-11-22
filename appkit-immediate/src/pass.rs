@@ -13,8 +13,8 @@ use crate::{
 use objc2::{MainThreadMarker, rc::Retained, runtime::ProtocolObject};
 use objc2_app_kit::{
     NSApplication, NSGlassEffectView, NSLayoutConstraint, NSLayoutConstraintOrientation,
-    NSStackView, NSTableView, NSToolbar, NSToolbarItem, NSUserInterfaceLayoutOrientation, NSView,
-    NSVisualEffectView, NSWindow,
+    NSSearchField, NSStackView, NSTableView, NSToolbar, NSToolbarItem,
+    NSUserInterfaceLayoutOrientation, NSView, NSVisualEffectView, NSWindow,
 };
 use objc2_foundation::{NSArray, NSString};
 use std::{any::Any, cell::Cell, hash::Hash, rc::Rc};
@@ -568,6 +568,9 @@ pub(crate) struct ToolbarItemNode {
     pub(crate) enabled: Option<bool>,
     /// For a group, its items as last applied, in order.
     pub(crate) subitems: Vec<NodeId>,
+    /// For a search item, its field and the text last written or read
+    /// back.
+    pub(crate) search: Option<(Retained<NSSearchField>, String)>,
 }
 
 pub(crate) struct CacheNode {
@@ -792,6 +795,9 @@ fn release(events: &Events, payload: Payload) {
         Payload::ToolbarItem(item) => {
             if let Some(item) = &item.item {
                 events.forget(item);
+            }
+            if let Some((field, _)) = &item.search {
+                events.forget(field);
             }
         }
         Payload::Window(window) => {

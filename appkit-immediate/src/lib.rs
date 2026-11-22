@@ -20,10 +20,10 @@ pub use pass::Ui;
 pub use runner::{App, run};
 pub use widget::{
     Align, ButtonResponse, CODE_LENGTH, CheckBoxResponse, CodeBoxesResponse, CodeDigits,
-    ComboBoxResponse, FieldHandle, Length, Orientation, PopUpButtonResponse, Response, RowFn,
+    ComboBoxResponse, FieldHandle, Key, Length, Orientation, PopUpButtonResponse, Response, RowFn,
     SecureTextFieldHandle, SecureTextFieldResponse, SourceListEntries, SourceListResponse, Style,
     TableViewId, TableViewResponse, TextColor, TextFieldResponse, ToolbarItemResponse,
-    WindowResponse,
+    ToolbarSearchResponse, WindowResponse,
 };
 /// The type [`Ui::take_password`] returns.
 pub use zeroize::Zeroizing;

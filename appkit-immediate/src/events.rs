@@ -10,9 +10,9 @@ use objc2::{
 };
 use objc2_app_kit::{
     NSApplication, NSApplicationDelegate, NSApplicationTerminateReply, NSComboBoxDelegate,
-    NSControl, NSControlTextEditingDelegate, NSTableColumn, NSTableRowView, NSTableView,
-    NSTableViewDataSource, NSTableViewDelegate, NSTextFieldDelegate, NSTextView, NSView,
-    NSWindowDelegate,
+    NSControl, NSControlTextEditingDelegate, NSSearchFieldDelegate, NSTableColumn, NSTableRowView,
+    NSTableView, NSTableViewDataSource, NSTableViewDelegate, NSTextFieldDelegate, NSTextView,
+    NSView, NSWindowDelegate,
 };
 use objc2_foundation::{NSInteger, NSNotification, NSObject, NSObjectProtocol};
 use std::{cell::RefCell, collections::hash_map::Entry, rc::Rc};
@@ -142,6 +142,10 @@ pub(crate) enum Command {
     /// End, or Command-Right.
     End,
     Backspace,
+    /// The up arrow, which in a one-line field moves the caret to the
+    /// start.
+    Up,
+    Down,
 }
 
 impl Command {
@@ -166,6 +170,8 @@ impl Command {
                 Command::End
             }
             selector if selector == sel!(deleteBackward:) => Command::Backspace,
+            selector if selector == sel!(moveUp:) => Command::Up,
+            selector if selector == sel!(moveDown:) => Command::Down,
             _ => return None,
         })
     }
@@ -239,6 +245,8 @@ define_class!(
     unsafe impl NSTextFieldDelegate for Target {}
 
     unsafe impl NSComboBoxDelegate for Target {}
+
+    unsafe impl NSSearchFieldDelegate for Target {}
 
     unsafe impl NSTableViewDataSource for Target {
         #[unsafe(method(numberOfRowsInTableView:))]

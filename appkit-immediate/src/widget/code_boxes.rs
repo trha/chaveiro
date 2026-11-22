@@ -284,7 +284,7 @@ fn step(index: usize, command: Command, empty: bool) -> Option<usize> {
     let target = match command {
         Command::Left => index.checked_sub(1)?,
         Command::Backspace if empty => index.checked_sub(1)?,
-        Command::Backspace => return None,
+        Command::Backspace | Command::Up | Command::Down => return None,
         Command::Right => index + 1,
         Command::Home => 0,
         Command::End => CODE_LENGTH - 1,

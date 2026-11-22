@@ -1,6 +1,6 @@
 use super::{Control, must_write};
 use crate::{
-    events::EventKind,
+    events::{Command, EventKind},
     pass::{ChildKind, Payload, ToolbarItemNode, ToolbarNode, Ui},
     tree::{NodeId, Visit},
 };
@@ -9,7 +9,7 @@ use objc2::{
     sel,
 };
 use objc2_app_kit::{
-    NSImage, NSToolbar, NSToolbarDelegate, NSToolbarDisplayMode,
+    NSImage, NSSearchToolbarItem, NSToolbar, NSToolbarDelegate, NSToolbarDisplayMode,
     NSToolbarFlexibleSpaceItemIdentifier, NSToolbarItem, NSToolbarItemGroup,
     NSToolbarItemGroupControlRepresentation, NSToolbarItemGroupSelectionMode,
     NSToolbarItemIdentifier, NSToolbarSidebarTrackingSeparatorItemIdentifier,
@@ -89,6 +89,7 @@ impl Ui {
                 label: String::new(),
                 enabled: None,
                 subitems: Vec::new(),
+                search: None,
             })
         });
         if visit == Visit::Created {
@@ -145,6 +146,7 @@ impl Ui {
                 label: String::new(),
                 enabled: None,
                 subitems: Vec::new(),
+                search: None,
             })
         });
         self.open(node);
@@ -180,6 +182,80 @@ impl Ui {
             .expect("toolbar group keys hold groups");
         // Groups change rarely, so all subitems are set again.
         group.setSubitems(&NSArray::from_retained_slice(&subitems));
+    }
+
+    /// The toolbar's search field, bound to `value`, `width` points wide.
+    /// Declare it in a [`toolbar`](Self::toolbar)'s body.
+    ///
+    /// The field owns its text while the user types: the pass copies the
+    /// field's text into `value` after an edit, and writes `value` into the
+    /// field only when the app changed it since. The search runs on every
+    /// keystroke; Return and the clear button need no handling.
+    pub fn toolbar_search(
+        &mut self,
+        id: &'static str,
+        placeholder: &str,
+        width: f64,
+        value: &mut String,
+    ) -> ToolbarSearchResponse<'_> {
+        let (node, visit) = self.visit(id, ChildKind::Visual, |mtm| {
+            let identifier = NSString::from_str(id);
+            let item = NSSearchToolbarItem::initWithItemIdentifier(
+                NSSearchToolbarItem::alloc(mtm),
+                &identifier,
+            );
+            item.setPreferredWidthForSearchField(width);
+            let field = item.searchField();
+            Payload::ToolbarItem(ToolbarItemNode {
+                item: Some(item.into_super()),
+                identifier,
+                symbol: String::new(),
+                label: String::new(),
+                enabled: None,
+                subitems: Vec::new(),
+                search: Some((field, String::new())),
+            })
+        });
+        let item_node = self.toolbar_item_node(node);
+        let (field, _) = item_node
+            .search
+            .as_mut()
+            .expect("search keys hold search items");
+        let field = field.clone();
+        if visit == Visit::Created {
+            self.events.register(&field, node);
+            // AppKit holds the delegate weakly; `Events` keeps the target.
+            unsafe { field.setDelegate(Some(ProtocolObject::from_ref(self.events.target()))) };
+        }
+        let typed = self.events.happened(node, EventKind::TextDidChange);
+        let item_node = self.toolbar_item_node(node);
+        if must_write(node, false, item_node.label.as_str(), placeholder) {
+            field.setPlaceholderString(Some(&NSString::from_str(placeholder)));
+            item_node.label.clear();
+            item_node.label.push_str(placeholder);
+        }
+        let (_, text) = item_node
+            .search
+            .as_mut()
+            .expect("search keys hold search items");
+        let mut changed = false;
+        if typed {
+            let current = field.stringValue().to_string();
+            // An echo of this layer's own write reads back the stored text.
+            if current != *text {
+                value.clone_from(&current);
+                *text = current;
+                changed = true;
+            }
+        } else if must_write(node, false, text.as_str(), value.as_str()) {
+            field.setStringValue(&NSString::from_str(value));
+            text.clone_from(value);
+        }
+        ToolbarSearchResponse {
+            ui: self,
+            node,
+            changed,
+        }
     }
 
     /// Space that pushes the toolbar items after it to the trailing edge.
@@ -237,6 +313,7 @@ impl Ui {
                 label: String::new(),
                 enabled: None,
                 subitems: Vec::new(),
+                search: None,
             })
         });
     }
@@ -251,6 +328,7 @@ impl Ui {
                 label: String::new(),
                 enabled: None,
                 subitems: Vec::new(),
+                search: None,
             })
         });
     }
@@ -299,6 +377,42 @@ impl Ui {
                 }
             }
         }
+    }
+}
+
+/// A key that [`ToolbarSearchResponse::keys`] reports. The field runs each
+/// as usual too.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Key {
+    Up,
+    Down,
+}
+
+/// What [`Ui::toolbar_search`] returns.
+pub struct ToolbarSearchResponse<'u> {
+    ui: &'u mut Ui,
+    node: NodeId,
+    changed: bool,
+}
+
+impl ToolbarSearchResponse<'_> {
+    /// Whether the user changed the text since the last pass; `value` then
+    /// holds the new text.
+    pub fn changed(&self) -> bool {
+        self.changed
+    }
+
+    /// The arrow keys the user pressed in the field since the last pass,
+    /// in order.
+    pub fn keys(&self) -> impl Iterator<Item = Key> {
+        self.ui
+            .events
+            .commands(self.node)
+            .filter_map(|command| match command {
+                Command::Up => Some(Key::Up),
+                Command::Down => Some(Key::Down),
+                _ => None,
+            })
     }
 }
 
