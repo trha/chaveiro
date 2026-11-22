@@ -70,6 +70,86 @@ fn main() {
         "--compose",
         "Microsoft.UI.Xaml.Application",
     ]);
+    if std::env::var_os("CARGO_FEATURE_COUNT_CALLS").is_some() {
+        let generated = std::fs::read_to_string(&out).expect("windows-bindgen wrote the bindings");
+        std::fs::write(&out, count_clones(&count_calls(&generated))).expect("OUT_DIR is writable");
+    }
+}
+
+/// `bindings` with a call to `crate::calls::count("Type::Method")` at the
+/// top of every generated method that takes `&self`, which is every call
+/// into a WinUI object.
+fn count_calls(bindings: &str) -> String {
+    let mut counted = String::with_capacity(bindings.len() * 2);
+    let mut owner = "";
+    let mut rest = bindings;
+    while let Some(start) = rest.find("fn ") {
+        let (before, function) = rest.split_at(start);
+        counted.push_str(before);
+        // The innermost `impl` before this function names its type.
+        if let Some(line) = before.lines().rev().find(|line| line.starts_with("impl ")) {
+            owner = line["impl ".len()..]
+                .split(['<', ' ', '{'])
+                .next()
+                .unwrap_or_default();
+        }
+        let name: &str = &function["fn ".len()..][..function["fn ".len()..]
+            .find(|character: char| !(character.is_alphanumeric() || character == '_'))
+            .unwrap_or(0)];
+        let body = function.find('{');
+        let declaration_end = function.find(';');
+        let public = before.ends_with("pub(crate) ") || before.ends_with("pub ");
+        match body {
+            Some(body)
+                if public
+                    && declaration_end.is_none_or(|end| body < end)
+                    && function[..body].contains("&self") =>
+            {
+                counted.push_str(&function[..=body]);
+                counted.push_str(&format!("crate::calls::count(\"{owner}::{name}\");"));
+                rest = &function[body + 1..];
+            }
+            _ => {
+                counted.push_str("fn ");
+                rest = &function["fn ".len()..];
+            }
+        }
+    }
+    counted.push_str(rest);
+    counted
+}
+
+/// `bindings` with each runtime class's derived `Clone` replaced by one that
+/// calls `crate::calls::count("Type::clone")`, because a clone is a COM
+/// `AddRef`, and its drop a `Release`, which no method count sees. Clones
+/// of the interfaces that windows-core's macro defines stay uncounted.
+fn count_clones(bindings: &str) -> String {
+    const DERIVE: &str = "#[derive(Clone, Debug, Eq, PartialEq)]";
+    const FIELD: &str = "(windows_core::IUnknown);";
+    let mut counted = String::with_capacity(bindings.len() + bindings.len() / 8);
+    let mut lines = bindings.lines().peekable();
+    while let Some(line) = lines.next() {
+        let class = lines
+            .peek()
+            .and_then(|next| next.strip_prefix("pub struct "))
+            .and_then(|next| next.strip_suffix(FIELD));
+        match class {
+            Some(class) if line == DERIVE => {
+                counted.push_str("#[derive(Debug, Eq, PartialEq)]\n");
+                counted.push_str(&format!(
+                    "pub struct {class}{FIELD}\n\
+                     impl Clone for {class} {{ fn clone(&self) -> Self {{ \
+                     crate::calls::count(\"{class}::clone\"); Self(self.0.clone()) }} }}\n"
+                ));
+                lines.next();
+            }
+            _ => {
+                counted.push_str(line);
+                counted.push('\n');
+            }
+        }
+    }
+    counted
 }
 
 /// The runtime whose metadata the bindings target. `startup.rs` asks for this

@@ -6,6 +6,14 @@ license = "GPL-3.0-or-later"
 publish = false
 description = "An immediate-mode UI over the WinUI 3 retained tree"
 
+[features]
+# Counts calls into WinUI objects; see `src/calls.rs`.
+count-calls = []
+
+[[example]]
+name = "steady_calls"
+required-features = ["count-calls"]
+
 [target.'cfg(windows)'.dependencies]
 ahash = "0.8"
 futures-core = "0.3"
