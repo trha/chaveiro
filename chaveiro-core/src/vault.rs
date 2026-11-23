@@ -979,6 +979,61 @@ pub struct SshKeyView {
     pub key_fingerprint: Option<SecretString>,
 }
 
+impl SshKeyView {
+    /// A new Ed25519 key pair from `rng`: the private key in OpenSSH form
+    /// with no passphrase and no comment, its public key in OpenSSH form,
+    /// and the SHA-256 fingerprint of the public key.
+    pub fn generate_ed25519(rng: &mut impl CryptoRngCore) -> Self {
+        let private = ssh_key::PrivateKey::random(rng, ssh_key::Algorithm::Ed25519)
+            .expect("Ed25519 generation only fails for algorithms without support");
+        Self::of(&private)
+    }
+
+    /// The key whose OpenSSH private key is `text`, unlocked with
+    /// `passphrase` when the key has one. The view holds the key without its
+    /// passphrase, as Bitwarden stores SSH keys.
+    pub fn from_openssh(text: &str, passphrase: Option<&str>) -> Result<Self, SshKeyError> {
+        let private =
+            ssh_key::PrivateKey::from_openssh(text.trim()).map_err(|_| SshKeyError::NotAKey)?;
+        if !private.is_encrypted() {
+            return Ok(Self::of(&private));
+        }
+        let passphrase = passphrase.ok_or(SshKeyError::NeedsPassphrase)?;
+        let unlocked = private
+            .decrypt(passphrase)
+            .map_err(|_| SshKeyError::WrongPassphrase)?;
+        Ok(Self::of(&unlocked))
+    }
+
+    /// The view of an unencrypted `private` key.
+    fn of(private: &ssh_key::PrivateKey) -> Self {
+        let public = private.public_key();
+        SshKeyView {
+            private_key: Some(
+                private
+                    .to_openssh(ssh_key::LineEnding::LF)
+                    .expect("a decoded key always encodes"),
+            ),
+            public_key: Some(SecretString::new(
+                public.to_openssh().expect("a public key always encodes"),
+            )),
+            key_fingerprint: Some(SecretString::new(
+                public.fingerprint(ssh_key::HashAlg::Sha256).to_string(),
+            )),
+        }
+    }
+}
+
+/// Why [`SshKeyView::from_openssh`] gave no key.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SshKeyError {
+    /// The text is not an OpenSSH private key.
+    NotAKey,
+    /// The key has a passphrase, and none was given.
+    NeedsPassphrase,
+    WrongPassphrase,
+}
+
 #[derive(Clone)]
 pub struct CustomField {
     /// 0 text, 1 hidden, 2 boolean, 3 linked.

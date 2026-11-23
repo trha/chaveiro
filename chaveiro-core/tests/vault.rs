@@ -380,3 +380,55 @@ fn fixture(name: &str) -> (u16, Value) {
     let status = file["status"].as_u64().unwrap().try_into().unwrap();
     (status, file["body"].take())
 }
+
+mod ssh_key_from_openssh {
+    use chaveiro_core::vault::{SshKeyError, SshKeyView};
+    use rand_chacha::{ChaCha20Rng, rand_core::SeedableRng};
+
+    /// A generated key, and the same key behind `passphrase`.
+    fn keys(passphrase: &str) -> (SshKeyView, String) {
+        let mut rng = ChaCha20Rng::seed_from_u64(7);
+        let plain = SshKeyView::generate_ed25519(&mut rng);
+        let locked = ssh_key::PrivateKey::from_openssh(plain.private_key.as_deref().unwrap())
+            .unwrap()
+            .encrypt(&mut rng, passphrase)
+            .unwrap()
+            .to_openssh(ssh_key::LineEnding::LF)
+            .unwrap();
+        (plain, locked.to_string())
+    }
+
+    #[test]
+    fn text_that_is_no_key_is_refused() {
+        assert_eq!(
+            SshKeyView::from_openssh("ssh-ed25519 AAAA", None).err(),
+            Some(SshKeyError::NotAKey)
+        );
+    }
+
+    #[test]
+    fn an_unlocked_key_reads_back_as_the_same_key() {
+        let (plain, _) = keys("x");
+        let read = SshKeyView::from_openssh(plain.private_key.as_deref().unwrap(), None).unwrap();
+        assert_eq!(read.public_key, plain.public_key);
+        assert_eq!(read.key_fingerprint, plain.key_fingerprint);
+    }
+
+    #[test]
+    fn a_locked_key_needs_its_passphrase_and_is_stored_unlocked() {
+        let (plain, locked) = keys("correct horse");
+        assert_eq!(
+            SshKeyView::from_openssh(&locked, None).err(),
+            Some(SshKeyError::NeedsPassphrase)
+        );
+        assert_eq!(
+            SshKeyView::from_openssh(&locked, Some("wrong")).err(),
+            Some(SshKeyError::WrongPassphrase)
+        );
+        let read = SshKeyView::from_openssh(&locked, Some("correct horse")).unwrap();
+        assert_eq!(read.public_key, plain.public_key);
+        // Stored without the passphrase: it reads back with none.
+        let stored = read.private_key.as_deref().unwrap();
+        assert!(SshKeyView::from_openssh(stored, None).is_ok());
+    }
+}
