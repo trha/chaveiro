@@ -8,9 +8,9 @@
 //! list: the counts, the pane's entries and the list's rows are rebuilt
 //! only when [`VaultScreen::index_revision`] or the filter changes.
 
-use crate::edit::{self, Draft, EditPass, KeySource, KeyTextError};
+use crate::edit::{self, Draft, EditPass, KeySource, KeyTextError, SaveState};
 use chaveiro_core::{
-    core::{ItemError, UserAction, VaultScreen},
+    core::{ItemError, OpenItem, UserAction, VaultScreen},
     crypto::SecretString,
     filter::{Counts, Filter, KINDS},
     search::{Query, Tier},
@@ -590,10 +590,23 @@ pub fn view<A: VaultApp>(
                                     ui,
                                     &mut filling.draft,
                                     index,
-                                    screen.creating,
-                                    screen.error,
+                                    SaveState {
+                                        saving: screen.saving,
+                                        error: screen.error,
+                                        conflict: screen.open.and_then(OpenItem::conflict),
+                                    },
                                 )? {
                                     EditPass::Stay => {}
+                                    EditPass::Resolve { keep_mine } => {
+                                        action = Some(VaultAction::User(
+                                            UserAction::ResolveConflict { keep_mine },
+                                        ));
+                                        // Theirs is what the details pane
+                                        // shows, so the form goes.
+                                        if !keep_mine {
+                                            *editing = None;
+                                        }
+                                    }
                                     EditPass::ReadKey(source) => {
                                         action = Some(VaultAction::ReadKey(source));
                                     }
@@ -631,6 +644,17 @@ pub fn view<A: VaultApp>(
                             }
                             if let Some((id, anchor)) = pass.more {
                                 menus.open(id, anchor);
+                                ui.request_pass();
+                            }
+                            // The form takes the pane's place from the next
+                            // pass.
+                            if pass.edit
+                                && let Some(view) = open
+                            {
+                                *editing = Some(Editing {
+                                    draft: Draft::edit(view, index),
+                                    leaving: None,
+                                });
                                 ui.request_pass();
                             }
                             Ok(())
@@ -1170,6 +1194,8 @@ struct DetailsPass {
     more: Option<(Uuid, MenuAnchor)>,
     /// A field's Copy or Open button.
     pressed: Option<Pressed>,
+    /// Edit was clicked, for the open item.
+    edit: bool,
 }
 
 /// A button on a field row that acts outside the vault.
@@ -1237,11 +1263,13 @@ fn details_pane(
     Ok(pass)
 }
 
-/// The command bar over the details: Favorite, Move to trash and More, or
-/// Restore and More for an item in the trash.
+/// The command bar over the details: Edit, Favorite, Move to trash and
+/// More, or Restore and More for an item in the trash. An item that asks
+/// for the master password has no Edit, because the form would show it.
 fn commands(ui: &mut Ui, summary: &CipherSummary, view: &CipherView) -> Result<DetailsPass> {
     let mut asked = None;
     let mut more = None;
+    let mut edit = false;
     ui.command_bar("commands", |ui| {
         if summary.deleted {
             if ui
@@ -1251,6 +1279,9 @@ fn commands(ui: &mut Ui, summary: &CipherSummary, view: &CipherView) -> Result<D
                 asked = Some(UserAction::Restore(summary.id));
             }
         } else {
+            if !view.reprompt {
+                edit = ui.app_bar_button("edit", '\u{E70F}', "Edit")?.clicked()?;
+            }
             asked = favorite_and_trash(ui, summary, view)?;
         }
         let mut button = ui.app_bar_button("more", '\u{E712}', "More")?;
@@ -1263,6 +1294,7 @@ fn commands(ui: &mut Ui, summary: &CipherSummary, view: &CipherView) -> Result<D
         asked,
         more,
         pressed: None,
+        edit,
     })
 }
 
@@ -1653,12 +1685,12 @@ fn identity_fields(
         revealed,
     )?;
     let identification = [
-        Field::secret(
+        Field::monospace(
             ("passport", 0),
             "Passport number",
             text(&identity.passport_number),
         ),
-        Field::secret(("ssn", 0), "Tax number", text(&identity.ssn)),
+        Field::monospace(("ssn", 0), "Tax number", text(&identity.ssn)),
         Field::monospace(
             ("license", 0),
             "Driver's license",
@@ -2063,9 +2095,9 @@ fn linked(view: &CipherView, id: u32) -> Option<(Option<&str>, bool)> {
             409 => Some((text(&identity.company), false)),
             410 => Some((text(&identity.email), false)),
             411 => Some((text(&identity.phone), false)),
-            412 => Some((text(&identity.ssn), true)),
+            412 => Some((text(&identity.ssn), false)),
             413 => Some((text(&identity.username), false)),
-            414 => Some((text(&identity.passport_number), true)),
+            414 => Some((text(&identity.passport_number), false)),
             415 => Some((text(&identity.license_number), false)),
             416 => Some((text(&identity.first_name), false)),
             417 => Some((text(&identity.last_name), false)),

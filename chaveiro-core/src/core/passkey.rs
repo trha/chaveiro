@@ -323,17 +323,10 @@ pub(super) fn new_login(request: &PasskeyRequest) -> CipherView {
         } => (rp_id, rp_name.as_ref(), Some(user_name)),
         PasskeyRequest::GetAssertion { rp_id, .. } => (rp_id, None, None),
     };
-    CipherView {
-        id: None,
-        organization_id: None,
-        collection_ids: Vec::new(),
-        kind: CipherKind::Login,
-        name: Zeroizing::new(rp_name.unwrap_or(rp_id).clone()),
-        notes: None,
-        folder_id: None,
-        favorite: false,
-        reprompt: false,
-        content: CipherContent::Login(LoginView {
+    CipherView::new(
+        CipherKind::Login,
+        Zeroizing::new(rp_name.unwrap_or(rp_id).clone()),
+        CipherContent::Login(LoginView {
             username: user_name.map(|name| Zeroizing::new(name.clone())),
             uris: rp_uri(rp_id)
                 .map(|uri| UriView {
@@ -344,9 +337,7 @@ pub(super) fn new_login(request: &PasskeyRequest) -> CipherView {
                 .collect(),
             ..LoginView::default()
         }),
-        fields: Vec::new(),
-        password_history: Vec::new(),
-    }
+    )
 }
 
 /// Every passkey in the live (not trashed) logins of `ciphers`. A login

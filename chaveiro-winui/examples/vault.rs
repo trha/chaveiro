@@ -155,7 +155,7 @@ impl App for Preview {
             sync_error: (self.sync == Some(SyncPreview::Offline))
                 .then_some("The server could not be reached."),
             error: None,
-            creating: false,
+            saving: false,
             revision: None,
             synced_at: Some(self.synced_at),
             device_unlock: false,

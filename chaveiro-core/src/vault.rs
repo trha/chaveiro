@@ -423,6 +423,25 @@ pub struct CipherView {
 }
 
 impl CipherView {
+    /// A new item of `kind` for the personal vault, in no folder, with no
+    /// custom fields and no history. `content` should be of `kind`.
+    pub fn new(kind: CipherKind, name: SecretString, content: CipherContent) -> Self {
+        CipherView {
+            id: None,
+            organization_id: None,
+            collection_ids: Vec::new(),
+            kind,
+            name,
+            notes: None,
+            folder_id: None,
+            favorite: false,
+            reprompt: false,
+            content,
+            fields: Vec::new(),
+            password_history: Vec::new(),
+        }
+    }
+
     /// Decrypts every field of `cipher`. Any failure fails the whole item.
     pub fn decrypt(cipher: &CipherResponse, keys: &VaultKeys) -> Result<Self, VaultError> {
         let key = keys.cipher_key(cipher)?;
@@ -940,7 +959,7 @@ impl Fido2CredentialView {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct CardView {
     pub cardholder_name: Option<SecretString>,
     pub brand: Option<SecretString>,
@@ -950,7 +969,7 @@ pub struct CardView {
     pub code: Option<SecretString>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct IdentityView {
     pub title: Option<SecretString>,
     pub first_name: Option<SecretString>,
@@ -972,7 +991,7 @@ pub struct IdentityView {
     pub license_number: Option<SecretString>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct SshKeyView {
     pub private_key: Option<SecretString>,
     pub public_key: Option<SecretString>,

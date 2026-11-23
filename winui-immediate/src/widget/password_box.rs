@@ -54,6 +54,13 @@ impl PasswordField<'_> {
         self.0.ui.take_password(self.handle())
     }
 
+    /// Writes `text` into the box; see [`Ui::set_password`].
+    pub fn set(&mut self, text: &str) -> Result<&mut Self> {
+        let handle = self.handle();
+        self.0.ui.set_password(handle, text)?;
+        Ok(self)
+    }
+
     /// A handle for [`Ui::take_password`], for when the button that submits
     /// the password is declared after the box.
     pub fn handle(&self) -> PasswordHandle {
@@ -121,6 +128,23 @@ impl PasswordHandle {
 }
 
 impl Ui {
+    /// Writes `text` into the box `handle` names, as when a form shows a
+    /// stored password. WinUI keeps its own copy, as it does for typed
+    /// text. Write before the first [`PasswordField::changed`] subscribes
+    /// the box: a subscribed box reports the write as a change.
+    pub fn set_password(&mut self, handle: PasswordHandle, text: &str) -> Result<()> {
+        let Control::PasswordBox { password_box, .. } = &self.control(handle.0).control else {
+            unreachable!("password handles name password boxes")
+        };
+        // The HSTRING is a copy of `text` that would linger, so it is wiped.
+        let wide = HSTRING::from(text);
+        let result = password_box
+            .cast::<IPasswordBox>()?
+            .set_password_string(&wide);
+        wipe(wide);
+        result
+    }
+
     /// [`PasswordField::is_empty`] for the box `handle` names.
     pub fn password_is_empty(&mut self, handle: PasswordHandle) -> Result<bool> {
         PasswordField(Response {
@@ -140,21 +164,41 @@ impl Ui {
     /// Panics when the box is no longer declared, which only happens when the
     /// handle outlives the pass that made it.
     pub fn take_password(&mut self, handle: PasswordHandle) -> Result<Zeroizing<String>> {
+        let text = self.read_password(handle)?;
+        let Control::PasswordBox { password_box, .. } = &self.control(handle.0).control else {
+            unreachable!("password handles name password boxes")
+        };
+        password_box.SetPassword("")?;
+        Ok(text)
+    }
+
+    /// Reads the password from the box `handle` names and leaves the box as
+    /// it is, as for a form that may send it again. The copies are wiped as
+    /// [`take_password`](Self::take_password) wipes them.
+    ///
+    /// Panics as [`take_password`](Self::take_password) does.
+    pub fn read_password(&mut self, handle: PasswordHandle) -> Result<Zeroizing<String>> {
         let Control::PasswordBox { password_box, .. } = &self.control(handle.0).control else {
             unreachable!("password handles name password boxes")
         };
         let password = password_box.cast::<IPasswordBox>()?.password_string()?;
-        // Cleared first, so the box no longer holds the string wiped below.
-        password_box.SetPassword("")?;
         let text = secret_from_wide(&password);
         wipe(password);
         Ok(text)
     }
 }
 
-/// Zeroes the buffer of `password`, a fresh `HSTRING` from the password
-/// getter, then frees it.
+/// Zeroes the buffer of `password`, a fresh `HSTRING` this crate alone
+/// holds, then frees it.
+///
+/// Panics when another owner shares the buffer, as WinUI would if it kept
+/// the string it was given or handed out its own: zeroing it would change
+/// that owner's text, such as the password a box holds.
 fn wipe(password: HSTRING) {
+    assert!(
+        sole_owner(&password),
+        "a password HSTRING is shared, so wiping it would change another copy"
+    );
     let wide: &[u16] = &password;
     // SAFETY: the getter returns a fresh HSTRING that the caller owned
     // alone, so nothing reads the buffer while it is zeroed and the HSTRING
@@ -165,6 +209,35 @@ fn wipe(password: HSTRING) {
     // free.
     buffer.zeroize();
     drop(password);
+}
+
+/// Whether `string` owns its buffer alone: empty, or a heap string with a
+/// reference count of 1. A reference ("fast pass") string points at
+/// another owner's buffer, so it never is.
+fn sole_owner(string: &HSTRING) -> bool {
+    // The header layout of combase, which windows-strings mirrors and
+    // Windows keeps stable: flags and length (4 × u32), the data pointer,
+    // then the reference count.
+    #[repr(C)]
+    struct Header {
+        flags: u32,
+        _length: u32,
+        _reserved: [u32; 2],
+        _data: *const u16,
+        count: i32,
+    }
+    const REFERENCE_FLAG: u32 = 1;
+
+    // SAFETY: an HSTRING is one pointer, to its header or null for the
+    // empty string.
+    let header: *const Header = unsafe { std::mem::transmute_copy(string) };
+    if header.is_null() {
+        return true;
+    }
+    // SAFETY: a non-null HSTRING points at a live header of this layout,
+    // and the count is only read, once.
+    let header = unsafe { &*header };
+    header.flags & REFERENCE_FLAG == 0 && header.count == 1
 }
 
 /// `wide` as UTF-8 in a string that wipes itself. The buffer is sized for

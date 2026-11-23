@@ -1,4 +1,4 @@
-use super::secret_from_wide;
+use super::{secret_from_wide, sole_owner};
 use proptest::prelude::*;
 
 proptest! {
@@ -26,4 +26,22 @@ proptest! {
         prop_assert!(text.len() <= 3 * wide.len());
         prop_assert!(text.capacity() >= 3 * wide.len());
     }
+}
+
+/// A new string owns its buffer, and a second handle to it shares it, as a
+/// box that kept the string would.
+#[test]
+fn a_shared_string_is_no_sole_owner() {
+    let string = windows_core::HSTRING::from("secret");
+    assert!(sole_owner(&string));
+    let kept = string.clone();
+    assert!(!sole_owner(&string));
+    assert!(!sole_owner(&kept));
+    drop(kept);
+    assert!(sole_owner(&string));
+}
+
+#[test]
+fn the_empty_string_owns_nothing_to_share() {
+    assert!(sole_owner(&windows_core::HSTRING::new()));
 }

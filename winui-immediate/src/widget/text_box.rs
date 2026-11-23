@@ -12,6 +12,7 @@ use std::{
     ops::{Deref, DerefMut},
 };
 use windows_core::{Interface, Result};
+use zeroize::{Zeroize, Zeroizing};
 
 impl Ui {
     /// A one-line text box bound to `value`.
@@ -203,6 +204,17 @@ impl Mask {
         Mask { groups, separator }
     }
 
+    /// Appends `text` in this mask's form to `out`, as the box would show it
+    /// after the user typed it.
+    /// The copies it makes on the way are wiped, as the text may be a card
+    /// number.
+    pub fn write(self, text: &str, out: &mut String) {
+        let wide = Zeroizing::new(text.encode_utf16().collect::<Vec<u16>>());
+        let mut buffer = [0; MASK_LENGTH];
+        out.push_str(self.format(&wide, 0, &mut buffer).0);
+        buffer.zeroize();
+    }
+
     /// The handlers that keep a box to this mask: on `TextChanging`, and on
     /// `PreviewKeyDown`, so Backspace and Delete can step over a separator
     /// before the box acts on them.
@@ -348,6 +360,10 @@ impl TextBoxResponse<'_> {
     /// Formats the box's text to `mask` as the user types or pastes, before
     /// the box draws it, so `value` holds the formatted text. Only the pass
     /// that makes the box sets it; a later mask is ignored.
+    ///
+    /// Text the box starts with is formatted too. When that changes it, the
+    /// next pass reports the formatted text as a change; give the box text
+    /// already in the mask's form, as [`Mask::write`] makes, to avoid that.
     pub fn mask(&mut self, mask: Mask) -> Result<&mut Self> {
         if self.created {
             let Response { ui, node } = &mut self.response;
@@ -356,6 +372,9 @@ impl TextBoxResponse<'_> {
             };
             let text_box = text_box.clone();
             ui.events.mask(&text_box, mask)?;
+            // The handler came after this pass wrote the text, so it has not
+            // seen it.
+            mask.apply(&text_box)?;
         }
         Ok(self)
     }

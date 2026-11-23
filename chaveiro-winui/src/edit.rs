@@ -1,13 +1,16 @@
-//! The ItemEdit form from the design, for a new item: it takes the details
-//! pane's place until the item saves or the user cancels.
+//! The ItemEdit form from the design: it takes the details pane's place for
+//! a new item, or for the open item the user edits, until the item saves or
+//! the user cancels.
 //!
-//! The form keeps no copy of a secret the user types (password, card
-//! security code, passport and tax numbers): each stays in its hidden box
-//! until Save reads it. A new SSH key is generated when the form opens, so
-//! the form holds that private key.
+//! The form keeps no copy of the secret in its hidden box (a login's
+//! password or a card's security code): it stays in the box until Save
+//! reads it, which leaves the box as it is, so a failed save keeps it. An
+//! edit writes the stored secret into the box when the form opens. A new
+//! SSH key is
+//! generated when the form opens, so the form holds that private key.
 
 use chaveiro_core::{
-    core::ItemError,
+    core::{Conflict, ItemError},
     crypto::SecretString,
     filter::Filter,
     vault::{
@@ -16,12 +19,38 @@ use chaveiro_core::{
     },
 };
 use rand_core::OsRng;
+use std::fmt::Write as _;
 use windows_core::Result;
 use winui_immediate::{Align, Length, Mask, Orientation, Overflow, PasswordHandle, Severity, Ui};
 use zeroize::Zeroizing;
 
-/// A new item the user is filling in.
+/// An item the user is filling in: a new one, or the open item.
 pub struct Draft {
+    now: Values,
+    /// What the form opened with. A field still equal to its start saves as
+    /// the item stored it, so an edit changes only what the user changed.
+    start: Box<Values>,
+    /// The item as stored, or an empty one of the kind for a new item. Save
+    /// builds on it, so what the form does not show stays: custom fields,
+    /// passkeys, more websites and the password history.
+    base: Box<CipherView>,
+    /// The stored secret for the hidden box, written into it as the box is
+    /// made, before it reports changes.
+    fill: Option<SecretString>,
+    /// The user typed in the hidden box, which holds the only copy.
+    secret_typed: bool,
+    /// Save was clicked with an empty name.
+    name_missing: bool,
+    /// Save was clicked with a card expiration it cannot read.
+    expiration_invalid: bool,
+    /// Save sent the item, and the form waits for the core to say how it
+    /// went.
+    saving: bool,
+}
+
+/// What the user can change in the form, besides the hidden boxes.
+#[derive(Clone, PartialEq)]
+struct Values {
     name: SecretString,
     notes: SecretString,
     /// 0 for no folder, else 1 + the folder's position in
@@ -29,20 +58,11 @@ pub struct Draft {
     folder: usize,
     favorite: bool,
     reprompt: bool,
-    /// The folder and favorite the draft started with, which count as no
-    /// change.
-    start: (usize, bool),
     fields: Fields,
-    /// The user typed in a hidden box, which holds the only copy.
-    secret_typed: bool,
-    /// Save was clicked with an empty name.
-    name_missing: bool,
-    /// Save sent the item, and the form waits for the core to say how it
-    /// went.
-    saving: bool,
 }
 
 /// The fields of the item's kind, besides the hidden boxes.
+#[derive(Clone, PartialEq)]
 enum Fields {
     Login {
         username: SecretString,
@@ -58,23 +78,22 @@ enum Fields {
         number: SecretString,
         /// As typed; [`expiration`] reads it.
         expiration: SecretString,
-        /// Save was clicked with an expiration it cannot read.
-        expiration_invalid: bool,
     },
     Identity(Box<IdentityDraft>),
     SshKey(Box<SshDraft>),
 }
 
-/// The SSH key of a new item: generated when the form opens, or one the
+/// The SSH key of the item: the stored one, one generated here, or one the
 /// user enters or imports.
 ///
-/// Contract: `key` is the key that saves. For a generated key it was
-/// made here; otherwise it is `text` read as a key, and `problem` says why
-/// it is [`None`].
+/// Contract: `key` is the key that saves. For a stored or generated key it
+/// came from there; otherwise it is `text` read as a key, and `problem` says
+/// why it is [`None`].
+#[derive(Clone)]
 struct SshDraft {
     input: KeyInput,
     /// The private key as entered, or as the imported file holds it, which
-    /// may have a passphrase. Empty for a generated key.
+    /// may have a passphrase. Empty for a stored or generated key.
     text: SecretString,
     key: Option<SshKeyView>,
     problem: Option<KeyProblem>,
@@ -82,8 +101,21 @@ struct SshDraft {
     asked: Option<KeySource>,
 }
 
+/// Equal when the same key would save from the same input; the problem and
+/// the pending ask are how the form got there.
+impl PartialEq for SshDraft {
+    fn eq(&self, other: &Self) -> bool {
+        fn private(ssh: &SshDraft) -> Option<&Option<SecretString>> {
+            ssh.key.as_ref().map(|key| &key.private_key)
+        }
+        self.input == other.input && self.text == other.text && private(self) == private(other)
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum KeyInput {
+    /// The key the item had when the form opened.
+    Stored,
     Generated,
     Entered,
     Imported,
@@ -121,6 +153,7 @@ pub enum KeyTextError {
     NoText,
 }
 
+#[derive(Clone, PartialEq)]
 struct IdentityDraft {
     /// A position in [`TITLES`].
     title: usize,
@@ -129,6 +162,8 @@ struct IdentityDraft {
     last_name: SecretString,
     username: SecretString,
     company: SecretString,
+    passport_number: SecretString,
+    ssn: SecretString,
     license_number: SecretString,
     email: SecretString,
     phone: SecretString,
@@ -142,7 +177,7 @@ struct IdentityDraft {
 }
 
 /// Card brands as the ComboBox shows them, and as Bitwarden stores them.
-/// The first is no brand.
+/// The first is no brand, and the last stands for any brand not listed.
 const BRANDS: [(&str, &str); 11] = [
     ("No brand", ""),
     ("Visa", "Visa"),
@@ -162,7 +197,21 @@ const TITLES: [&str; 6] = ["No title", "Mr", "Mrs", "Ms", "Mx", "Dr"];
 /// Room up front, so typing never grows a buffer: a grown buffer frees the
 /// old one unwiped, and growing allocates on a keystroke.
 fn field() -> SecretString {
-    SecretString::new(String::with_capacity(FIELD_CAPACITY))
+    buffer(FIELD_CAPACITY, None)
+}
+
+/// A [`field`] holding `value`, or empty for [`None`].
+fn field_of(value: Option<&SecretString>) -> SecretString {
+    buffer(FIELD_CAPACITY, value)
+}
+
+/// Text that holds `value` and has room for `capacity` bytes.
+fn buffer(capacity: usize, value: Option<&SecretString>) -> SecretString {
+    let mut text = SecretString::new(String::with_capacity(capacity));
+    if let Some(value) = value {
+        text.push_str(value);
+    }
+    text
 }
 
 impl Draft {
@@ -178,33 +227,34 @@ impl Draft {
                 .map_or(0, |position| position + 1),
             _ => 0,
         };
-        Draft {
-            name: field(),
-            notes: SecretString::new(String::with_capacity(NOTES_CAPACITY)),
-            folder,
-            favorite: filter == Filter::Favorites,
-            reprompt: false,
-            start: (folder, filter == Filter::Favorites),
-            fields: match kind {
-                CipherKind::Login => Fields::Login {
+        let (fields, content) = match kind {
+            CipherKind::Login => (
+                Fields::Login {
                     username: field(),
                     totp: field(),
                     website: field(),
                 },
-                CipherKind::Card => Fields::Card {
+                CipherContent::Login(LoginView::default()),
+            ),
+            CipherKind::Card => (
+                Fields::Card {
                     cardholder: field(),
                     brand: 0,
                     number: field(),
                     expiration: field(),
-                    expiration_invalid: false,
                 },
-                CipherKind::Identity => Fields::Identity(Box::new(IdentityDraft {
+                CipherContent::Card(CardView::default()),
+            ),
+            CipherKind::Identity => (
+                Fields::Identity(Box::new(IdentityDraft {
                     title: 0,
                     first_name: field(),
                     middle_name: field(),
                     last_name: field(),
                     username: field(),
                     company: field(),
+                    passport_number: field(),
+                    ssn: field(),
                     license_number: field(),
                     email: field(),
                     phone: field(),
@@ -216,23 +266,290 @@ impl Draft {
                     postal_code: field(),
                     country: field(),
                 })),
-                CipherKind::SshKey => Fields::SshKey(Box::new(SshDraft {
-                    input: KeyInput::Generated,
-                    text: SecretString::new(String::with_capacity(KEY_CAPACITY)),
-                    key: Some(SshKeyView::generate_ed25519(&mut OsRng)),
-                    problem: None,
-                    asked: None,
-                })),
-                CipherKind::SecureNote | CipherKind::Unknown(_) => Fields::Note,
+                CipherContent::Identity(Box::default()),
+            ),
+            CipherKind::SshKey => {
+                // The base holds the key too, so an untouched key saves.
+                let key = SshKeyView::generate_ed25519(&mut OsRng);
+                (
+                    Fields::SshKey(Box::new(SshDraft {
+                        input: KeyInput::Generated,
+                        text: buffer(KEY_CAPACITY, None),
+                        key: Some(key.clone()),
+                        problem: None,
+                        asked: None,
+                    })),
+                    CipherContent::SshKey(key),
+                )
+            }
+            CipherKind::SecureNote | CipherKind::Unknown(_) => {
+                (Fields::Note, CipherContent::SecureNote)
+            }
+        };
+        let values = Values {
+            name: field(),
+            notes: buffer(NOTES_CAPACITY, None),
+            folder,
+            favorite: filter == Filter::Favorites,
+            reprompt: false,
+            fields,
+        };
+        let base = CipherView::new(values.fields.kind(), SecretString::default(), content);
+        Draft::of(values, base)
+    }
+
+    /// The form for `view`, an item the core opened, filled with what it
+    /// stores. A brand or title the lists lack shows as Other or no title,
+    /// and saves unchanged unless the user picks another.
+    pub fn edit(view: &CipherView, index: &VaultIndex) -> Self {
+        let text = |value: &Option<SecretString>| field_of(value.as_ref());
+        let fields = match &view.content {
+            CipherContent::Login(login) => Fields::Login {
+                username: text(&login.username),
+                totp: text(&login.totp),
+                website: field_of(login.uris.first().and_then(|uri| uri.uri.as_ref())),
             },
+            CipherContent::Card(card) => Fields::Card {
+                cardholder: text(&card.cardholder_name),
+                brand: match card.brand.as_deref().map(String::as_str) {
+                    None | Some("") => 0,
+                    Some(stored) => BRANDS
+                        .iter()
+                        .position(|(_, brand)| *brand == stored)
+                        .unwrap_or(BRANDS.len() - 1),
+                },
+                // In the box's own form, so the mask finds nothing to change
+                // and an untouched number is no change.
+                number: {
+                    let mut number = field();
+                    if let Some(stored) = &card.number {
+                        Mask::CARD_NUMBER.write(stored, &mut number);
+                    }
+                    number
+                },
+                expiration: expiration_text(card),
+            },
+            CipherContent::Identity(identity) => Fields::Identity(Box::new(IdentityDraft {
+                title: identity
+                    .title
+                    .as_deref()
+                    .and_then(|stored| TITLES.iter().position(|title| title == stored))
+                    .unwrap_or(0),
+                first_name: text(&identity.first_name),
+                middle_name: text(&identity.middle_name),
+                last_name: text(&identity.last_name),
+                username: text(&identity.username),
+                company: text(&identity.company),
+                passport_number: text(&identity.passport_number),
+                ssn: text(&identity.ssn),
+                license_number: text(&identity.license_number),
+                email: text(&identity.email),
+                phone: text(&identity.phone),
+                address1: text(&identity.address1),
+                address2: text(&identity.address2),
+                address3: text(&identity.address3),
+                city: text(&identity.city),
+                state: text(&identity.state),
+                postal_code: text(&identity.postal_code),
+                country: text(&identity.country),
+            })),
+            CipherContent::SshKey(key) => Fields::SshKey(Box::new(SshDraft {
+                input: KeyInput::Stored,
+                text: buffer(KEY_CAPACITY, None),
+                key: Some(key.clone()),
+                problem: None,
+                asked: None,
+            })),
+            // A note's text is its notes; an unknown kind keeps its content.
+            _ => Fields::Note,
+        };
+        let values = Values {
+            name: field_of(Some(&view.name)),
+            notes: buffer(NOTES_CAPACITY, view.notes.as_ref()),
+            folder: view
+                .folder_id
+                .and_then(|id| index.folders.iter().position(|folder| folder.id == id))
+                .map_or(0, |position| position + 1),
+            favorite: view.favorite,
+            reprompt: view.reprompt,
+            fields,
+        };
+        Draft::of(values, view.clone())
+    }
+
+    fn of(values: Values, base: CipherView) -> Self {
+        Draft {
+            start: Box::new(values.clone()),
+            now: values,
+            fill: hidden(&base),
+            base: Box::new(base),
             secret_typed: false,
             name_missing: false,
+            expiration_invalid: false,
             saving: false,
         }
     }
 
+    /// Whether the user changed anything, so leaving the form would lose
+    /// it. A generated SSH key the user kept is no change.
+    pub fn changed(&self) -> bool {
+        self.secret_typed || self.now != *self.start
+    }
+
+    /// The title of the dialog that asks before the draft is dropped.
+    pub fn discard_title(&self) -> String {
+        match (self.base.id, self.now.name.trim()) {
+            (Some(_), _) => format!("Discard changes to {}?", self.base.name.as_str()),
+            (None, "") => format!("Discard the new {}?", noun(self.base.kind)),
+            (None, name) => format!("Discard changes to {name}?"),
+        }
+    }
+
+    /// The item as the core takes it, with `secret` read from the hidden
+    /// box, empty for a kind without one.
+    fn view(&self, index: &VaultIndex, secret: SecretString) -> CipherView {
+        let (now, start) = (&self.now, &*self.start);
+        let mut view = (*self.base).clone();
+        if now.name != start.name {
+            view.name = Zeroizing::new(now.name.trim().to_owned());
+        }
+        if now.notes != start.notes {
+            // A note keeps its spaces and blank lines as typed.
+            view.notes = (!now.notes.is_empty()).then(|| now.notes.clone());
+        }
+        view.folder_id = now
+            .folder
+            .checked_sub(1)
+            .and_then(|position| index.folders.get(position))
+            .map(|folder| folder.id);
+        view.favorite = now.favorite;
+        view.reprompt = now.reprompt;
+
+        match (&now.fields, &start.fields, &mut view.content) {
+            (
+                Fields::Login {
+                    username,
+                    totp,
+                    website,
+                },
+                Fields::Login {
+                    username: start_username,
+                    totp: start_totp,
+                    website: start_website,
+                },
+                CipherContent::Login(login),
+            ) => {
+                pick(&mut login.username, username, start_username);
+                pick_secret(&mut login.password, &secret);
+                pick(&mut login.totp, totp, start_totp);
+                // The box shows the first website; the others stay.
+                if website != start_website {
+                    match (some(website), login.uris.is_empty()) {
+                        (Some(uri), true) => login.uris.push(UriView {
+                            uri: Some(uri),
+                            match_rule: None,
+                        }),
+                        (Some(uri), false) => login.uris[0].uri = Some(uri),
+                        (None, true) => {}
+                        (None, false) => {
+                            login.uris.remove(0);
+                        }
+                    }
+                }
+            }
+            (
+                Fields::Card {
+                    cardholder,
+                    brand,
+                    number,
+                    expiration: typed,
+                },
+                Fields::Card {
+                    cardholder: start_cardholder,
+                    brand: start_brand,
+                    number: start_number,
+                    expiration: start_typed,
+                },
+                CipherContent::Card(card),
+            ) => {
+                pick(&mut card.cardholder_name, cardholder, start_cardholder);
+                if brand != start_brand {
+                    card.brand = (*brand != 0).then(|| Zeroizing::new(BRANDS[*brand].1.to_owned()));
+                }
+                // Stored as digits only, as the box shows them grouped.
+                if number != start_number {
+                    let mut digits = field();
+                    digits.extend(number.chars().filter(char::is_ascii_digit));
+                    card.number = some(&digits);
+                }
+                if typed != start_typed {
+                    (card.exp_month, card.exp_year) = expiration(typed)
+                        .flatten()
+                        .map(|(month, year)| {
+                            (
+                                Zeroizing::new(month.to_string()),
+                                Zeroizing::new(year.to_string()),
+                            )
+                        })
+                        .unzip();
+                }
+                pick_secret(&mut card.code, &secret);
+            }
+            (
+                Fields::Identity(identity),
+                Fields::Identity(start_identity),
+                CipherContent::Identity(stored),
+            ) => {
+                let stored: &mut IdentityView = stored;
+                if identity.title != start_identity.title {
+                    stored.title = (identity.title != 0)
+                        .then(|| Zeroizing::new(TITLES[identity.title].to_owned()));
+                }
+                let targets = [
+                    &mut stored.first_name,
+                    &mut stored.middle_name,
+                    &mut stored.last_name,
+                    &mut stored.username,
+                    &mut stored.company,
+                    &mut stored.passport_number,
+                    &mut stored.ssn,
+                    &mut stored.license_number,
+                    &mut stored.email,
+                    &mut stored.phone,
+                    &mut stored.address1,
+                    &mut stored.address2,
+                    &mut stored.address3,
+                    &mut stored.city,
+                    &mut stored.state,
+                    &mut stored.postal_code,
+                    &mut stored.country,
+                ];
+                for ((target, text), start_text) in targets
+                    .into_iter()
+                    .zip(identity.texts())
+                    .zip(start_identity.texts())
+                {
+                    pick(target, text, start_text);
+                }
+            }
+            (Fields::SshKey(ssh), Fields::SshKey(start_ssh), CipherContent::SshKey(key)) => {
+                if ssh != start_ssh {
+                    *key = ssh
+                        .key
+                        .clone()
+                        .expect("Save checks that the form has a key");
+                }
+            }
+            (Fields::Note, ..) => {}
+            _ => unreachable!("a draft's fields, their start and its base share one kind"),
+        }
+        view
+    }
+}
+
+impl Fields {
     fn kind(&self) -> CipherKind {
-        match self.fields {
+        match self {
             Fields::Login { .. } => CipherKind::Login,
             Fields::Note => CipherKind::SecureNote,
             Fields::Card { .. } => CipherKind::Card,
@@ -240,149 +557,19 @@ impl Draft {
             Fields::SshKey(_) => CipherKind::SshKey,
         }
     }
-
-    /// Whether the user entered anything, so leaving the form would lose it.
-    /// The generated SSH key alone is no change.
-    pub fn changed(&self) -> bool {
-        let typed = |texts: &[&SecretString]| texts.iter().any(|text| !text.is_empty());
-        let fields = match &self.fields {
-            Fields::Login {
-                username,
-                totp,
-                website,
-            } => typed(&[username, totp, website]),
-            Fields::Note => false,
-            Fields::SshKey(ssh) => !ssh.text.is_empty(),
-            Fields::Card {
-                cardholder,
-                brand,
-                number,
-                expiration,
-                ..
-            } => typed(&[cardholder, number, expiration]) || *brand != 0,
-            Fields::Identity(identity) => identity.title != 0 || typed(&identity.texts()),
-        };
-        fields
-            || typed(&[&self.name, &self.notes])
-            || self.secret_typed
-            || self.reprompt
-            || (self.folder, self.favorite) != self.start
-    }
-
-    /// The title of the dialog that asks before the draft is dropped.
-    pub fn discard_title(&self) -> String {
-        match self.name.trim() {
-            "" => format!("Discard the new {}?", noun(self.kind())),
-            name => format!("Discard changes to {name}?"),
-        }
-    }
-
-    /// The item as the core takes it, with `secrets` read from the hidden
-    /// boxes in the order [`edit_pane`] declares them.
-    fn view(&self, index: &VaultIndex, secrets: [SecretString; 2]) -> CipherView {
-        let [first, second] = secrets;
-        let content = match &self.fields {
-            Fields::Login {
-                username,
-                totp,
-                website,
-            } => CipherContent::Login(LoginView {
-                username: some(username),
-                password: some(&first),
-                totp: some(totp),
-                uris: some(website)
-                    .map(|uri| UriView {
-                        uri: Some(uri),
-                        match_rule: None,
-                    })
-                    .into_iter()
-                    .collect(),
-                ..LoginView::default()
-            }),
-            Fields::Note => CipherContent::SecureNote,
-            Fields::Card {
-                cardholder,
-                brand,
-                number,
-                expiration: typed,
-                ..
-            } => {
-                let (exp_month, exp_year) = expiration(typed)
-                    .flatten()
-                    .map(|(month, year)| {
-                        (
-                            Zeroizing::new(month.to_string()),
-                            Zeroizing::new(year.to_string()),
-                        )
-                    })
-                    .unzip();
-                CipherContent::Card(CardView {
-                    cardholder_name: some(cardholder),
-                    brand: (*brand != 0).then(|| Zeroizing::new(BRANDS[*brand].1.to_owned())),
-                    number: some(number),
-                    exp_month,
-                    exp_year,
-                    code: some(&first),
-                })
-            }
-            Fields::Identity(identity) => CipherContent::Identity(Box::new(IdentityView {
-                title: (identity.title != 0)
-                    .then(|| Zeroizing::new(TITLES[identity.title].to_owned())),
-                first_name: some(&identity.first_name),
-                middle_name: some(&identity.middle_name),
-                last_name: some(&identity.last_name),
-                address1: some(&identity.address1),
-                address2: some(&identity.address2),
-                address3: some(&identity.address3),
-                city: some(&identity.city),
-                state: some(&identity.state),
-                postal_code: some(&identity.postal_code),
-                country: some(&identity.country),
-                company: some(&identity.company),
-                email: some(&identity.email),
-                phone: some(&identity.phone),
-                ssn: some(&second),
-                username: some(&identity.username),
-                passport_number: some(&first),
-                license_number: some(&identity.license_number),
-            })),
-            Fields::SshKey(ssh) => CipherContent::SshKey(
-                ssh.key
-                    .clone()
-                    .expect("Save checks that the form has a key"),
-            ),
-        };
-
-        CipherView {
-            id: None,
-            organization_id: None,
-            collection_ids: Vec::new(),
-            kind: self.kind(),
-            name: Zeroizing::new(self.name.trim().to_owned()),
-            // A note keeps its spaces and blank lines as typed.
-            notes: (!self.notes.is_empty()).then(|| self.notes.clone()),
-            folder_id: self
-                .folder
-                .checked_sub(1)
-                .and_then(|position| index.folders.get(position))
-                .map(|folder| folder.id),
-            favorite: self.favorite,
-            reprompt: self.reprompt,
-            content,
-            fields: Vec::new(),
-            password_history: Vec::new(),
-        }
-    }
 }
 
 impl IdentityDraft {
-    fn texts(&self) -> [&SecretString; 15] {
+    /// The text boxes, in the order [`Draft::view`] writes them back.
+    fn texts(&self) -> [&SecretString; 17] {
         [
             &self.first_name,
             &self.middle_name,
             &self.last_name,
             &self.username,
             &self.company,
+            &self.passport_number,
+            &self.ssn,
             &self.license_number,
             &self.email,
             &self.phone,
@@ -397,12 +584,50 @@ impl IdentityDraft {
     }
 }
 
+/// The secret of `view` for its hidden box, or [`None`] when it has none
+/// to show.
+fn hidden(view: &CipherView) -> Option<SecretString> {
+    match &view.content {
+        CipherContent::Login(login) => login.password.clone(),
+        CipherContent::Card(card) => card.code.clone(),
+        _ => None,
+    }
+    .filter(|secret| !secret.is_empty())
+}
+
+/// Writes `text` trimmed into `stored`, unless the box still shows `start`,
+/// so an untouched field keeps its stored text as it was.
+fn pick(stored: &mut Option<SecretString>, text: &SecretString, start: &SecretString) {
+    if text != start {
+        *stored = some(text);
+    }
+}
+
+/// Writes `read`, from a hidden box, into `stored`, unless it equals the
+/// stored text.
+fn pick_secret(stored: &mut Option<SecretString>, read: &SecretString) {
+    if read.as_str() != stored.as_deref().map_or("", String::as_str) {
+        *stored = some(read);
+    }
+}
+
 /// `text` trimmed, or [`None`] when that is empty.
 fn some(text: &SecretString) -> Option<SecretString> {
     match text.trim() {
         "" => None,
         trimmed => Some(Zeroizing::new(trimmed.to_owned())),
     }
+}
+
+/// The card's expiration as the form shows it, `MM/YY`, or empty when the
+/// stored month or year does not read as a number.
+fn expiration_text(card: &CardView) -> SecretString {
+    let mut text = field();
+    let number = |value: &Option<SecretString>| value.as_deref()?.trim().parse::<u16>().ok();
+    if let (Some(month), Some(year)) = (number(&card.exp_month), number(&card.exp_year)) {
+        write!(*text, "{month:02}/{:02}", year % 100).expect("writing to a String does not fail");
+    }
+    text
 }
 
 /// The month and four-digit year of a card expiration typed as `MM/YY`,
@@ -469,6 +694,8 @@ pub enum EditPass {
     Close,
     /// Read text for the SSH key, and give it to [`Draft::key_read`].
     ReadKey(KeySource),
+    /// Settle the open item's conflict. Keeping theirs also closes the form.
+    Resolve { keep_mine: bool },
 }
 
 impl Draft {
@@ -479,7 +706,7 @@ impl Draft {
         source: KeySource,
         text: std::result::Result<SecretString, KeyTextError>,
     ) {
-        let Fields::SshKey(ssh) = &mut self.fields else {
+        let Fields::SshKey(ssh) = &mut self.now.fields else {
             return;
         };
         match (source, text) {
@@ -533,7 +760,7 @@ impl KeyProblem {
             KeyProblem::Key(SshKeyError::NotAKey) => "This is not an OpenSSH private key.",
             KeyProblem::Key(SshKeyError::NeedsPassphrase) => "The key has a passphrase.",
             KeyProblem::Key(SshKeyError::WrongPassphrase) => "Wrong passphrase.",
-            KeyProblem::File(KeyTextError::Unreadable) => "Chaveiro couldn't read the file.",
+            KeyProblem::File(KeyTextError::Unreadable) => "Couldn't read the file.",
             KeyProblem::File(KeyTextError::NotText) => "The file is not a text key file.",
             KeyProblem::File(KeyTextError::NoText) => "The clipboard has no text.",
             KeyProblem::File(KeyTextError::Cancelled) => {
@@ -543,20 +770,31 @@ impl KeyProblem {
     }
 }
 
-/// Draws the form for `draft` in the details pane. `creating` and `error`
-/// are the core's, from the vault screen. Ctrl+S saves.
+/// What the core says about the form's save, from the vault screen.
+pub struct SaveState<'a> {
+    pub saving: bool,
+    pub error: Option<&'a ItemError>,
+    /// The open item's conflict, once ready for the user to settle.
+    pub conflict: Option<Conflict<'a>>,
+}
+
+/// Draws the form for `draft` in the details pane. Ctrl+S saves.
 pub fn edit_pane(
     ui: &mut Ui,
     draft: &mut Draft,
     index: &VaultIndex,
-    creating: bool,
-    error: Option<&ItemError>,
+    state: SaveState<'_>,
 ) -> Result<EditPass> {
+    // Only an edit of the open item can meet its conflict.
+    let conflict = state
+        .conflict
+        .filter(|conflict| draft.base.id.is_some() && conflict.mine.id == draft.base.id);
+
     // The save went out on an earlier pass; once the core no longer waits
-    // for it, it either opened the new item or set an error.
-    if draft.saving && !creating {
+    // for it, it either opened the item, set an error or found a conflict.
+    if draft.saving && !state.saving {
         draft.saving = false;
-        if error.is_none() {
+        if state.error.is_none() && conflict.is_none() {
             return Ok(EditPass::Close);
         }
     }
@@ -564,9 +802,11 @@ pub fn edit_pane(
     let saving = draft.saving;
     let mut pass = EditPass::Stay;
     let mut save = false;
+    // Taken on the form's first pass, as the hidden box is made.
+    let fill = draft.fill.take();
 
-    // The hidden boxes of this kind, in the order `Draft::view` reads them.
-    let mut secrets: [Option<PasswordHandle>; 2] = [None, None];
+    // The hidden box of this kind, if it has one.
+    let mut secret = None;
     // The boxes a failed Save can focus, in form order: the name, the card
     // expiration, and the SSH key's box or its passphrase box.
     let mut name_field = None;
@@ -578,8 +818,9 @@ pub fn edit_pane(
     ui.grid("edit", &[Length::Auto, Length::Star(1.0)], |ui| {
         // Save, the one accent action, then the command bar with the rest.
         // Save sits beside the bar, not in it, so it never moves into the
-        // bar's overflow menu, where WinUI draws it as a stretched block. A
-        // new item has nothing to trash, so the bar has no More.
+        // bar's overflow menu, where WinUI draws it as a stretched block. The
+        // form has no More: the details pane's has the item's other
+        // commands.
         ui.columns("commands", &[Length::Auto, Length::Star(1.0)], 0.0, |ui| {
             let mut button = ui.button("save", if saving { "Saving…" } else { "Save" })?;
             button
@@ -607,21 +848,47 @@ pub fn edit_pane(
         save |= ui.shortcut("save shortcut", false, 'S')? && !saving;
         ui.scroll("fields", |ui| {
             ui.stack("fields", Orientation::Vertical, 12.0, |ui| {
-                if let Some(error) = error.filter(|_| !saving) {
+                if let Some(error) = state.error.filter(|_| !saving) {
                     let message = match error {
                         ItemError::Rejected(message) => message.as_str(),
                         ItemError::Busy => "The last save is still going. Try again in a moment.",
                         ItemError::NotFound | ItemError::Unreadable(_) => {
-                            "Chaveiro couldn't save the item."
+                            "Couldn't save the item."
                         }
                     };
                     ui.info_bar("error", Severity::Error, "The item was not saved.", message)?;
                 }
 
-                ui.label("form title", format_args!("New {}", noun(draft.kind())))?
-                    .style("SubtitleTextBlockStyle")?;
+                if conflict.is_some() && !saving {
+                    ui.info_bar(
+                        "conflict",
+                        Severity::Warning,
+                        "This item changed on another device.",
+                        "Keep your version, then save it over theirs, or take theirs and \
+                         drop your changes.",
+                    )?;
+                    ui.stack("conflict choices", Orientation::Horizontal, 8.0, |ui| {
+                        if ui.button("keep mine", "Keep mine")?.clicked()? {
+                            pass = EditPass::Resolve { keep_mine: true };
+                        }
+                        if ui.button("take theirs", "Take theirs")?.clicked()? {
+                            pass = EditPass::Resolve { keep_mine: false };
+                        }
+                        Ok(())
+                    })?;
+                }
 
-                let mut name = ui.text_box("name", "", &mut draft.name)?;
+                let verb = match draft.base.id {
+                    Some(_) => "Edit",
+                    None => "New",
+                };
+                ui.label(
+                    "form title",
+                    format_args!("{verb} {}", noun(draft.base.kind)),
+                )?
+                .style("SubtitleTextBlockStyle")?;
+
+                let mut name = ui.text_box("name", "", &mut draft.now.name)?;
                 name_field = Some(name.field());
                 if name.changed() {
                     draft.name_missing = false;
@@ -639,17 +906,18 @@ pub fn edit_pane(
                             false => "Unreadable folder",
                         }
                     }));
-                ui.combo_box("folder", folders, &mut draft.folder)?
+                ui.combo_box("folder", folders, &mut draft.now.folder)?
                     .header("Folder")?
                     .enabled(!saving)?;
-                ui.check_box("favorite", "Favorite", &mut draft.favorite)?
+                ui.check_box("favorite", "Favorite", &mut draft.now.favorite)?
                     .enabled(!saving)?;
 
                 let mut form = Form {
                     saving,
                     secret_typed: &mut draft.secret_typed,
+                    fill: fill.as_ref(),
                 };
-                match &mut draft.fields {
+                match &mut draft.now.fields {
                     Fields::Login {
                         username,
                         totp,
@@ -657,7 +925,7 @@ pub fn edit_pane(
                     } => {
                         heading(ui, "login", "Login")?;
                         form.text(ui, "username", "Username", "", username)?;
-                        secrets[0] = Some(form.secret(ui, "password", "Password")?);
+                        secret = Some(form.secret(ui, "password", "Password")?);
                         form.text(
                             ui,
                             "totp",
@@ -673,7 +941,6 @@ pub fn edit_pane(
                         brand,
                         number,
                         expiration,
-                        expiration_invalid,
                     } => {
                         heading(ui, "card", "Card")?;
                         form.text(ui, "cardholder", "Cardholder name", "", cardholder)?;
@@ -687,6 +954,7 @@ pub fn edit_pane(
                             .header("Number")?
                             .enabled(!saving)?;
 
+                        let expiration_invalid = &mut draft.expiration_invalid;
                         ui.columns(
                             "expiration and code",
                             &[Length::Star(1.0), Length::Star(1.0)],
@@ -703,7 +971,7 @@ pub fn edit_pane(
                                     .error(expiration_invalid.then_some("Invalid date"))?
                                     .enabled(!saving)?;
 
-                                secrets[0] = Some(form.secret(ui, "code", "Security code")?);
+                                secret = Some(form.secret(ui, "code", "Security code")?);
                                 Ok(())
                             },
                         )?;
@@ -720,8 +988,14 @@ pub fn edit_pane(
                         form.text(ui, "company", "Company", "", &mut identity.company)?;
 
                         heading(ui, "identification", "Identification")?;
-                        secrets[0] = Some(form.secret(ui, "passport", "Passport number")?);
-                        secrets[1] = Some(form.secret(ui, "ssn", "Tax number")?);
+                        form.text(
+                            ui,
+                            "passport",
+                            "Passport number",
+                            "",
+                            &mut identity.passport_number,
+                        )?;
+                        form.text(ui, "ssn", "Tax number", "", &mut identity.ssn)?;
                         form.text(
                             ui,
                             "license",
@@ -775,7 +1049,7 @@ pub fn edit_pane(
                         })?;
 
                         match ssh.input {
-                            KeyInput::Generated => {}
+                            KeyInput::Stored | KeyInput::Generated => {}
                             KeyInput::Imported => {
                                 ui.label("source", format_args!("Imported from a file."))?
                                     .secondary(true)?;
@@ -892,13 +1166,13 @@ pub fn edit_pane(
                 }
 
                 heading(ui, "more", "More")?;
-                ui.text_area("notes", "", &mut draft.notes)?
+                ui.text_area("notes", "", &mut draft.now.notes)?
                     .header("Notes")?
                     .enabled(!saving)?;
                 ui.check_box(
                     "reprompt",
                     "Ask for master password before this item opens",
-                    &mut draft.reprompt,
+                    &mut draft.now.reprompt,
                 )?
                 .enabled(!saving)?;
                 Ok(())
@@ -911,23 +1185,27 @@ pub fn edit_pane(
     if save && !saving {
         // The kind's own invalid box, if any: `Some(None)` when the problem
         // has no box to focus, as for a key file that did not read.
-        let kind_invalid = match &mut draft.fields {
-            Fields::SshKey(ssh) if ssh.key.is_none() => {
+        let kind_invalid = match (&mut draft.now.fields, &draft.start.fields) {
+            (Fields::SshKey(ssh), _) if ssh.key.is_none() => {
                 ssh.problem = ssh.problem.or(Some(KeyProblem::Missing));
                 Some(key_field)
             }
-            Fields::Card {
-                expiration: typed,
-                expiration_invalid,
-                ..
-            } => {
-                *expiration_invalid = expiration(typed).is_none();
-                expiration_invalid.then_some(expiration_field)
+            // An expiration the user left as stored saves as stored.
+            (
+                Fields::Card {
+                    expiration: typed, ..
+                },
+                Fields::Card {
+                    expiration: start, ..
+                },
+            ) => {
+                draft.expiration_invalid = typed != start && expiration(typed).is_none();
+                draft.expiration_invalid.then_some(expiration_field)
             }
             _ => None,
         };
 
-        draft.name_missing = draft.name.trim().is_empty();
+        draft.name_missing = draft.now.name.trim().is_empty();
         let first_invalid = match draft.name_missing {
             true => Some(name_field),
             false => kind_invalid,
@@ -943,14 +1221,14 @@ pub fn edit_pane(
                 ui.request_pass();
             }
             None => {
-                let mut read = |handle: Option<PasswordHandle>| match handle {
-                    Some(handle) => ui.take_password(handle),
-                    None => Ok(SecretString::default()),
+                let secret = match secret {
+                    // Read, not taken: a failed save leaves the box as the
+                    // user left it.
+                    Some(handle) => ui.read_password(handle)?,
+                    None => SecretString::default(),
                 };
-
-                let secrets = [read(secrets[0])?, read(secrets[1])?];
                 draft.saving = true;
-                pass = EditPass::Save(Box::new(draft.view(index, secrets)));
+                pass = EditPass::Save(Box::new(draft.view(index, secret)));
             }
         }
     }
@@ -961,6 +1239,8 @@ pub fn edit_pane(
 struct Form<'a> {
     saving: bool,
     secret_typed: &'a mut bool,
+    /// Text to write into the hidden box this pass.
+    fill: Option<&'a SecretString>,
 }
 
 impl Form<'_> {
@@ -984,6 +1264,11 @@ impl Form<'_> {
     /// A hidden box, whose text only Save reads.
     fn secret(&mut self, ui: &mut Ui, id: &str, header: &str) -> Result<PasswordHandle> {
         let mut field = ui.password_box(id, "")?;
+        // Written before `changed` subscribes the box, so a new box reports
+        // no change for it.
+        if let Some(fill) = self.fill {
+            field.set(fill)?;
+        }
         *self.secret_typed |= field.changed()?;
         // At the top of a row whose other box is taller, as under its error
         // line, so it keeps its own height.
@@ -1013,37 +1298,4 @@ pub fn default_kind(filter: Filter) -> CipherKind {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::expiration;
-    use proptest::prelude::*;
-
-    proptest! {
-        #[test]
-        fn every_written_form_of_a_date_reads_as_it(month in 1u8..=12, year in 2000u16..=2099, form in 0..5) {
-            let short = year % 100;
-            let text = match form {
-                0 => format!("{month:02}/{short:02}"),
-                1 => format!("{month}/{short:02}"),
-                2 => format!("{month:02}{short:02}"),
-                3 => format!("{month:02}/{year}"),
-                _ => format!(" {month:02} - {year} "),
-            };
-            prop_assert_eq!(expiration(&text), Some(Some((month, year))));
-        }
-
-        #[test]
-        fn a_month_past_12_or_0_is_unreadable(month in prop_oneof![Just(0u8), 13u8..=99], year in 0u16..100) {
-            prop_assert_eq!(expiration(&format!("{month:02}/{year:02}")), None);
-        }
-
-        #[test]
-        fn blank_text_is_no_date(spaces in " {0,4}") {
-            prop_assert_eq!(expiration(&spaces), Some(None));
-        }
-    }
-
-    #[test]
-    fn a_three_digit_year_is_unreadable() {
-        assert_eq!(expiration("01/202"), None);
-    }
-}
+mod tests;

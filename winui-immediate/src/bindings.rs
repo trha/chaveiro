@@ -38,4 +38,23 @@ impl IPasswordBox {
                 .map(|| core::mem::transmute::<_, windows_core::HSTRING>(result))
         }
     }
+
+    /// Sets the password from `value`, which the caller can wipe after.
+    /// The generated setter takes `&str` and builds an `HSTRING` it frees
+    /// unwiped.
+    pub(crate) fn set_password_string(
+        &self,
+        value: &windows_core::HSTRING,
+    ) -> windows_core::Result<()> {
+        // SAFETY: the slot's signature is `HRESULT(this, HSTRING)`, and the
+        // callee copies the borrowed string, as the generated setter relies
+        // on.
+        unsafe {
+            (Interface::vtable(self).SetPassword)(
+                Interface::as_raw(self),
+                core::mem::transmute_copy(value),
+            )
+            .ok()
+        }
+    }
 }
