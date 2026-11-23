@@ -3,10 +3,21 @@
 
 mod cbor;
 
-use super::RequestId;
+use super::{
+    api::send_api,
+    request::{ApiCall, ApiKind, Write},
+};
+use serde_json::Map;
+
+use super::{
+    config::Config,
+    effect::{Body, Effect, Method},
+    request::{CounterBump, PasskeyWrite, RequestId, Table, WriteAction},
+    state::Unlocked,
+};
 use crate::{
     crypto::{P256SigningKey, SecretString},
-    proto::cipher::CipherResponse,
+    proto::cipher::{CipherResponse, create_body},
     vault::{
         CipherContent, CipherKind, CipherView, Fido2CredentialView, LoginView, UriView, VaultKeys,
     },
@@ -465,4 +476,269 @@ pub(super) fn iso_date(now_ms: u64) -> String {
         second_of_day % 60,
         now_ms % 1000
     )
+}
+
+/// Holds `pending` in `slot`, refusing the request it replaces.
+pub(super) fn hold_passkey(
+    slot: &mut Option<Box<Pending>>,
+    pending: Pending,
+    effects: &mut Vec<Effect>,
+) {
+    if let Some(older) = slot.replace(Box::new(pending)) {
+        refuse_passkey(older.id, effects);
+    }
+}
+
+pub(super) fn refuse_passkey(id: RequestId, effects: &mut Vec<Effect>) {
+    effects.push(Effect::PasskeyReply {
+        id,
+        reply: Err(PasskeyError::NotAllowed),
+    });
+}
+
+/// Answers `pending` at once when it is an assertion that only one passkey
+/// fits. Otherwise holds it with its choices for the user to pick, or
+/// refuses it when nothing fits.
+pub(super) fn serve_passkey(
+    config: &Config,
+    requests: &mut Table,
+    unlocked: &mut Unlocked,
+    now_ms: u64,
+    rng: &mut impl CryptoRngCore,
+    mut pending: Pending,
+    effects: &mut Vec<Effect>,
+) {
+    let choices = match &unlocked.account.cache {
+        None => Err(PasskeyError::NotAllowed),
+        Some(cache) => choices(&pending.request, &cache.ciphers, &unlocked.keys),
+    };
+    match choices {
+        Err(_) => refuse_passkey(pending.id, effects),
+        Ok(mut choices)
+            if choices.len() == 1
+                && matches!(pending.request, PasskeyRequest::GetAssertion { .. }) =>
+        {
+            let target = choices.remove(0).target;
+            answer_passkey(
+                config,
+                requests,
+                unlocked,
+                now_ms,
+                rng,
+                pending.id,
+                &pending.request,
+                target,
+                effects,
+            );
+        }
+        Ok(choices) => {
+            pending.choices = choices;
+            hold_passkey(&mut unlocked.account.passkey, pending, effects);
+            effects.push(Effect::Rerender);
+        }
+    }
+}
+
+/// For an assertion: signs with the chosen passkey, replies at once and
+/// queues the counter write. For a create: adds a new passkey to the chosen
+/// login, or to a new login, and saves it; the reply follows once the
+/// server stores it. Refuses request `id` when the chosen item is gone or
+/// does not decrypt.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn answer_passkey(
+    config: &Config,
+    requests: &mut Table,
+    unlocked: &mut Unlocked,
+    now_ms: u64,
+    rng: &mut impl CryptoRngCore,
+    id: RequestId,
+    request: &PasskeyRequest,
+    target: Target,
+    effects: &mut Vec<Effect>,
+) {
+    let base = |cipher_id: Uuid| {
+        unlocked
+            .account
+            .cache
+            .as_ref()?
+            .ciphers
+            .iter()
+            .find(|cipher| cipher.id == cipher_id)
+            .cloned()
+    };
+    let call = match (target, request) {
+        (
+            Target::Credential {
+                cipher_id,
+                credential_id,
+            },
+            PasskeyRequest::GetAssertion {
+                client_data_hash, ..
+            },
+        ) => {
+            let view =
+                base(cipher_id).and_then(|base| CipherView::decrypt(&base, &unlocked.keys).ok());
+            let credential = view.as_ref().and_then(|view| match &view.content {
+                CipherContent::Login(login) => login.fido2_credentials.iter().find(|credential| {
+                    credential_id_bytes(&credential.credential_id).as_ref() == Some(&credential_id)
+                }),
+                _ => None,
+            });
+            let Some(credential) = credential else {
+                return refuse_passkey(id, effects);
+            };
+            let signed = &mut unlocked.account.signed;
+            let index = match signed
+                .iter()
+                .position(|(signed_id, _)| *signed_id == credential_id)
+            {
+                Some(index) => index,
+                None => {
+                    signed.push((credential_id, 0));
+                    signed.len() - 1
+                }
+            };
+            let counter = credential.counter.max(signed[index].1).saturating_add(1);
+            signed[index].1 = counter;
+            effects.push(Effect::PasskeyReply {
+                id,
+                reply: Ok(assert(credential, client_data_hash, counter)),
+            });
+            let bump = CounterBump {
+                cipher_id,
+                credential_id: credential.credential_id.clone(),
+                counter,
+            };
+            return counter_write(config, requests, unlocked, now_ms, rng, bump, effects);
+        }
+        (Target::NewLogin, PasskeyRequest::MakeCredential { .. }) => {
+            let Some((credential, reply)) = create(request, now_ms, rng) else {
+                return refuse_passkey(id, effects);
+            };
+            let mut view = new_login(request);
+            if let CipherContent::Login(login) = &mut view.content {
+                login.fido2_credentials.push(credential);
+            }
+            let edits = view.encrypt(unlocked.keys.user(), &Map::new(), rng);
+            ApiCall {
+                method: Method::Post,
+                path: vec!["ciphers".into()],
+                query: &[],
+                body: Body::Json(create_body(edits, unlocked.account.user_id, None)),
+                kind: ApiKind::Write(Write {
+                    cipher_id: None,
+                    action: WriteAction::Create,
+                    view: None,
+                    passkey: Some(PasskeyWrite::Created {
+                        id,
+                        reply: Box::new(reply),
+                    }),
+                }),
+                retried: false,
+            }
+        }
+        (Target::Login(cipher_id), PasskeyRequest::MakeCredential { .. }) => {
+            let opened = base(cipher_id).and_then(|base| {
+                let key = unlocked.keys.cipher_key(&base).ok()?;
+                let view = CipherView::decrypt(&base, &unlocked.keys).ok()?;
+                Some((base, key, view))
+            });
+            let (Some((base, key, mut view)), Some((credential, reply))) =
+                (opened, create(request, now_ms, rng))
+            else {
+                return refuse_passkey(id, effects);
+            };
+            let CipherContent::Login(login) = &mut view.content else {
+                return refuse_passkey(id, effects);
+            };
+            login.fido2_credentials.push(credential);
+            let edits = view.encrypt(&key, &base.raw, rng);
+            ApiCall {
+                method: Method::Put,
+                path: vec!["ciphers".into(), cipher_id.to_string()],
+                query: &[],
+                body: Body::Json(base.update_body(edits, unlocked.account.user_id)),
+                kind: ApiKind::Write(Write {
+                    cipher_id: Some(cipher_id),
+                    action: WriteAction::Update,
+                    view: None,
+                    passkey: Some(PasskeyWrite::Created {
+                        id,
+                        reply: Box::new(reply),
+                    }),
+                }),
+                retried: false,
+            }
+        }
+        _ => return refuse_passkey(id, effects),
+    };
+    send_api(
+        config,
+        requests,
+        &mut unlocked.account,
+        now_ms,
+        call,
+        effects,
+    );
+}
+
+/// Writes `bump` into its passkey, unless the cached copy already holds an
+/// equal or higher counter, or the passkey is gone.
+pub(super) fn counter_write(
+    config: &Config,
+    requests: &mut Table,
+    unlocked: &mut Unlocked,
+    now_ms: u64,
+    rng: &mut impl CryptoRngCore,
+    bump: CounterBump,
+    effects: &mut Vec<Effect>,
+) {
+    let base = unlocked.account.cache.as_ref().and_then(|cache| {
+        cache
+            .ciphers
+            .iter()
+            .find(|cipher| cipher.id == bump.cipher_id)
+    });
+    let Some(base) = base else {
+        return;
+    };
+    let (Ok(key), Ok(mut view)) = (
+        unlocked.keys.cipher_key(base),
+        CipherView::decrypt(base, &unlocked.keys),
+    ) else {
+        return;
+    };
+    let CipherContent::Login(login) = &mut view.content else {
+        return;
+    };
+    let credential = login
+        .fido2_credentials
+        .iter_mut()
+        .find(|credential| *credential.credential_id == *bump.credential_id);
+    let Some(credential) = credential.filter(|credential| credential.counter < bump.counter) else {
+        return;
+    };
+    credential.counter = bump.counter;
+    let edits = view.encrypt(&key, &base.raw, rng);
+    let call = ApiCall {
+        method: Method::Put,
+        path: vec!["ciphers".into(), bump.cipher_id.to_string()],
+        query: &[],
+        body: Body::Json(base.update_body(edits, unlocked.account.user_id)),
+        kind: ApiKind::Write(Write {
+            cipher_id: Some(bump.cipher_id),
+            action: WriteAction::Update,
+            view: None,
+            passkey: Some(PasskeyWrite::Counter(bump)),
+        }),
+        retried: false,
+    };
+    send_api(
+        config,
+        requests,
+        &mut unlocked.account,
+        now_ms,
+        call,
+        effects,
+    );
 }

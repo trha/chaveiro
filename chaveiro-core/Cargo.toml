@@ -26,6 +26,7 @@ ssh-encoding = { version = "0.2", default-features = false, features = ["alloc"]
 ssh-key ={ version = "0.6", default-features = false, features = ["alloc", "ecdsa", "ed25519", "encryption", "p256", "p384", "rand_core", "rsa"] }
 zeroize = { version = "1", features = ["derive"] }
 url = { version = "2", features = ["serde"] }
+jiff = { version = "1.0.2", default-features = false, features = ["std"] }
 
 [dev-dependencies]
 expect-test = "1"

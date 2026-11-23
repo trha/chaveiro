@@ -2,9 +2,10 @@
 //! key. Frames here carry no 4-byte length prefix; the shell adds and strips
 //! it.
 
+use super::{effect::Effect, input::Settings, state::Unlocked};
 use crate::{
     proto::cipher::CipherResponse,
-    vault::{SshKeySummary, VaultKeys, decrypt_ssh_private_key},
+    vault::{SshKeySummary, VaultIndex, VaultKeys, decrypt_ssh_private_key},
 };
 use rsa::{
     BigUint, RsaPrivateKey,
@@ -17,6 +18,7 @@ use ssh_key::{
     Algorithm, HashAlg, Mpint, PrivateKey, Signature,
     private::{KeypairData, RsaKeypair},
 };
+use uuid::Uuid;
 
 /// One decoded agent request.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -240,3 +242,115 @@ const REQUEST_IDENTITIES: u8 = 11;
 const IDENTITIES_ANSWER: u8 = 12;
 const SIGN_REQUEST: u8 = 13;
 const SIGN_RESPONSE: u8 = 14;
+
+/// Answers an agent frame that arrives while locked: an empty list, or a
+/// sign request held in `ssh` until unlock or its deadline.
+pub(super) fn hold_ssh(
+    ssh: &mut Vec<Pending>,
+    now_ms: u64,
+    id: AgentRequestId,
+    frame: &[u8],
+    effects: &mut Vec<Effect>,
+) {
+    match parse_request(frame) {
+        Ok(AgentRequest::List) => effects.push(Effect::SshAgentReply {
+            id,
+            frame: identities_reply(&[]),
+        }),
+        Ok(AgentRequest::Sign {
+            public_key,
+            data,
+            flags,
+        }) => {
+            ssh.push(Pending {
+                id,
+                public_key,
+                data,
+                flags,
+                deadline: now_ms.saturating_add(WAIT),
+            });
+            effects.push(Effect::Rerender);
+        }
+        Ok(AgentRequest::Other(_)) | Err(AgentParseError) => fail_ssh(id, effects),
+    }
+}
+
+/// Fails every request in `ssh` whose deadline passed.
+pub(super) fn expire_ssh(ssh: &mut Vec<Pending>, now_ms: u64, effects: &mut Vec<Effect>) {
+    let expired: Vec<_> = ssh
+        .extract_if(.., |pending| now_ms >= pending.deadline)
+        .collect();
+    if !expired.is_empty() {
+        for pending in expired {
+            fail_ssh(pending.id, effects);
+        }
+        effects.push(Effect::Rerender);
+    }
+}
+
+pub(super) fn fail_ssh(id: AgentRequestId, effects: &mut Vec<Effect>) {
+    effects.push(Effect::SshAgentReply {
+        id,
+        frame: failure_reply(),
+    });
+}
+
+/// Signs every waiting request whose key need not ask: its mode is
+/// [`SshAsk::Never`], or [`SshAsk::UntilLock`] with a grant. Returns whether
+/// any was signed, after pushing [`Effect::Rerender`] for them.
+pub(super) fn release_ssh(
+    unlocked: &mut Unlocked,
+    settings: &Settings,
+    effects: &mut Vec<Effect>,
+) -> bool {
+    let free: Vec<_> = unlocked
+        .account
+        .ssh
+        .extract_if(.., |pending| {
+            match ssh_ask(&unlocked.index, settings, &pending.public_key) {
+                SshAsk::Always => false,
+                SshAsk::Never => true,
+                SshAsk::UntilLock => unlocked.ssh_grants.contains(&pending.public_key),
+            }
+        })
+        .collect();
+    for pending in &free {
+        let frame = match &unlocked.account.cache {
+            None => failure_reply(),
+            Some(cache) => approved_reply(
+                pending,
+                &unlocked.index.ssh_keys,
+                &cache.ciphers,
+                &unlocked.keys,
+            ),
+        };
+        effects.push(Effect::SshAgentReply {
+            id: pending.id,
+            frame,
+        });
+    }
+    if !free.is_empty() {
+        effects.push(Effect::Rerender);
+    }
+    !free.is_empty()
+}
+
+/// The mode of the vault key `public_key`: its own `ssh-ask` field, else the
+/// global mode. A key the vault lacks gets the global mode.
+pub(super) fn ssh_ask(index: &VaultIndex, settings: &Settings, public_key: &[u8]) -> SshAsk {
+    index
+        .ssh_keys
+        .iter()
+        .find(|key| key.public_key == public_key)
+        .and_then(|key| key.ask)
+        .unwrap_or(settings.ssh_ask)
+}
+
+/// The name of the cipher that holds an SSH key; empty when it is gone.
+pub(super) fn ssh_key_name(index: &VaultIndex, cipher_id: Uuid) -> &str {
+    index
+        .ciphers
+        .iter()
+        .find(|cipher| cipher.id == cipher_id)
+        .map_or("", |cipher| cipher.name.as_str())
+}
