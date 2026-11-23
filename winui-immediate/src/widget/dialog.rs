@@ -32,7 +32,7 @@ impl Ui {
         close: &str,
     ) -> Result<DialogResponse> {
         let buttons = DialogButtons {
-            primary,
+            primary: Some(primary),
             secondary: None,
             close,
             default: DialogAnswer::Close,
@@ -91,7 +91,9 @@ impl Ui {
             // A dialog shows once, so its title and buttons are written
             // only here.
             control.SetTitle(&boxed(title))?;
-            control.SetPrimaryButtonText(buttons.primary)?;
+            if let Some(primary) = buttons.primary {
+                control.SetPrimaryButtonText(primary)?;
+            }
             if let Some(secondary) = buttons.secondary {
                 control.SetSecondaryButtonText(secondary)?;
             }
@@ -126,7 +128,9 @@ impl Ui {
 /// The buttons of a [`Ui::content_dialog`].
 #[derive(Clone, Copy)]
 pub struct DialogButtons<'a> {
-    pub primary: &'a str,
+    /// [`None`] for a dialog that only closes, such as one that shows a
+    /// list.
+    pub primary: Option<&'a str>,
     /// A third button between the primary and the close one.
     pub secondary: Option<&'a str>,
     pub close: &'a str,

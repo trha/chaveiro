@@ -8,7 +8,10 @@
 //! list: the counts, the pane's entries and the list's rows are rebuilt
 //! only when [`VaultScreen::index_revision`] or the filter changes.
 
-use crate::edit::{self, Draft, EditPass, KeySource, KeyTextError, SaveState};
+use crate::{
+    edit::{self, Draft, EditPass, KeySource, KeyTextError, SaveState},
+    history::{History, HistoryPass, history_dialog},
+};
 use chaveiro_core::{
     core::{Conflict, ItemError, UserAction, VaultScreen},
     crypto::SecretString,
@@ -62,9 +65,11 @@ pub struct VaultForm {
     /// The new item being filled in, whose form takes the details pane's
     /// place.
     editing: Option<Editing>,
-    /// How many discard dialogs opened, so each one is a dialog of its own,
-    /// which shows.
+    /// How many dialogs opened, so each one is a dialog of its own, which
+    /// shows.
     dialogs: u64,
+    /// The password history dialog, while it is open.
+    history: Option<History>,
 }
 
 /// The secrets shown in clear, which belong to one item.
@@ -149,6 +154,7 @@ impl Default for VaultForm {
             menus: ItemMenus::default(),
             editing: None,
             dialogs: 0,
+            history: None,
         }
     }
 }
@@ -178,6 +184,7 @@ impl VaultForm {
         self.menus.account = None;
         // Its text wipes itself on drop.
         self.editing = None;
+        self.history = None;
     }
 
     /// Takes the text the app read for [`VaultAction::ReadKey`]. With no
@@ -405,6 +412,7 @@ pub fn view<A: VaultApp>(
         menus,
         editing,
         dialogs,
+        history,
         ..
     } = &mut *form;
     let position = |filter| {
@@ -580,7 +588,6 @@ pub fn view<A: VaultApp>(
                                         continue;
                                     };
                                     *clicked = Some(index.ciphers[list.rows[position]].id);
-                                    ui.request_pass();
                                     match focus {
                                         true => ui.focus_row(items, position),
                                         false => ui.bring_into_view(items, position),
@@ -616,6 +623,10 @@ pub fn view<A: VaultApp>(
                                         action = Some(VaultAction::User(UserAction::Save(view)));
                                     }
                                     // Its dialog, if one is open, goes with it.
+                                    // A save that landed closes it in a pass
+                                    // the core's answer started, which read
+                                    // no event, so the pane that replaces the
+                                    // form needs a pass of its own.
                                     EditPass::Close => {
                                         *editing = None;
                                         ui.request_pass();
@@ -646,10 +657,15 @@ pub fn view<A: VaultApp>(
                             }
                             if let Some((id, anchor)) = pass.more {
                                 menus.open(id, anchor);
-                                ui.request_pass();
                             }
                             // The form takes the pane's place from the next
                             // pass.
+                            if pass.history
+                                && let Some(id) = open.and_then(|view| view.id)
+                            {
+                                *dialogs += 1;
+                                *history = Some(History::new(id, *dialogs));
+                            }
                             if pass.edit
                                 && let Some(view) = open
                             {
@@ -657,7 +673,6 @@ pub fn view<A: VaultApp>(
                                     draft: Draft::edit(view, index),
                                     leaving: None,
                                 });
-                                ui.request_pass();
                             }
                             Ok(())
                         },
@@ -733,7 +748,6 @@ pub fn view<A: VaultApp>(
                             LeaveTo::Lock => action = Some(VaultAction::User(UserAction::Lock)),
                             LeaveTo::Close => action = Some(VaultAction::Close),
                         }
-                        ui.request_pass();
                     }
                 }
             }
@@ -748,16 +762,47 @@ pub fn view<A: VaultApp>(
                     None => menus.open = None,
                     Some(summary) => {
                         let mut picked = None;
-                        let menu = ui.menu(("item menu", open_menu.serial), open_menu.anchor, |ui| {
-                            item_menu(ui, index, summary, &mut picked)
-                        })?;
+                        let mut wants_history = false;
+                        // Old passwords are known only for the open item.
+                        let old_passwords = open
+                            .filter(|view| view.id == Some(summary.id))
+                            .map_or(0, |view| view.password_history.len());
+                        let menu =
+                            ui.menu(("item menu", open_menu.serial), open_menu.anchor, |ui| {
+                                item_menu(
+                                    ui,
+                                    index,
+                                    summary,
+                                    old_passwords,
+                                    &mut picked,
+                                    &mut wants_history,
+                                )
+                            })?;
                         if menu.closed() {
                             menus.open = None;
                         }
                         if picked.is_some() {
                             action = picked;
                         }
+                        if wants_history {
+                            *dialogs += 1;
+                            *history = Some(History::new(summary.id, *dialogs));
+                        }
                     }
+                }
+            }
+
+            // A dialog of the open item; it closes when another opens. It
+            // comes after the link and the menu, so it shows in the pass
+            // that opened it.
+            if let Some(open_history) = history.as_mut() {
+                match open.filter(|view| view.id == Some(open_history.item)) {
+                    None => *history = None,
+                    Some(view) => match history_dialog(ui, open_history, view)? {
+                        HistoryPass::Stay => {}
+                        HistoryPass::Close => *history = None,
+                        HistoryPass::Copy(text) => action = Some(VaultAction::Copy(text)),
+                    },
                 }
             }
 
@@ -788,7 +833,6 @@ pub fn view<A: VaultApp>(
     } && should_hold(editing, dialogs, to)
     {
         action = None;
-        ui.request_pass();
     }
     // The caller applies the action after this pass drew the window, and
     // a row click reaches here a pass after its event, so ask for a pass
@@ -800,11 +844,6 @@ pub fn view<A: VaultApp>(
         Some(NavigationSelection::Settings) => *settings = true,
         Some(NavigationSelection::Entry(entry)) => {
             if let Some(filter) = sidebar.filters[entry] {
-                if filter != *form_filter {
-                    // The search box came before the pane in this pass, so
-                    // its placeholder names the old filter until the next.
-                    ui.request_pass();
-                }
                 *form_filter = filter;
                 *settings = false;
             }
@@ -1172,7 +1211,6 @@ fn row<A: VaultApp>(app: &mut A, ui: &mut Ui, _: ListId, position: usize) -> Res
     // The menu acts on this row's item and leaves the selection alone.
     if let Some(anchor) = row.context_requested()? {
         form.menus.open(cipher.id, anchor);
-        ui.request_pass();
     }
     Ok(())
 }
@@ -1199,6 +1237,8 @@ struct DetailsPass {
     pressed: Option<Pressed>,
     /// Edit was clicked, for the open item.
     edit: bool,
+    /// The footer's Password history link was clicked.
+    history: bool,
 }
 
 /// A button on a field row that acts outside the vault.
@@ -1258,7 +1298,8 @@ fn details_pane(
                 return Ok(());
             }
             pass.pressed = fields(ui, view, revealed)?;
-            footer(ui, details.index, view)
+            pass.history = footer(ui, details.index, view)?;
+            Ok(())
         })?
         .padding([24.0, 16.0, 24.0, 24.0])?;
         Ok(())
@@ -1298,6 +1339,7 @@ fn commands(ui: &mut Ui, summary: &CipherSummary, view: &CipherView) -> Result<D
         more,
         pressed: None,
         edit,
+        history: false,
     })
 }
 
@@ -1333,7 +1375,10 @@ fn item_menu(
     ui: &mut Ui,
     index: &VaultIndex,
     summary: &CipherSummary,
+    // How many old passwords the item has; 0 hides Password history.
+    old_passwords: usize,
     picked: &mut Option<VaultAction>,
+    wants_history: &mut bool,
 ) -> Result<()> {
     let id = summary.id;
     if summary.deleted {
@@ -1366,6 +1411,12 @@ fn item_menu(
             if item.clicked()? {
                 *picked = Some(VaultAction::User(UserAction::Copy { id, field }));
             }
+        }
+        if old_passwords > 0 {
+            *wants_history |= ui
+                .menu_item("history", '\u{E81C}', "Password history")?
+                .clicked()?;
+            any = true;
         }
         if any {
             ui.menu_separator("copies")?;
@@ -1756,9 +1807,10 @@ fn ssh_key_fields(
     .secondary(true)?;
     Ok(copied)
 }
-/// The line under the fields: the folder and when the password last
-/// changed.
-fn footer(ui: &mut Ui, index: &VaultIndex, view: &CipherView) -> Result<()> {
+/// The line under the fields: the folder, when the password last changed,
+/// and a "Password history (n)" link when it has old passwords. Gives
+/// whether the link was clicked.
+fn footer(ui: &mut Ui, index: &VaultIndex, view: &CipherView) -> Result<bool> {
     let folder = view
         .folder_id
         .and_then(|id| index.folders.iter().find(|folder| folder.id == id))
@@ -1769,11 +1821,10 @@ fn footer(ui: &mut Ui, index: &VaultIndex, view: &CipherView) -> Result<()> {
     };
     // The dates are ISO 8601; the day is enough here.
     let day = changed.map(|date| date.get(..10).unwrap_or(date));
-    let history = view.password_history.len();
     let mut footer = ui.label(
         "footer",
         format_args!(
-            "{}{folder}{}{}{}",
+            "{}{folder}{}{}",
             if view.folder_id.is_some() {
                 "Folder: "
             } else {
@@ -1781,17 +1832,25 @@ fn footer(ui: &mut Ui, index: &VaultIndex, view: &CipherView) -> Result<()> {
             },
             day.map_or("", |_| " · Password changed "),
             day.unwrap_or(""),
-            match history {
-                0 => "",
-                _ => " · Has password history",
-            },
         ),
     )?;
     footer
         .overflow(Overflow::Wrap)?
         .secondary(true)?
         .style("CaptionTextBlockStyle")?;
-    Ok(())
+    match view.password_history.len() {
+        0 => Ok(false),
+        // The count is at most 5, so the label never allocates past its
+        // first write.
+        count => {
+            let mut label = String::with_capacity(24);
+            write!(label, "Password history ({count})").expect("writing to a String does not fail");
+            let mut link = ui.link("history", &label)?;
+            // Its text lines up with the label's, past the link's padding.
+            link.margin([-12.0, 0.0, 0.0, 0.0])?;
+            Ok(link.clicked())
+        }
+    }
 }
 
 /// One field row of a group, before it is drawn.

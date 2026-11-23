@@ -15,6 +15,7 @@ mod bindings;
 mod conflict;
 mod copy;
 mod edit;
+mod history;
 mod io;
 mod login;
 mod route;

@@ -22,6 +22,8 @@
 mod conflict;
 #[path = "../src/edit.rs"]
 mod edit;
+#[path = "../src/history.rs"]
+mod history;
 #[path = "../src/vault.rs"]
 mod vault;
 
@@ -38,7 +40,8 @@ use chaveiro_core::{
     crypto::SecretString,
     vault::{
         CardView, CipherContent, CipherKind, CipherSummary, CipherView, CopyField, CopyFields,
-        CustomField, FolderSummary, IdentityView, LoginView, SshKeyView, UriView, VaultIndex,
+        CustomField, FolderSummary, IdentityView, LoginView, PasswordHistoryEntry, SshKeyView,
+        UriView, VaultIndex,
     },
 };
 use std::{
@@ -606,7 +609,21 @@ fn view_of(summary: &CipherSummary) -> CipherView {
         reprompt: summary.id.as_u128() == 15,
         content,
         fields,
-        password_history: Vec::new(),
+        // GitHub has three old passwords, as in the design.
+        password_history: match summary.id.as_u128() {
+            11 => [
+                ("Hunter2-old", "2026-10-14T07:12:00.000Z"),
+                ("Tr0ub4dor&3", "2026-03-02T17:40:00.000Z"),
+                ("correct-horse", "2025-08-11T05:55:00.000Z"),
+            ]
+            .into_iter()
+            .map(|(password, date)| PasswordHistoryEntry {
+                password: SecretString::new(password.into()),
+                last_used_date: date.into(),
+            })
+            .collect(),
+            _ => Vec::new(),
+        },
     }
 }
 

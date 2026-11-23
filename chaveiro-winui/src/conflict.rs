@@ -41,7 +41,7 @@ pub fn conflict_dialog(
         .filter(|row| row.mine != row.theirs)
         .collect();
     let buttons = DialogButtons {
-        primary: "Keep my changes",
+        primary: Some("Keep my changes"),
         // Shorter than the design's "Keep the server version", which the
         // dialog's equal-width buttons cut off.
         secondary: Some("Keep server version"),
