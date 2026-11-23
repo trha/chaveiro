@@ -1077,6 +1077,31 @@ fn offline_sync_keeps_cached_index() {
 }
 
 #[test]
+fn a_save_held_for_a_refresh_that_fails_reports_an_error() {
+    let mut harness = Harness::stored(REVISION);
+    let effects = harness.unlock();
+    harness.settle_sync(&effects, REVISION);
+    harness.now_ms += TOKEN.expires_in * 1000;
+    harness.user(UserAction::Open(EXAMPLE_ID));
+    let effects = harness.user(UserAction::Save(Box::new(edited("Edited login"))));
+    let (refresh, request) = one_http(&effects);
+    assert_eq!(form(request)["grant_type"], "refresh_token");
+    assert!(vault(&harness.core).saving, "the save waits for the token");
+    harness.send(Input::Http {
+        id: refresh,
+        response: Err(chaveiro_core::core::HttpError {
+            message: "offline".into(),
+        }),
+    });
+    let screen = vault(&harness.core);
+    assert!(!screen.saving);
+    assert!(
+        matches!(screen.error, Some(ItemError::Rejected(message)) if message == "offline"),
+        "the form learns the save did not go out"
+    );
+}
+
+#[test]
 fn wrong_unlock_password_stays_locked() {
     let mut harness = Harness::stored(REVISION);
     let effects = harness.user(UserAction::Unlock {
@@ -1460,6 +1485,46 @@ fn out_of_date_save_syncs_then_shows_conflict() {
 }
 
 #[test]
+fn an_out_of_date_save_stays_saving_until_the_conflict_is_ready() {
+    let mut harness = Harness::unlocked(REVISION);
+    harness.user(UserAction::Open(EXAMPLE_ID));
+    let effects = harness.user(UserAction::Save(Box::new(edited("Edited login"))));
+    let (put, _) = one_http(&effects);
+    let effects = harness.answer_fixture(put, "cipher_put_out_of_date.json");
+    assert!(vault(&harness.core).saving, "the sync for the conflict runs");
+    let mut sync = fixture("sync.json").1;
+    for cipher in sync["ciphers"].as_array_mut().unwrap() {
+        if cipher["id"] == EXAMPLE_ID.to_string() {
+            *cipher = Value::Object(put_success_cipher().raw);
+        }
+    }
+    harness.settle_sync_with(&effects, REVISION + 10_000, &sync);
+    let screen = vault(&harness.core);
+    assert!(!screen.saving);
+    assert!(screen.open.unwrap().conflict().is_some());
+}
+
+#[test]
+fn a_conflict_whose_sync_fails_is_a_failed_save() {
+    let mut harness = Harness::unlocked(REVISION);
+    harness.user(UserAction::Open(EXAMPLE_ID));
+    let effects = harness.user(UserAction::Save(Box::new(edited("Edited login"))));
+    let (put, _) = one_http(&effects);
+    let effects = harness.answer_fixture(put, "cipher_put_out_of_date.json");
+    let (check, _) = one_http(&effects);
+    harness.send(Input::Http {
+        id: check,
+        response: Err(chaveiro_core::core::HttpError {
+            message: "offline".into(),
+        }),
+    });
+    let screen = vault(&harness.core);
+    assert!(!screen.saving);
+    assert!(screen.open.unwrap().conflict().is_none());
+    assert!(matches!(screen.error, Some(ItemError::Rejected(_))));
+}
+
+#[test]
 fn sync_while_editing_marks_stale_and_save_conflicts() {
     let mut harness = Harness::unlocked(REVISION);
     harness.user(UserAction::Open(EXAMPLE_ID));
@@ -1565,8 +1630,29 @@ fn create_in_flight_refuses_a_second_create() {
     let effects = harness.user(UserAction::Save(Box::new(view)));
     assert!(http(&effects).is_empty(), "a second save sends nothing");
     let screen = vault(&harness.core);
-    assert!(screen.creating);
+    assert!(screen.saving);
     assert!(matches!(screen.error, Some(ItemError::Busy)));
+}
+
+#[test]
+fn an_edit_saves_until_the_server_answers() {
+    let mut harness = Harness::unlocked(REVISION);
+    harness.user(UserAction::Open(EXAMPLE_ID));
+    let effects = harness.user(UserAction::Save(Box::new(edited("Edited login"))));
+    let (put, request) = one_http(&effects);
+    assert!(vault(&harness.core).saving);
+    harness.answer(put, 200, &stored(request, EXAMPLE_ID));
+    assert!(!vault(&harness.core).saving);
+}
+
+#[test]
+fn a_write_without_a_form_is_no_save() {
+    let mut harness = Harness::unlocked(REVISION);
+    harness.user(UserAction::MoveToFolder {
+        id: EXAMPLE_ID,
+        folder: None,
+    });
+    assert!(!vault(&harness.core).saving);
 }
 
 #[test]
@@ -1580,7 +1666,7 @@ fn landed_create_opens_the_new_item() {
     let new_id = Uuid::from_u128(0xC0FFEE);
     harness.answer(post, 200, &stored(request, new_id));
     let screen = vault(&harness.core);
-    assert!(!screen.creating);
+    assert!(!screen.saving);
     let open = screen.open.expect("the new item opens");
     assert_eq!(open.view.id, Some(new_id));
     assert_eq!(open.view.name.as_str(), "New login");

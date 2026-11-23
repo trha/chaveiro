@@ -1803,19 +1803,40 @@ impl Core {
                         effects.push(Effect::Rerender);
                         State::Unlocked(unlocked)
                     }
-                    Ok(Some(ApiReply::Failed { message, write })) => {
-                        match write.map(|write| write.passkey) {
-                            Some(Some(PasskeyWrite::Created { id, .. })) => {
-                                effects.push(Effect::PasskeyReply {
-                                    id,
-                                    reply: Err(PasskeyError::NotAllowed),
-                                });
+                    Ok(Some(ApiReply::Failed { message, failed })) => {
+                        for kind in failed {
+                            match kind {
+                                ApiKind::Write(Write {
+                                    passkey: Some(PasskeyWrite::Created { id, .. }),
+                                    ..
+                                }) => {
+                                    effects.push(Effect::PasskeyReply {
+                                        id,
+                                        reply: Err(PasskeyError::NotAllowed),
+                                    });
+                                }
+                                // A lost counter bump only lets the counter
+                                // lag; the next assertion writes a higher one.
+                                ApiKind::Write(Write {
+                                    passkey: Some(PasskeyWrite::Counter(_)),
+                                    ..
+                                }) => {}
+                                ApiKind::Write(_) | ApiKind::Folder(_) => {
+                                    unlocked.error = Some(ItemError::Rejected(message.clone()));
+                                }
+                                ApiKind::RevisionDate { .. } | ApiKind::Sync { .. } => {
+                                    unlocked.sync = SyncState::Failed(message.clone());
+                                    // A conflict waits for this sync; without
+                                    // it the save just failed.
+                                    if let Some(open) = unlocked.open.as_mut()
+                                        && let ConflictStage::Syncing { .. } = open.conflict
+                                    {
+                                        open.conflict = ConflictStage::None;
+                                        unlocked.error =
+                                            Some(ItemError::Rejected(message.clone()));
+                                    }
+                                }
                             }
-                            // A lost counter bump only lets the counter lag;
-                            // the next assertion writes a higher one.
-                            Some(Some(PasskeyWrite::Counter(_))) => {}
-                            Some(None) => unlocked.error = Some(ItemError::Rejected(message)),
-                            None => unlocked.sync = SyncState::Failed(message),
                         }
                         effects.push(Effect::Rerender);
                         State::Unlocked(unlocked)

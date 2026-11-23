@@ -25,10 +25,11 @@ pub(super) const REFRESH_MARGIN: u64 = 60 * 1000;
 pub(super) enum ApiReply {
     /// A sync answer arrived; the cache may have changed.
     Synced,
+    /// Calls that got no answer: one request, or every call held for a
+    /// refresh that failed.
     Failed {
         message: String,
-        /// The write that failed; [`None`] for a sync or revision check.
-        write: Option<Write>,
+        failed: Vec<ApiKind>,
     },
     Written {
         write: Write,
@@ -61,10 +62,10 @@ pub(super) fn account_answer(
             account.refreshing = false;
             // Offline: the held calls fail like any offline request, and
             // the user retries them.
-            account.waiting.clear();
+            let failed = account.waiting.drain(..).map(|call| call.kind).collect();
             Ok(Some(ApiReply::Failed {
                 message: error.message,
-                write: None,
+                failed,
             }))
         }
         (Purpose::Refresh, Ok(answer)) => {
@@ -104,10 +105,7 @@ pub(super) fn account_answer(
             (ApiKind::Folder(folder), response) => Ok(Some(ApiReply::Folder { folder, response })),
             (kind, Err(error)) => Ok(Some(ApiReply::Failed {
                 message: error.message,
-                write: match kind {
-                    ApiKind::Write(write) => Some(write),
-                    _ => None,
-                },
+                failed: vec![kind],
             })),
             (ApiKind::RevisionDate { force }, Ok(answer)) => {
                 let revision = match answer.status {
@@ -117,7 +115,7 @@ pub(super) fn account_answer(
                 match revision {
                     None => Ok(Some(ApiReply::Failed {
                         message: format!("revision check failed: HTTP {}", answer.status),
-                        write: None,
+                        failed: vec![ApiKind::RevisionDate { force }],
                     })),
                     Some(revision) => {
                         let current = account.cache.as_ref().map(|cache| cache.revision);
@@ -144,7 +142,7 @@ pub(super) fn account_answer(
                 match body.and_then(|body| Cache::from_sync(body, revision, now_ms)) {
                     None => Ok(Some(ApiReply::Failed {
                         message: format!("sync failed: HTTP {}", answer.status),
-                        write: None,
+                        failed: vec![ApiKind::Sync { revision }],
                     })),
                     Some(cache) => {
                         // Never put an older account revision over a newer one,
@@ -297,20 +295,31 @@ pub(super) fn send_edit(
 /// Whether a write to the cipher `cipher_id` is in flight or waits for a
 /// token.
 pub(super) fn writing(requests: &Table, account: &Account, cipher_id: Uuid) -> bool {
-    let write_to = |kind: &ApiKind| matches!(kind, ApiKind::Write(write) if write.cipher_id == Some(cipher_id));
-    requests.any(|purpose| matches!(purpose, Purpose::Api(call) if write_to(&call.kind)))
-        || account.waiting.iter().any(|call| write_to(&call.kind))
+    pending_write(requests, account, |write| {
+        write.cipher_id == Some(cipher_id)
+    })
 }
 
 /// A create the user saved is in flight or waits to be sent. A passkey
 /// create does not count, because the user did not save it from a form.
 pub(super) fn creating(requests: &Table, account: &Account) -> bool {
-    let create = |kind: &ApiKind| {
-        matches!(kind, ApiKind::Write(write)
-            if write.action == WriteAction::Create && write.passkey.is_none())
-    };
-    requests.any(|purpose| matches!(purpose, Purpose::Api(call) if create(&call.kind)))
-        || account.waiting.iter().any(|call| create(&call.kind))
+    pending_write(requests, account, |write| {
+        write.action == WriteAction::Create && write.passkey.is_none()
+    })
+}
+
+/// A create or update the user saved from a form is in flight or waits to
+/// be sent.
+pub(super) fn saving(requests: &Table, account: &Account) -> bool {
+    // Only `UserAction::Save` sends a write with a view.
+    pending_write(requests, account, |write| write.view.is_some())
+}
+
+/// Whether a write that `matches` is in flight or waits for a token.
+fn pending_write(requests: &Table, account: &Account, matches: impl Fn(&Write) -> bool) -> bool {
+    let wanted = |kind: &ApiKind| matches!(kind, ApiKind::Write(write) if matches(write));
+    requests.any(|purpose| matches!(purpose, Purpose::Api(call) if wanted(&call.kind)))
+        || account.waiting.iter().any(|call| wanted(&call.kind))
 }
 
 /// Forgets every pending request and held call, refusing the passkey saves

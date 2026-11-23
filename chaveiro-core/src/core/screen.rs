@@ -1,5 +1,5 @@
 use super::{
-    api::creating,
+    api::saving,
     input::DeviceKeyError,
     passkey::PasskeyPrompt,
     request::Purpose,
@@ -61,10 +61,16 @@ pub struct VaultScreen<'a> {
     /// one.
     pub sync_error: Option<&'a str>,
     pub error: Option<&'a ItemError>,
-    /// A new item the user saved waits for the server. A second
-    /// [`UserAction::Save`](super::UserAction::Save) of a new item meanwhile gets
-    /// [`ItemError::Busy`]. Once it lands, [`open`](Self::open) holds it.
-    pub creating: bool,
+    /// An item the user saved, new or edited, waits for the server. Once a
+    /// new item lands, [`open`](Self::open) holds it; an edited item that is
+    /// open shows the server's copy. A second
+    /// [`UserAction::Save`](super::UserAction::Save) of a new item, or of the
+    /// same item, meanwhile gets [`ItemError::Busy`]; a save of another item
+    /// goes out.
+    /// Also true while an out-of-date save waits for the sync that brings
+    /// the server copy, so [`OpenItem::conflict`] is ready once this turns
+    /// false.
+    pub saving: bool,
     /// The cache's account revision (epoch ms); [`None`] before the first
     /// sync after login.
     pub revision: Option<u64>,
@@ -280,7 +286,11 @@ impl Core {
                     _ => None,
                 },
                 error: unlocked.error.as_ref(),
-                creating: creating(&self.requests, &unlocked.account),
+                saving: saving(&self.requests, &unlocked.account)
+                    || unlocked
+                        .open
+                        .as_ref()
+                        .is_some_and(|open| matches!(open.conflict, ConflictStage::Syncing { .. })),
                 revision: unlocked.account.cache.as_ref().map(|cache| cache.revision),
                 synced_at: unlocked.account.cache.as_ref().map(|cache| cache.synced_at),
                 device_unlock: unlocked.account.device_wrap.is_some(),
