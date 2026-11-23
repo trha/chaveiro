@@ -8,7 +8,8 @@ use crate::{
 use std::{any::Any, hash::Hash};
 
 /// Runs `body` only when `deps` differs from the value of the last run, the
-/// node is new, or an event reached a node inside it this pass. A skipped
+/// node is new, an event reached a node inside it this pass, or a task,
+/// stream or flow inside it woke since the last pass. A skipped
 /// run declares the controls of the last run again, so the parent keeps
 /// them.
 ///
@@ -27,7 +28,7 @@ pub fn cache<S: Shell, D: 'static + PartialEq>(
             emitted: Vec::new(),
         })
     });
-    let event = core.tree.has_event(node);
+    let event = core.tree.has_event(node) || core.tree.is_woken(node);
     let cache = cache_mut(core, node);
     let stored = cache
         .deps

@@ -2,8 +2,16 @@ use crate::{
     testing::{TestError, Ui, ui},
     tree::Key,
 };
+use futures_core::Stream;
 use proptest::prelude::*;
-use std::{cell::Cell, rc::Rc};
+use std::{
+    cell::{Cell, RefCell},
+    collections::VecDeque,
+    future::Future,
+    pin::Pin,
+    rc::Rc,
+    task::{Context, Poll, Waker},
+};
 
 /// One pass of the model: whether the app declares the cache, its deps, and
 /// whether an event reaches a node inside it.
@@ -128,6 +136,102 @@ fn a_failed_build_leaves_no_node_behind() {
     ui.begin();
     ui.end().expect("no WinUI call can fail here");
     assert_eq!(ui.tree.live().len(), 1, "only the root is left");
+}
+
+/// A future that a test finishes by hand.
+struct Remote(Rc<RefCell<(Option<u32>, Option<Waker>)>>);
+
+impl Future for Remote {
+    type Output = u32;
+
+    fn poll(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<u32> {
+        let mut shared = self.0.borrow_mut();
+        match shared.0.take() {
+            Some(value) => Poll::Ready(value),
+            None => {
+                shared.1 = Some(context.waker().clone());
+                Poll::Pending
+            }
+        }
+    }
+}
+
+/// A stream that yields the values a test pushes by hand, and never ends.
+struct Feed(Rc<RefCell<(VecDeque<u32>, Option<Waker>)>>);
+
+impl Stream for Feed {
+    type Item = u32;
+
+    fn poll_next(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Option<u32>> {
+        let mut shared = self.0.borrow_mut();
+        match shared.0.pop_front() {
+            Some(value) => Poll::Ready(Some(value)),
+            None => {
+                shared.1 = Some(context.waker().clone());
+                Poll::Pending
+            }
+        }
+    }
+}
+
+#[test]
+fn a_task_that_finishes_under_an_unchanged_cache_reaches_its_body() {
+    let mut ui = ui();
+    let shared = Rc::new(RefCell::new((None, None)));
+    let pass = |ui: &mut Ui| -> Option<u32> {
+        let mut seen = None;
+        ui.begin();
+        ui.cached("cache", 0u8, |ui| {
+            seen = ui.task("task", || Remote(Rc::clone(&shared))).take();
+            Ok(())
+        })
+        .expect("no toolkit call can fail here");
+        ui.end().expect("no toolkit call can fail here");
+        seen
+    };
+    assert_eq!(pass(&mut ui), None, "the task is still running");
+    let waker = {
+        let mut state = shared.borrow_mut();
+        state.0 = Some(7);
+        state.1.take().expect("the pending task left its waker")
+    };
+    waker.wake();
+    ui.poll_woken_tasks();
+    assert_eq!(pass(&mut ui), Some(7), "the woken task reruns its cache");
+    assert_eq!(pass(&mut ui), None, "with no new wake the cache skips again");
+}
+
+#[test]
+fn a_stream_that_yields_under_an_unchanged_cache_reaches_its_body() {
+    let mut ui = ui();
+    let shared = Rc::new(RefCell::new((VecDeque::new(), None)));
+    let pass = |ui: &mut Ui| -> Vec<u32> {
+        let mut seen = Vec::new();
+        ui.begin();
+        ui.cached("outer", 0u8, |ui| {
+            ui.cached("inner", 0u8, |ui| {
+                let mut stream = ui.stream("stream", || Feed(Rc::clone(&shared)));
+                while let Some(value) = stream.next() {
+                    seen.push(value);
+                }
+                Ok(())
+            })
+        })
+        .expect("no toolkit call can fail here");
+        ui.end().expect("no toolkit call can fail here");
+        seen
+    };
+    assert_eq!(pass(&mut ui), Vec::<u32>::new());
+    for round in [vec![1, 2], vec![3]] {
+        let waker = {
+            let mut state = shared.borrow_mut();
+            state.0.extend(round.iter().copied());
+            state.1.take().expect("the pending stream left its waker")
+        };
+        waker.wake();
+        ui.poll_woken_tasks();
+        assert_eq!(pass(&mut ui), round, "both nested caches rerun");
+    }
 }
 
 /// The key of the state node inside the cache in the model test.

@@ -114,15 +114,19 @@ impl<N> Core<N> {
         }
     }
 
-    /// Polls every task and stream woken since the last turn. Called by the
-    /// runner at the start of a turn. A woken node that has dropped is
-    /// skipped. Returns whether any node was woken.
+    /// Polls every task and stream woken since the last turn, and marks each
+    /// woken task, stream and flow so the caches around it run their bodies
+    /// in the next pass. Called by the runner at the start of a turn. A woken
+    /// node that has dropped is skipped. Returns whether any node was woken.
     pub fn poll_woken_tasks(&mut self) -> bool {
         let mut woken = self.tasks.take_woken();
         let any = !woken.is_empty();
         for node in woken.drain(..) {
             // A slot reused by another node has a new generation, so a live
             // id still names the node that was woken.
+            if self.tree.get(node).is_some() {
+                self.tree.mark_woken(node);
+            }
             match self.tree.get(node).map(|node| &node.payload) {
                 Some(Node::Task(_)) => self.poll_task(node),
                 Some(Node::Stream(_)) => self.poll_stream(node),

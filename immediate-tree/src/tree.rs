@@ -131,8 +131,14 @@ impl<P> Tree<P> {
 
     /// Makes `visited` the children of `parent` and drops every old child not
     /// visited this pass, with its subtree, passing each dropped payload to
-    /// `on_drop`. Leaves `visited` empty, holding the old list's capacity.
+    /// `on_drop`. Clears the [woken](Self::mark_woken) mark of each new
+    /// child. Leaves `visited` empty, holding the old list's capacity.
     pub fn close(&mut self, parent: NodeId, visited: &mut Vec<NodeId>, mut on_drop: impl FnMut(P)) {
+        // A child was built or skipped by now, and a skip already read its
+        // mark.
+        for id in visited.iter() {
+            self.node_mut(*id).woken = false;
+        }
         std::mem::swap(&mut self.node_mut(parent).children, visited);
         let pass = self.pass;
         let mut stack = std::mem::take(&mut self.drop_stack);
@@ -186,6 +192,27 @@ impl<P> Tree<P> {
         self.node(id).event_stamp == self.pass
     }
 
+    /// Marks `id` and its ancestors as holding a woken task, stream or flow.
+    /// Unlike an event, the mark lasts until the parent of each marked node
+    /// closes with it, so it reaches the next pass from between passes.
+    pub fn mark_woken(&mut self, id: NodeId) {
+        // No early stop at a marked ancestor: a mark is cleared only when
+        // its parent closes, so a marked ancestor says nothing about the
+        // nodes between it and `id`.
+        let mut current = Some(id);
+        while let Some(id) = current {
+            let node = self.node_mut(id);
+            node.woken = true;
+            current = node.parent;
+        }
+    }
+
+    /// Whether a task, stream or flow at or under `id` woke since the last
+    /// pass that closed `id`'s parent with it.
+    pub fn is_woken(&self, id: NodeId) -> bool {
+        self.node(id).woken
+    }
+
     /// An empty child list, reusing a spare one when there is one.
     pub fn take_list(&mut self) -> Vec<NodeId> {
         self.spare_lists.pop().unwrap_or_default()
@@ -235,6 +262,7 @@ impl<P> Tree<P> {
             parent,
             stamp: self.pass,
             event_stamp: 0,
+            woken: false,
             children: self.spare_lists.pop().unwrap_or_default(),
             payload,
         };
@@ -325,6 +353,9 @@ pub struct Node<P> {
     stamp: u32,
     /// Pass in which an event targeted this node or a descendant.
     event_stamp: u32,
+    /// A task, stream or flow at or under this node woke since the node's
+    /// parent last closed with it.
+    woken: bool,
     /// Children in build order, as of the last pass that closed this node.
     children: Vec<NodeId>,
     pub payload: P,
