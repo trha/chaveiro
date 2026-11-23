@@ -154,7 +154,10 @@ impl<A: App> Runner<A> {
             let consumed = ui.begin();
             app.view(&mut ui)?;
             ui.build_rows(&mut *app)?;
-            let again = consumed || ui.take_pass_request();
+            // Taken even after a pass that consumed events, so the request
+            // does not carry over and ask for one more pass.
+            let requested = ui.take_pass_request();
+            let again = consumed || requested;
             if ui.end()? > 0 {
                 return Ok(again);
             }
