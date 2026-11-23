@@ -466,7 +466,21 @@ impl Ui {
                 Ok(())
             }
             Payload::Shortcut(_) => unreachable!("shortcut nodes are never opened"),
-            Payload::Dialog(_) => unreachable!("dialog nodes are never opened"),
+            Payload::Dialog(dialog) => {
+                assert!(declared.len() <= 1, "a dialog declares one control");
+                let declared_content = declared.first().copied();
+                if dialog.content == declared_content {
+                    return Ok(());
+                }
+                dialog.content = declared_content;
+                let dialog = dialog.dialog.cast::<crate::bindings::ContentControl>()?;
+                match declared_content {
+                    Some(content) => {
+                        dialog.SetContent(&self.control(content).element.cast::<IInspectable>()?)
+                    }
+                    None => dialog.SetContent(None::<&IInspectable>),
+                }
+            }
         }
     }
 
@@ -562,6 +576,8 @@ pub(crate) enum Payload {
 /// A dialog, shown on its first pass and hidden when its node drops.
 pub(crate) struct DialogNode {
     pub(crate) dialog: ContentDialog,
+    /// The control set as its content.
+    pub(crate) content: Option<NodeId>,
     pub(crate) subscribed: EventSet,
 }
 

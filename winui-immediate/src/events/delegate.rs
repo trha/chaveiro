@@ -161,7 +161,7 @@ fn iids(action: &Action) -> &'static [GUID] {
             EventKind::Invoked => {
                 const { &[Typed::<KeyboardAccelerator, KeyboardAcceleratorInvokedEventArgs>::IID] }
             }
-            EventKind::DialogPrimary => {
+            EventKind::DialogPrimary | EventKind::DialogSecondary => {
                 const { &[Typed::<ContentDialog, ContentDialogButtonClickEventArgs>::IID] }
             }
             EventKind::DialogClosed => {

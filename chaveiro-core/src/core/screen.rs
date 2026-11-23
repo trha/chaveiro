@@ -102,7 +102,15 @@ impl OpenItem {
     /// Both versions, once a conflict is ready for the user to pick one.
     pub fn conflict(&self) -> Option<Conflict<'_>> {
         match &self.conflict {
-            ConflictStage::Ready { mine, theirs } => Some(Conflict { mine, theirs }),
+            ConflictStage::Ready {
+                mine,
+                theirs,
+                theirs_changed,
+            } => Some(Conflict {
+                mine,
+                theirs,
+                theirs_changed,
+            }),
             _ => None,
         }
     }
@@ -111,6 +119,8 @@ impl OpenItem {
 pub struct Conflict<'a> {
     pub mine: &'a CipherView,
     pub theirs: &'a CipherView,
+    /// When the server copy changed, ISO 8601 as the server wrote it.
+    pub theirs_changed: &'a str,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

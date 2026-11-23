@@ -10,7 +10,7 @@
 
 use crate::edit::{self, Draft, EditPass, KeySource, KeyTextError, SaveState};
 use chaveiro_core::{
-    core::{ItemError, OpenItem, UserAction, VaultScreen},
+    core::{Conflict, ItemError, UserAction, VaultScreen},
     crypto::SecretString,
     filter::{Counts, Filter, KINDS},
     search::{Query, Tier},
@@ -330,6 +330,8 @@ pub fn view<A: VaultApp>(
     form: &mut VaultForm,
     screen: &VaultScreen<'_>,
     open: Option<&CipherView>,
+    // The open item's conflict, once ready for the user to settle.
+    conflict: Option<Conflict<'_>>,
     // Draws the app's status in the title bar, after the name and the
     // Offline tag, such as the copy countdown.
     status: impl FnOnce(&mut Ui) -> Result<()>,
@@ -593,7 +595,7 @@ pub fn view<A: VaultApp>(
                                     SaveState {
                                         saving: screen.saving,
                                         error: screen.error,
-                                        conflict: screen.open.and_then(OpenItem::conflict),
+                                        conflict,
                                     },
                                 )? {
                                     EditPass::Stay => {}
@@ -713,7 +715,8 @@ pub fn view<A: VaultApp>(
                 )?;
                 match dialog.answer() {
                     None => {}
-                    Some(DialogAnswer::Close) => filling.leaving = None,
+                    // The dialog has no secondary button.
+                    Some(DialogAnswer::Close | DialogAnswer::Secondary) => filling.leaving = None,
                     Some(DialogAnswer::Primary) => {
                         let to = held.to;
                         *editing = None;

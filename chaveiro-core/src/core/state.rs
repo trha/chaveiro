@@ -206,5 +206,7 @@ pub(super) enum ConflictStage {
     Ready {
         mine: Box<CipherView>,
         theirs: Box<CipherView>,
+        /// The server copy's revision date, ISO 8601.
+        theirs_changed: String,
     },
 }

@@ -171,6 +171,10 @@ impl Events {
             EventKind::DialogClosed => {
                 delegate.register(&source.cast::<IContentDialog>()?, |table| table.Closed)?
             }
+            EventKind::DialogSecondary => delegate
+                .register(&source.cast::<IContentDialog>()?, |table| {
+                    table.SecondaryButtonClick
+                })?,
             EventKind::FlyoutClosed => {
                 delegate.register(&source.cast::<IFlyoutBase>()?, |table| table.Closed)?
             }
@@ -304,11 +308,13 @@ pub(crate) enum EventKind {
     DialogPrimary,
     /// A dialog closed, by any button or Escape.
     DialogClosed,
+    /// A dialog's secondary button was clicked; the dialog then closes.
+    DialogSecondary,
 }
 
 impl EventKind {
     /// Every kind, in discriminant order, so `ALL[kind as usize] == kind`.
-    pub(crate) const ALL: [EventKind; 20] = {
+    pub(crate) const ALL: [EventKind; 21] = {
         use EventKind::*;
         let all = [
             Click,
@@ -331,6 +337,7 @@ impl EventKind {
             Invoked,
             DialogPrimary,
             DialogClosed,
+            DialogSecondary,
         ];
         let mut index = 0;
         while index < all.len() {

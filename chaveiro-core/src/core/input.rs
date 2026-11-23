@@ -165,8 +165,9 @@ pub enum UserAction {
     },
     /// Delete a folder; its items stay, outside any folder.
     DeleteFolder(Uuid),
-    /// Close the conflict screen, keeping the user's copy (to save again)
-    /// or the server's.
+    /// Settle the open item's conflict. Keeping the user's copy saves it
+    /// over the server's at once, as a [`Save`](Self::Save) would; keeping
+    /// the server's drops the user's.
     ResolveConflict {
         keep_mine: bool,
     },

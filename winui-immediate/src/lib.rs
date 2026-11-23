@@ -26,7 +26,7 @@ pub use runner::{App, run};
 pub use widget::{
     Align, AppBarButtonResponse, ButtonResponse, CODE_LENGTH, CheckBoxResponse, CodeBoxes,
     CodeDigits, ComboBoxResponse, ContentAlignment, ContentButtonResponse, DialogAnswer,
-    DialogResponse, FieldHandle, Flow, FlowResponse, FontIconResponse, IconButtonResponse,
+    DialogButtons, DialogResponse, FieldHandle, Flow, FlowResponse, FontIconResponse, IconButtonResponse,
     LabelResponse, Lend, Length, Lent, LinkResponse, ListId, MenuAnchor, MenuItemResponse,
     MenuResponse, NavigationEntry, NavigationSelection, NavigationViewResponse, Orientation,
     Overflow, Owned, OwnedFamily, PasswordField, PasswordHandle, PressableResponse, Response,

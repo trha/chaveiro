@@ -31,6 +31,7 @@ impl Ui {
                     orientation: None,
                     spacing: f64::NAN,
                     width: f64::NAN,
+                    fill: None,
                 },
             ))
         })?;
@@ -165,6 +166,40 @@ impl Ui {
         let mut response = Response { ui: self, node };
         response.dividers([false, divider, false, false])?;
         Ok(response)
+    }
+}
+
+impl Response<'_> {
+    /// Fills a stack with the theme brush named `brush`, such as
+    /// `CardBackgroundFillColorSecondaryBrush`, with `corners` rounded in
+    /// pixels (top left, top right, bottom right, bottom left), or takes the
+    /// fill and corners away for [`None`]. The brush is the theme's when
+    /// written. Panics on anything but a stack.
+    pub fn fill(&mut self, brush: Option<&'static str>, corners: [f64; 4]) -> Result<&mut Self> {
+        let Control::Stack { panel, fill, .. } = &mut self.ui.control_mut(self.node).control else {
+            panic!("only stacks take a fill");
+        };
+        let wanted = brush.map(|brush| (brush, corners));
+        if *fill != wanted {
+            let [top_left, top_right, bottom_right, bottom_left] = match brush {
+                Some(_) => corners,
+                None => [0.0; 4],
+            };
+            match brush {
+                Some(brush) => panel
+                    .cast::<IPanel>()?
+                    .SetBackground(&resource::<Brush>(brush)?)?,
+                None => panel.cast::<IPanel>()?.SetBackground(None::<&Brush>)?,
+            }
+            panel.SetCornerRadius(CornerRadius {
+                top_left,
+                top_right,
+                bottom_right,
+                bottom_left,
+            })?;
+            *fill = wanted;
+        }
+        Ok(self)
     }
 }
 

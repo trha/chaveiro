@@ -60,7 +60,7 @@ pub use check_box::CheckBoxResponse;
 pub use code_boxes::{CODE_LENGTH, CodeBoxes, CodeDigits};
 pub use combo_box::ComboBoxResponse;
 pub use command_bar::AppBarButtonResponse;
-pub use dialog::{DialogAnswer, DialogResponse};
+pub use dialog::{DialogAnswer, DialogButtons, DialogResponse};
 pub use flow::{Flow, FlowResponse, Lend, Lent, Owned, OwnedFamily, owned};
 pub use font_icon::FontIconResponse;
 pub use grid::Length;
@@ -579,6 +579,8 @@ pub(crate) enum Control {
         /// `NaN` until first written; only cards write it. A card group
         /// writes infinity, because its width is its container's.
         width: f64,
+        /// The brush and corners [`Response::fill`] wrote.
+        fill: Option<(&'static str, [f64; 4])>,
     },
     /// From [`Ui::grid`], or from [`Ui::columns`] when `across`.
     Grid {

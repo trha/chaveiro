@@ -9,6 +9,7 @@
 //! SSH key is
 //! generated when the form opens, so the form holds that private key.
 
+use crate::conflict::{Choice, Shown, conflict_dialog};
 use chaveiro_core::{
     core::{Conflict, ItemError},
     crypto::SecretString,
@@ -46,6 +47,14 @@ pub struct Draft {
     /// Save sent the item, and the form waits for the core to say how it
     /// went.
     saving: bool,
+    /// How many saves went out, which names each conflict dialog, so a
+    /// later conflict opens a dialog of its own.
+    saves: u32,
+    /// The user went back to the form from the conflict dialog of the last
+    /// save.
+    conflict_closed: bool,
+    /// The secrets the conflict dialog shows.
+    shown: Shown,
 }
 
 /// What the user can change in the form, besides the hidden boxes.
@@ -386,8 +395,20 @@ impl Draft {
             secret_typed: false,
             name_missing: false,
             expiration_invalid: false,
+            saves: 0,
+            conflict_closed: false,
+            shown: Shown::new(),
             saving: false,
         }
+    }
+
+    /// Marks a save sent: the form waits for it, and a conflict it meets
+    /// opens a dialog of its own.
+    fn sent(&mut self) {
+        self.saving = true;
+        self.saves += 1;
+        self.conflict_closed = false;
+        self.shown.clear();
     }
 
     /// Whether the user changed anything, so leaving the form would lose
@@ -694,7 +715,8 @@ pub enum EditPass {
     Close,
     /// Read text for the SSH key, and give it to [`Draft::key_read`].
     ReadKey(KeySource),
-    /// Settle the open item's conflict. Keeping theirs also closes the form.
+    /// Settle the open item's conflict. Keeping mine saves it; keeping
+    /// theirs also closes the form.
     Resolve { keep_mine: bool },
 }
 
@@ -859,23 +881,27 @@ pub fn edit_pane(
                     ui.info_bar("error", Severity::Error, "The item was not saved.", message)?;
                 }
 
-                if conflict.is_some() && !saving {
-                    ui.info_bar(
-                        "conflict",
-                        Severity::Warning,
-                        "This item changed on another device.",
-                        "Keep your version, then save it over theirs, or take theirs and \
-                         drop your changes.",
-                    )?;
-                    ui.stack("conflict choices", Orientation::Horizontal, 8.0, |ui| {
-                        if ui.button("keep mine", "Keep mine")?.clicked()? {
-                            pass = EditPass::Resolve { keep_mine: true };
+                if let Some(conflict) = conflict
+                    .as_ref()
+                    .filter(|_| !saving && !draft.conflict_closed)
+                {
+                    let choice =
+                        conflict_dialog(ui, draft.saves, conflict, index, &mut draft.shown)?;
+                    if let Some(choice) = choice {
+                        // The core settles it after this pass; until then the
+                        // dialog stays closed.
+                        draft.conflict_closed = true;
+                        match choice {
+                            // The core saves it over the server copy, so the
+                            // form waits for that save.
+                            Choice::Mine => {
+                                pass = EditPass::Resolve { keep_mine: true };
+                                draft.sent();
+                            }
+                            Choice::Theirs => pass = EditPass::Resolve { keep_mine: false },
+                            Choice::Back => {}
                         }
-                        if ui.button("take theirs", "Take theirs")?.clicked()? {
-                            pass = EditPass::Resolve { keep_mine: false };
-                        }
-                        Ok(())
-                    })?;
+                    }
                 }
 
                 let verb = match draft.base.id {
@@ -1227,7 +1253,7 @@ pub fn edit_pane(
                     Some(handle) => ui.read_password(handle)?,
                     None => SecretString::default(),
                 };
-                draft.saving = true;
+                draft.sent();
                 pass = EditPass::Save(Box::new(draft.view(index, secret)));
             }
         }

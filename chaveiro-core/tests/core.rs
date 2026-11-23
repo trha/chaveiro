@@ -1472,11 +1472,14 @@ fn out_of_date_save_syncs_then_shows_conflict() {
         conflict.theirs.name,
         CipherView::decrypt(&theirs, &KEYS).unwrap().name
     );
-    harness.user(UserAction::ResolveConflict { keep_mine: true });
-    let open = vault(&harness.core).open.unwrap();
+    assert_eq!(conflict.theirs_changed, theirs.revision_date);
+    // Keeping mine saves it over the server copy at once.
+    let effects = harness.user(UserAction::ResolveConflict { keep_mine: true });
+    let screen = vault(&harness.core);
+    let open = screen.open.unwrap();
     assert!(open.conflict().is_none());
     assert_eq!(open.view.name.as_str(), "Edited login");
-    let effects = harness.user(UserAction::Save(Box::new(edited("Edited login"))));
+    assert!(screen.saving);
     let (_, request) = one_http(&effects);
     assert_eq!(
         json_object(request)["lastKnownRevisionDate"],
@@ -1522,6 +1525,30 @@ fn a_conflict_whose_sync_fails_is_a_failed_save() {
     assert!(!screen.saving);
     assert!(screen.open.unwrap().conflict().is_none());
     assert!(matches!(screen.error, Some(ItemError::Rejected(_))));
+}
+
+#[test]
+fn keeping_theirs_sends_nothing_and_shows_their_copy() {
+    let mut harness = Harness::unlocked(REVISION);
+    harness.user(UserAction::Open(EXAMPLE_ID));
+    let mut sync = fixture("sync.json").1;
+    let theirs = put_success_cipher();
+    for cipher in sync["ciphers"].as_array_mut().unwrap() {
+        if cipher["id"] == EXAMPLE_ID.to_string() {
+            *cipher = Value::Object(theirs.raw.clone());
+        }
+    }
+    let effects = harness.user(UserAction::Sync);
+    harness.settle_sync_with(&effects, REVISION + 10_000, &sync);
+    harness.user(UserAction::Save(Box::new(edited("Edited login"))));
+    let effects = harness.user(UserAction::ResolveConflict { keep_mine: false });
+    assert!(http(&effects).is_empty());
+    let screen = vault(&harness.core);
+    assert!(!screen.saving);
+    assert_eq!(
+        screen.open.unwrap().view.name,
+        CipherView::decrypt(&theirs, &KEYS).unwrap().name
+    );
 }
 
 #[test]

@@ -75,14 +75,15 @@ pub(super) fn rebuild(
         && let ConflictStage::Syncing { mine } =
             mem::replace(&mut open.conflict, ConflictStage::None)
     {
-        match current.map(|current| CipherView::decrypt(current, &unlocked.keys)) {
-            Some(Ok(theirs)) => {
+        match current.map(|current| (current, CipherView::decrypt(current, &unlocked.keys))) {
+            Some((current, Ok(theirs))) => {
                 open.conflict = ConflictStage::Ready {
                     mine,
                     theirs: Box::new(theirs),
+                    theirs_changed: current.revision_date.clone(),
                 };
             }
-            Some(Err(error)) => unlocked.error = Some(ItemError::Unreadable(error)),
+            Some((_, Err(error))) => unlocked.error = Some(ItemError::Unreadable(error)),
             None => unlocked.error = Some(ItemError::NotFound),
         }
     }

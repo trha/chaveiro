@@ -6,6 +6,9 @@
 //! success and offline. Lock prints `lock` and closes the
 //! window. `tests/ui/vault.ps1` drives it.
 //!
+//! `VAULT_CONFLICT=1` makes the first save of an existing item meet a
+//! newer server copy, so the conflict dialog shows.
+//!
 //! `VAULT_BENCH=1` runs passes on a timer, counts the Rust allocations of
 //! each steady pass on the UI thread, prints a summary and exits.
 
@@ -15,6 +18,8 @@
 #![cfg(windows)]
 #![allow(dead_code, reason = "shares modules with the app")]
 
+#[path = "../src/conflict.rs"]
+mod conflict;
 #[path = "../src/edit.rs"]
 mod edit;
 #[path = "../src/vault.rs"]
@@ -29,7 +34,7 @@ mod copy;
 mod key_file;
 
 use chaveiro_core::{
-    core::{UserAction, VaultScreen},
+    core::{Conflict, UserAction, VaultScreen},
     crypto::SecretString,
     vault::{
         CardView, CipherContent, CipherKind, CipherSummary, CipherView, CopyField, CopyFields,
@@ -83,6 +88,9 @@ fn main() -> Result<()> {
                 _ => None,
             },
             synced_at: epoch_ms().saturating_sub(2 * 60_000),
+            conflicts: std::env::var_os("VAULT_CONFLICT").is_some(),
+            conflict: None,
+            settled: None,
         })
     })
 }
@@ -116,7 +124,18 @@ struct Preview {
     /// When the last sync succeeded, in epoch ms; two minutes before the
     /// preview started at first.
     synced_at: u64,
+    /// `VAULT_CONFLICT`: the first save of an existing item meets a newer
+    /// server copy, as the core reports it.
+    conflicts: bool,
+    /// The user's copy and the made-up server copy of a save that met one.
+    conflict: Option<(Box<CipherView>, Box<CipherView>)>,
+    /// The item whose conflict the user settled by keeping their copy, so
+    /// its next save goes through.
+    settled: Option<Uuid>,
 }
+
+/// When the made-up server copy of a conflict changed.
+const THEIRS_CHANGED: &str = "2026-11-21T14:02:00.000Z";
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum SyncPreview {
@@ -166,8 +185,13 @@ impl App for Preview {
         let open = self
             .opened
             .and_then(|id| self.views.iter().find(|view| view.id == Some(id)));
+        let conflict = self.conflict.as_ref().map(|(mine, theirs)| Conflict {
+            mine,
+            theirs,
+            theirs_changed: THEIRS_CHANGED,
+        });
         let (copies, window) = (&mut self.copies, self.window);
-        let pass = vault::view::<Self>(ui, &mut self.form, &screen, open, |ui| {
+        let pass = vault::view::<Self>(ui, &mut self.form, &screen, open, conflict, |ui| {
             copies.status(ui, window)
         })?;
         self.window = Some(pass.window);
@@ -274,6 +298,39 @@ impl Preview {
                 self.views.push(*view);
                 self.opened = Some(id);
                 self.revision += 1;
+            }
+            // The server copy changed: its password and notes differ.
+            UserAction::Save(view)
+                if self.conflicts
+                    && view.id.is_some()
+                    && self.settled != view.id
+                    && self.conflict.is_none() =>
+            {
+                let id = view.id.expect("matched above");
+                eprintln!("conflict {}", id.as_u128());
+                let mut theirs = self.views[self.position(id)].clone();
+                if let CipherContent::Login(login) = &mut theirs.content {
+                    login.password = Some(SecretString::new("changed-on-phone".into()));
+                }
+                theirs.notes = Some(SecretString::new("Rotated from the phone.".into()));
+                self.conflict = Some((view, Box::new(theirs)));
+            }
+            UserAction::ResolveConflict { keep_mine } => {
+                eprintln!("resolve keep_mine={keep_mine}");
+                if let Some((mine, theirs)) = self.conflict.take() {
+                    match keep_mine {
+                        // The core saves the user's copy at once.
+                        true => {
+                            self.settled = mine.id;
+                            self.act(UserAction::Save(mine));
+                        }
+                        false => {
+                            let position = self.position(theirs.id.expect("a stored item"));
+                            self.views[position] = *theirs;
+                            self.revision += 1;
+                        }
+                    }
+                }
             }
             UserAction::Save(view) => {
                 let id = view.id.expect("a save without an id is a create, above");

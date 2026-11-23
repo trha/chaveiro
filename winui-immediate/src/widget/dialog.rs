@@ -4,7 +4,7 @@
 //! declaring it until [`DialogResponse::answer`] gives an answer. A pass that
 //! stops declaring it closes it.
 
-use super::{boxed, resource};
+use super::{Overflow, boxed, resource};
 use crate::{
     bindings::{ContentDialog, ContentDialogButton, FrameworkElement, Style},
     events::EventKind,
@@ -31,6 +31,30 @@ impl Ui {
         primary: &str,
         close: &str,
     ) -> Result<DialogResponse> {
+        let buttons = DialogButtons {
+            primary,
+            secondary: None,
+            close,
+            default: DialogAnswer::Close,
+        };
+        self.content_dialog(id, title, buttons, |ui| {
+            ui.label("message", format_args!("{message}"))?
+                .overflow(Overflow::Wrap)?;
+            Ok(())
+        })
+    }
+
+    /// A modal dialog as [`dialog`](Self::dialog) opens, whose body is the
+    /// one control `body` declares. The app declares the body on every pass
+    /// while the dialog is open, so it can change, as when the user shows a
+    /// hidden value. The title and buttons are those of the first pass.
+    pub fn content_dialog(
+        &mut self,
+        id: impl Hash,
+        title: &str,
+        buttons: DialogButtons<'_>,
+        body: impl FnOnce(&mut Ui) -> Result<()>,
+    ) -> Result<DialogResponse> {
         let owner = self.enclosing_control();
         let (node, visit) = self.visit(id, ChildKind::Logical, || {
             let dialog = ContentDialog::new()?;
@@ -40,31 +64,43 @@ impl Ui {
                 .SetStyle(&resource::<Style>("DefaultContentDialogStyle")?)?;
             Ok(Payload::Dialog(Box::new(DialogNode {
                 dialog,
+                content: None,
                 subscribed: Default::default(),
             })))
         })?;
         self.subscribe_native(
             node,
-            &[EventKind::DialogPrimary, EventKind::DialogClosed],
+            &[
+                EventKind::DialogPrimary,
+                EventKind::DialogSecondary,
+                EventKind::DialogClosed,
+            ],
             |payload| match payload {
                 Payload::Dialog(dialog) => (&dialog.dialog, &mut dialog.subscribed),
                 _ => unreachable!("dialog keys hold dialogs"),
             },
         )?;
+        self.open(node);
+        body(self)?;
+        self.close()?;
         if visit == Visit::Created {
             let Payload::Dialog(dialog) = self.core.tree.native(node) else {
                 unreachable!("dialog keys hold dialogs")
             };
             let control = &dialog.dialog;
-            // A dialog shows once, with the text of its first pass, so its
-            // text is written only here.
+            // A dialog shows once, so its title and buttons are written
+            // only here.
             control.SetTitle(&boxed(title))?;
-            control
-                .cast::<crate::bindings::ContentControl>()?
-                .SetContent(&boxed(message))?;
-            control.SetPrimaryButtonText(primary)?;
-            control.SetCloseButtonText(close)?;
-            control.SetDefaultButton(ContentDialogButton::Close)?;
+            control.SetPrimaryButtonText(buttons.primary)?;
+            if let Some(secondary) = buttons.secondary {
+                control.SetSecondaryButtonText(secondary)?;
+            }
+            control.SetCloseButtonText(buttons.close)?;
+            control.SetDefaultButton(match buttons.default {
+                DialogAnswer::Primary => ContentDialogButton::Primary,
+                DialogAnswer::Secondary => ContentDialogButton::Secondary,
+                DialogAnswer::Close => ContentDialogButton::Close,
+            })?;
             control
                 .cast::<crate::bindings::UIElement>()?
                 .SetXamlRoot(&owner.XamlRoot()?)?;
@@ -72,16 +108,31 @@ impl Ui {
             // awaited; it ends when the dialog closes.
             control.ShowAsync()?;
         }
-        let answer = match (
-            self.events.happened(node, EventKind::DialogPrimary),
-            self.events.happened(node, EventKind::DialogClosed),
-        ) {
-            (true, _) => Some(DialogAnswer::Primary),
-            (false, true) => Some(DialogAnswer::Close),
-            (false, false) => None,
+        // A button click comes with the close that follows it.
+        let happened = |kind| self.events.happened(node, kind);
+        let answer = if happened(EventKind::DialogPrimary) {
+            Some(DialogAnswer::Primary)
+        } else if happened(EventKind::DialogSecondary) {
+            Some(DialogAnswer::Secondary)
+        } else if happened(EventKind::DialogClosed) {
+            Some(DialogAnswer::Close)
+        } else {
+            None
         };
         Ok(DialogResponse { answer })
     }
+}
+
+/// The buttons of a [`Ui::content_dialog`].
+#[derive(Clone, Copy)]
+pub struct DialogButtons<'a> {
+    pub primary: &'a str,
+    /// A third button between the primary and the close one.
+    pub secondary: Option<&'a str>,
+    pub close: &'a str,
+    /// The button Enter picks, which gets the accent. A secondary default
+    /// with no secondary button leaves the dialog without one.
+    pub default: DialogAnswer,
 }
 
 /// What [`Ui::dialog`] returns.
@@ -102,6 +153,8 @@ impl DialogResponse {
 pub enum DialogAnswer {
     /// The primary button.
     Primary,
+    /// The secondary button.
+    Secondary,
     /// The close button, or Escape.
     Close,
 }

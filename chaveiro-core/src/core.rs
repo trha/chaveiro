@@ -150,6 +150,8 @@ impl Core {
         let remembered = &mut self.remembered;
         let settings = &self.settings;
         let mut state = mem::replace(&mut self.state, State::Starting);
+        // The user's copy, when a resolve keeps it.
+        let mut resave = None;
         if let (State::Unlocked(unlocked), Input::User(_)) = (&mut state, &input) {
             unlocked.last_activity = now_ms;
         }
@@ -1520,6 +1522,7 @@ impl Core {
                                         open.conflict = ConflictStage::Ready {
                                             mine: view,
                                             theirs: Box::new(theirs),
+                                            theirs_changed: current.revision_date.clone(),
                                         };
                                     }
                                     Err(error) => {
@@ -1744,9 +1747,12 @@ impl Core {
                         .find(|cipher| cipher.id == open.base.id)
                 });
                 if let (Some(open), Some(current)) = (unlocked.open.as_mut(), current)
-                    && let ConflictStage::Ready { mine, theirs } =
+                    && let ConflictStage::Ready { mine, theirs, .. } =
                         mem::replace(&mut open.conflict, ConflictStage::None)
                 {
+                    if keep_mine {
+                        resave = Some(mine.clone());
+                    }
                     open.view = if keep_mine { *mine } else { *theirs };
                     open.base = current.clone();
                     open.stale = false;
@@ -2562,6 +2568,11 @@ impl Core {
             ) => state,
             (_, Input::Settings(_), _) => unreachable!("settings return before the match"),
         };
+        // Keeping the user's copy saves it over the server copy the
+        // resolve just took as the base, as a Save of it would.
+        if let Some(mine) = resave {
+            effects.extend(self.handle(now_ms, rng, Input::User(UserAction::Save(mine))));
+        }
         effects
     }
 

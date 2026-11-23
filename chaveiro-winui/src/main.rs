@@ -12,6 +12,7 @@
 #![windows_subsystem = "windows"]
 
 mod bindings;
+mod conflict;
 mod copy;
 mod edit;
 mod io;
@@ -23,7 +24,7 @@ mod vault;
 mod wipe;
 
 use chaveiro_core::{
-    core::{Config, Core, Effect, Input, LoginError, Screen, UserAction},
+    core::{Config, Core, Effect, Input, LoginError, OpenItem, Screen, UserAction},
     vault::VaultIndex,
 };
 use copy::Copies;
@@ -194,8 +195,9 @@ impl App for Chaveiro {
                     unreachable!("Route::Vault comes from Screen::Vault")
                 };
                 let open = screen.open.map(|item| &item.view);
+                let conflict = screen.open.and_then(OpenItem::conflict);
                 let (copies, window) = (&mut self.copies, self.io.window());
-                let pass = vault::view::<Self>(ui, &mut self.vault, &screen, open, |ui| {
+                let pass = vault::view::<Self>(ui, &mut self.vault, &screen, open, conflict, |ui| {
                     copies.status(ui, window)
                 })?;
                 self.io.set_window(pass.window);
