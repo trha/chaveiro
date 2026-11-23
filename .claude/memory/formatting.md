@@ -23,4 +23,10 @@ a broken config makes rustfmt skip formatting silently in a piped run.
 2026-11-20, and then for imports merged per crate.
 
 **How to apply:** run it before every build check that closes a work step.
+Format only the files you changed
+(`& "$env:USERPROFILE\.cargo\bin\rustfmt.exe" +nightly --edition 2024 <file>...`), never the
+whole workspace: much of the tree is unformatted, and the user wants that in
+a separate format pass (asked 2026-11-23, after a workspace run touched 10
+unrelated files). If a changed file has unformatted code of its own, keep
+the hunks you did not write out of the diff.
 See [[declaration-order]] and [[doc-links]] for the other style rules.
