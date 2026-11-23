@@ -71,7 +71,7 @@ foreach ($try in 1..10) {
     if ($menu.Count -ge 5) { break }
 }
 "  menu: $(($menu | ForEach-Object { "$($_.Current.Name)$(if (-not $_.Current.IsEnabled) { ' (off)' })" }) -join ', ')"
-"  (expect Login, Card (off), Identity (off), Secure note, SSH key (off))"
+"  (expect Login, Card, Identity, Secure note, SSH key)"
 [System.Windows.Forms.SendKeys]::SendWait("{ESC}"); Start-Sleep -Milliseconds 300
 
 "== empty name, then a saved login"

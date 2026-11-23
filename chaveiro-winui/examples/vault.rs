@@ -25,6 +25,8 @@ mod vault;
 mod clipboard;
 #[path = "../src/copy.rs"]
 mod copy;
+#[path = "../src/io/key_file.rs"]
+mod key_file;
 
 use chaveiro_core::{
     core::{UserAction, VaultScreen},
@@ -175,6 +177,13 @@ impl App for Preview {
             Some(VaultAction::User(action)) => self.act(action),
             // The preview opens no browser, so a test can check the address.
             Some(VaultAction::OpenWebsite(url)) => eprintln!("website {url}"),
+            // The app's readers, so a test can drive the real picker and
+            // clipboard.
+            Some(VaultAction::ReadKey(source)) => {
+                eprintln!("read key {source:?}");
+                self.form
+                    .key_read(source, key_file::read(source, self.window));
+            }
         }
         // Declared after the actions, so a sync starts in the pass that
         // asked for it. Each sync is a new task, so its id names the sync.

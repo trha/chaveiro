@@ -206,6 +206,11 @@ impl App for Chaveiro {
                         io::open_website(&url);
                         None
                     }
+                    VaultAction::ReadKey(source) => {
+                        self.vault
+                            .key_read(source, io::key_file::read(source, self.io.window()));
+                        None
+                    }
                 })
             }
             Route::Login | Route::Methods | Route::SecondFactor | Route::Locked => {
@@ -441,8 +446,6 @@ impl Chaveiro {
     }
 }
 
-/// A screen this app does not draw yet, with the action that leads back to
-/// login.
 fn placeholder(ui: &mut Ui, screen: &Screen<'_>) -> Result<Option<Next>> {
     // The vault has its own window, so only the unlock screen lands here.
     let (name, button, action) = match screen {

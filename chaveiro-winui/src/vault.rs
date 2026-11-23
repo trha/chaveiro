@@ -8,7 +8,7 @@
 //! list: the counts, the pane's entries and the list's rows are rebuilt
 //! only when [`VaultScreen::index_revision`] or the filter changes.
 
-use crate::edit::{self, Draft, EditPass};
+use crate::edit::{self, Draft, EditPass, KeySource, KeyTextError};
 use chaveiro_core::{
     core::{ItemError, UserAction, VaultScreen},
     crypto::SecretString,
@@ -179,6 +179,18 @@ impl VaultForm {
         // Its text wipes itself on drop.
         self.editing = None;
     }
+
+    /// Takes the text the app read for [`VaultAction::ReadKey`]. With no
+    /// form open, as after a lock, the text is dropped.
+    pub fn key_read(
+        &mut self,
+        source: KeySource,
+        text: std::result::Result<SecretString, KeyTextError>,
+    ) {
+        if let Some(editing) = &mut self.editing {
+            editing.draft.key_read(source, text);
+        }
+    }
 }
 
 /// What the pane shows, derived from one revision of the index.
@@ -296,6 +308,9 @@ pub enum VaultAction {
     Close,
     /// Open this `http` or `https` address in the default browser.
     OpenWebsite(Url),
+    /// Read text for the SSH key form, and give it to
+    /// [`VaultForm::key_read`].
+    ReadKey(KeySource),
 }
 
 /// What one pass of the vault window gives back.
@@ -577,6 +592,9 @@ pub fn view<A: VaultApp>(
                                     screen.error,
                                 )? {
                                     EditPass::Stay => {}
+                                    EditPass::ReadKey(source) => {
+                                        action = Some(VaultAction::ReadKey(source));
+                                    }
                                     EditPass::Save(view) => {
                                         action = Some(VaultAction::User(UserAction::Save(view)));
                                     }
@@ -861,20 +879,21 @@ fn list_pane<A: VaultApp>(
 }
 
 /// The New split button: its main part or Ctrl+N asks for the kind
-/// [`edit::default_kind`] gives for `filter`, and its menu for any kind with
-/// a form. Gives the kind asked for.
+/// [`edit::default_kind`] gives for `filter`, and its menu for any kind.
+/// Gives the kind asked for.
 fn new_button(ui: &mut Ui, filter: Filter) -> Result<Option<CipherKind>> {
     let mut new = None;
     let kind = edit::default_kind(filter);
     let mut button = ui.split_button("new", '\u{E710}', "New", |ui| {
         for kind in KINDS {
-            let mut item = ui.menu_item(
-                ("new", kind_glyph(kind) as u32),
-                kind_glyph(kind),
-                new_label(kind),
-            )?;
-            item.enabled(edit::has_form(kind))?;
-            if item.clicked()? {
+            if ui
+                .menu_item(
+                    ("new", kind_glyph(kind) as u32),
+                    kind_glyph(kind),
+                    new_label(kind),
+                )?
+                .clicked()?
+            {
                 new = Some(kind);
             }
         }
@@ -883,7 +902,10 @@ fn new_button(ui: &mut Ui, filter: Filter) -> Result<Option<CipherKind>> {
     button
         .accent(true)?
         .tooltip(match kind {
+            CipherKind::Card => "New card (Ctrl+N)",
+            CipherKind::Identity => "New identity (Ctrl+N)",
             CipherKind::SecureNote => "New note (Ctrl+N)",
+            CipherKind::SshKey => "New SSH key (Ctrl+N)",
             _ => "New login (Ctrl+N)",
         })?
         .valign(Align::Center)?;

@@ -11,6 +11,7 @@ use windows_sys::Win32::{
     },
     UI::WindowsAndMessaging::IsWindow,
 };
+use zeroize::Zeroizing;
 
 /// `CF_UNICODETEXT`.
 const UNICODE_TEXT: u32 = 13;
@@ -91,6 +92,39 @@ pub fn clear(copied: Copied) {
     }
     // SAFETY: this thread opened the clipboard above.
     unsafe { CloseClipboard() };
+}
+
+/// The text on the clipboard, or [`None`] when it holds no text or another
+/// app has it open.
+pub fn read() -> Option<Zeroizing<String>> {
+    // SAFETY: a null owner is allowed.
+    if unsafe { OpenClipboard(std::ptr::null_mut()) } == 0 {
+        return None;
+    }
+    // SAFETY: the clipboard is open on this thread.
+    let memory = unsafe { GetClipboardData(UNICODE_TEXT) };
+    let text = (!memory.is_null())
+        .then(|| {
+            // SAFETY: the clipboard holds `memory` until it closes.
+            let (pointer, size) = unsafe { (GlobalLock(memory), GlobalSize(memory)) };
+            (!pointer.is_null()).then(|| {
+                // SAFETY: the block is `size` bytes and locked; the text
+                // ends at its first NUL, or at the end of the block.
+                let units = unsafe { std::slice::from_raw_parts(pointer.cast::<u16>(), size / 2) };
+                let end = units.iter().position(|&unit| unit == 0).unwrap_or(units.len());
+                let mut text = Zeroizing::new(String::with_capacity(end * 3));
+                text.extend(char::decode_utf16(units[..end].iter().copied()).map(|unit| {
+                    unit.unwrap_or(char::REPLACEMENT_CHARACTER)
+                }));
+                // SAFETY: locked once above.
+                unsafe { GlobalUnlock(memory) };
+                text
+            })
+        })
+        .flatten();
+    // SAFETY: this thread opened the clipboard above.
+    unsafe { CloseClipboard() };
+    text
 }
 
 /// Sets the text and the three marks. The clipboard must be open and empty.

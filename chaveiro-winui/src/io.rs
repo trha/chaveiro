@@ -5,6 +5,7 @@
 pub(crate) mod clipboard;
 mod device_key;
 mod http;
+pub(crate) mod key_file;
 mod storage;
 
 use crate::bindings::HttpClient;
