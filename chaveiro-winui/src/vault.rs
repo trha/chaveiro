@@ -308,6 +308,8 @@ pub enum VaultAction {
     Close,
     /// Open this `http` or `https` address in the default browser.
     OpenWebsite(Url),
+    /// Copy this text from the open item's details to the clipboard.
+    Copy(SecretString),
     /// Read text for the SSH key form, and give it to
     /// [`VaultForm::key_read`].
     ReadKey(KeySource),
@@ -619,6 +621,13 @@ pub fn view<A: VaultApp>(
                             )?;
                             if let Some(asked) = pass.asked {
                                 action = Some(VaultAction::User(asked));
+                            }
+                            match pass.pressed {
+                                Some(Pressed::Copy(text)) => action = Some(VaultAction::Copy(text)),
+                                Some(Pressed::Open(url)) => {
+                                    action = Some(VaultAction::OpenWebsite(url));
+                                }
+                                None => {}
                             }
                             if let Some((id, anchor)) = pass.more {
                                 menus.open(id, anchor);
@@ -1159,6 +1168,14 @@ struct DetailsPass {
     asked: Option<UserAction>,
     /// More was clicked: the item and the button to open its menu under.
     more: Option<(Uuid, MenuAnchor)>,
+    /// A field's Copy or Open button.
+    pressed: Option<Pressed>,
+}
+
+/// A button on a field row that acts outside the vault.
+enum Pressed {
+    Copy(SecretString),
+    Open(Url),
 }
 
 /// Draws the selected item's details in a scroll area.
@@ -1211,12 +1228,7 @@ fn details_pane(
                 )?;
                 return Ok(());
             }
-            if let Some(field) = fields(ui, view, revealed)? {
-                pass.asked = Some(UserAction::Copy {
-                    id: summary.id,
-                    field,
-                });
-            }
+            pass.pressed = fields(ui, view, revealed)?;
             footer(ui, details.index, view)
         })?
         .padding([24.0, 16.0, 24.0, 24.0])?;
@@ -1247,7 +1259,11 @@ fn commands(ui: &mut Ui, summary: &CipherSummary, view: &CipherView) -> Result<D
         }
         Ok(())
     })?;
-    Ok(DetailsPass { asked, more })
+    Ok(DetailsPass {
+        asked,
+        more,
+        pressed: None,
+    })
 }
 
 /// Favorite and Move to trash, for an item outside the trash.
@@ -1402,14 +1418,17 @@ fn copyable(summary: &CipherSummary, field: CopyField) -> bool {
 /// `github.com`. Other schemes, such as an app link or `file:`, are left
 /// out, because a shared item could name any program.
 fn website(uris: &[SecretString]) -> Option<Url> {
-    uris.iter().find_map(|uri| {
-        let uri = uri.trim();
-        let url = Url::parse(uri)
-            .ok()
-            .filter(Url::has_host)
-            .or_else(|| Url::parse(&format!("https://{uri}")).ok())?;
-        matches!(url.scheme(), "http" | "https").then_some(url)
-    })
+    uris.iter().find_map(|uri| web_address(uri))
+}
+
+/// `uri` as an address the browser can open, by the rules of [`website`].
+fn web_address(uri: &str) -> Option<Url> {
+    let uri = uri.trim();
+    let url = Url::parse(uri)
+        .ok()
+        .filter(Url::has_host)
+        .or_else(|| Url::parse(&format!("https://{uri}")).ok())?;
+    matches!(url.scheme(), "http" | "https").then_some(url)
 }
 
 /// The item's type icon and name, in the subtitle style.
@@ -1425,20 +1444,19 @@ fn heading(ui: &mut Ui, kind: CipherKind, name: &str) -> Result<()> {
 }
 
 /// The field groups of `view`'s type, from the design's "Details per item
-/// type", then its custom fields and notes. Gives the field whose Copy
-/// button was clicked.
+/// type", then its custom fields and notes. Gives the Copy or Open button
+/// that was clicked.
 fn fields(
     ui: &mut Ui,
     view: &CipherView,
     revealed: &mut Vec<FieldId>,
-) -> Result<Option<CopyField>> {
-    let mut copied = None;
-    match &view.content {
-        CipherContent::Login(login) => copied = login_fields(ui, login, revealed)?,
+) -> Result<Option<Pressed>> {
+    let mut pressed = match &view.content {
+        CipherContent::Login(login) => login_fields(ui, login, revealed)?,
         CipherContent::Card(card) => card_fields(ui, card, revealed)?,
         CipherContent::Identity(identity) => identity_fields(ui, identity, revealed)?,
         CipherContent::SshKey(ssh_key) => ssh_key_fields(ui, ssh_key, revealed)?,
-        CipherContent::SecureNote => {}
+        CipherContent::SecureNote => None,
         CipherContent::Unknown => {
             ui.info_bar(
                 "unknown",
@@ -1446,8 +1464,9 @@ fn fields(
                 "Chaveiro can't show this type of item yet.",
                 "It stays safe in your vault; open it in another app to see or edit it.",
             )?;
+            None
         }
-    }
+    };
     let custom = view.fields.iter().enumerate().map(|(position, field)| {
         let id = ("custom", position);
         let caption = field.name.as_ref().map_or("", |name| name.as_str());
@@ -1473,22 +1492,21 @@ fn fields(
             _ => Field::text(id, caption, value),
         }
     });
-    group(ui, "custom fields", Some("Custom fields"), custom, revealed)?;
+    pressed = group(ui, "custom fields", Some("Custom fields"), custom, revealed)?.or(pressed);
     let caption = match view.kind {
         CipherKind::SecureNote => "Note",
         _ => "Notes",
     };
     let notes = [Field::lines(("notes", 0), caption, text(&view.notes))];
     group(ui, "notes", None, notes.into_iter(), revealed)?;
-    Ok(copied)
+    Ok(pressed)
 }
 
-/// Gives [`CopyField::Totp`] when the code's Copy button was clicked.
 fn login_fields(
     ui: &mut Ui,
     login: &LoginView,
     revealed: &mut Vec<FieldId>,
-) -> Result<Option<CopyField>> {
+) -> Result<Option<Pressed>> {
     // The code changes with the clock, so the pane draws again on each
     // second while it shows.
     let clock = std::time::SystemTime::now()
@@ -1510,12 +1528,12 @@ fn login_fields(
     ]
     .into_iter()
     .chain(code.as_ref().map(|code| Field {
-        id: ("totp", 0),
-        caption: "Authenticator code",
         value: Value::Code(code),
         kind: Kind::Code {
             seconds_left: code.seconds_left(clock.as_secs()),
         },
+        copy: true,
+        ..Field::text(("totp", 0), "Authenticator code", None)
     }))
     .chain(
         login
@@ -1542,16 +1560,25 @@ fn login_fields(
             Some(5) => "Website · match: never",
             Some(_) => "Website",
         };
-        Field::text(("website", position), caption, text(&uri.uri))
+        Field {
+            open: true,
+            ..Field::text(("website", position), caption, text(&uri.uri))
+        }
     });
-    group(ui, "websites", None, websites, revealed)?;
-    Ok(copied
-        .filter(|id| *id == ("totp", 0))
-        .map(|_| CopyField::Totp))
+    let opened = group(ui, "websites", None, websites, revealed)?;
+    Ok(copied.or(opened))
 }
 
-fn card_fields(ui: &mut Ui, card: &CardView, revealed: &mut Vec<FieldId>) -> Result<()> {
+fn card_fields(
+    ui: &mut Ui,
+    card: &CardView,
+    revealed: &mut Vec<FieldId>,
+) -> Result<Option<Pressed>> {
     let mut number = Field::secret(("number", 0), "Number", text(&card.number));
+    if let Some(digits) = text(&card.number) {
+        number.value = Value::CardNumber(digits);
+        number.copy = true;
+    }
     // The masked number keeps its last 4 digits.
     if let Some(last) = card
         .number
@@ -1581,15 +1608,14 @@ fn card_fields(ui: &mut Ui, card: &CardView, revealed: &mut Vec<FieldId>) -> Res
         },
         Field::secret(("code", 0), "Security code", text(&card.code)),
     ];
-    group(ui, "card", None, fields.into_iter(), revealed)?;
-    Ok(())
+    group(ui, "card", None, fields.into_iter(), revealed)
 }
 
 fn identity_fields(
     ui: &mut Ui,
     identity: &IdentityView,
     revealed: &mut Vec<FieldId>,
-) -> Result<()> {
+) -> Result<Option<Pressed>> {
     fn part(value: &Option<SecretString>) -> Value<'_> {
         Value::Text(text(value))
     }
@@ -1638,8 +1664,9 @@ fn identity_fields(
             "Driver's license",
             text(&identity.license_number),
         ),
-    ];
-    group(
+    ]
+    .map(|field| Field { copy: true, ..field });
+    let copied = group(
         ui,
         "identification",
         Some("Identification"),
@@ -1661,12 +1688,19 @@ fn identity_fields(
         contact.into_iter(),
         revealed,
     )?;
-    Ok(())
+    Ok(copied)
 }
 
-fn ssh_key_fields(ui: &mut Ui, ssh_key: &SshKeyView, revealed: &mut Vec<FieldId>) -> Result<()> {
+fn ssh_key_fields(
+    ui: &mut Ui,
+    ssh_key: &SshKeyView,
+    revealed: &mut Vec<FieldId>,
+) -> Result<Option<Pressed>> {
     let fields = [
-        Field::monospace(("public key", 0), "Public key", text(&ssh_key.public_key)),
+        Field {
+            copy: true,
+            ..Field::monospace(("public key", 0), "Public key", text(&ssh_key.public_key))
+        },
         Field::monospace(
             ("fingerprint", 0),
             "Fingerprint",
@@ -1678,14 +1712,14 @@ fn ssh_key_fields(ui: &mut Ui, ssh_key: &SshKeyView, revealed: &mut Vec<FieldId>
             text(&ssh_key.private_key),
         ),
     ];
-    group(ui, "ssh key", None, fields.into_iter(), revealed)?;
+    let copied = group(ui, "ssh key", None, fields.into_iter(), revealed)?;
     ui.label(
         "agent",
         format_args!("The SSH agent offers this key. Chaveiro asks you before each use."),
     )?
     .overflow(Overflow::Wrap)?
     .secondary(true)?;
-    Ok(())
+    Ok(copied)
 }
 /// The line under the fields: the folder and when the password last
 /// changed.
@@ -1733,6 +1767,10 @@ struct Field<'a> {
     /// Empty for a field the item leaves empty, which is hidden.
     value: Value<'a>,
     kind: Kind<'a>,
+    /// The row has a Copy button.
+    copy: bool,
+    /// The row has an Open button, shown when the value is a web address.
+    open: bool,
 }
 
 /// What a field shows, written straight into its label, so drawing it
@@ -1747,6 +1785,9 @@ enum Value<'a> {
     },
     /// A card number's dots, then its last digits.
     Masked(&'a str),
+    /// A card number in groups of 4, as printed on the card; spaces the
+    /// item already has are dropped.
+    CardNumber(&'a str),
     /// `MM / YYYY`, padding a one-digit month.
     Expiration(&'a str, &'a str),
     /// The parts that are not empty, joined by the separator.
@@ -1755,9 +1796,26 @@ enum Value<'a> {
 }
 
 impl Value<'_> {
+    /// What a Copy button puts on the clipboard: the text as the item holds
+    /// it, so a card number or a code copies without its spaces.
+    fn copied(&self) -> SecretString {
+        match self {
+            Value::Text(text) => SecretString::new(text.unwrap_or("").to_owned()),
+            Value::Code(code) => SecretString::new(code.as_str().to_owned()),
+            Value::CardNumber(number) => SecretString::new(
+                number
+                    .chars()
+                    .filter(|char| !char.is_whitespace())
+                    .collect(),
+            ),
+            _ => SecretString::new(self.to_string()),
+        }
+    }
+
     fn is_empty(&self) -> bool {
         match self {
             Value::Text(text) => text.is_none_or(str::is_empty),
+            Value::CardNumber(number) => number.trim().is_empty(),
             Value::Passkey { .. } | Value::Masked(_) | Value::Expiration(..) | Value::Code(_) => {
                 false
             }
@@ -1775,6 +1833,16 @@ impl std::fmt::Display for Value<'_> {
                 None => formatter.write_str(site),
             },
             Value::Masked(last) => write!(formatter, "•••• •••• •••• {last}"),
+            Value::CardNumber(number) => {
+                let digits = number.chars().filter(|char| !char.is_whitespace());
+                for (position, char) in digits.enumerate() {
+                    if position > 0 && position % 4 == 0 {
+                        formatter.write_char(' ')?;
+                    }
+                    formatter.write_char(char)?;
+                }
+                Ok(())
+            }
             Value::Expiration(month, year) => {
                 let pad = if month.len() == 1 { "0" } else { "" };
                 write!(formatter, "{pad}{month} / {year}")
@@ -1820,6 +1888,8 @@ impl<'a> Field<'a> {
             caption,
             value: Value::Text(value),
             kind: Kind::Text,
+            copy: false,
+            open: false,
         }
     }
 
@@ -1848,15 +1918,15 @@ impl<'a> Field<'a> {
 }
 
 /// Draws the fields of `fields` that have a value, in a card group under
-/// `header`. Draws nothing when none has a value. Gives the field whose
-/// Copy button was clicked.
+/// `header`. Draws nothing when none has a value. Gives the Copy or Open
+/// button that was clicked.
 fn group<'a>(
     ui: &mut Ui,
     id: &'static str,
     header: Option<&str>,
     fields: impl Clone + Iterator<Item = Field<'a>>,
     revealed: &mut Vec<FieldId>,
-) -> Result<Option<FieldId>> {
+) -> Result<Option<Pressed>> {
     let mut shown = fields.filter(|field| !field.value.is_empty());
     if shown.clone().next().is_none() {
         return Ok(None);
@@ -1870,8 +1940,8 @@ fn group<'a>(
         ui.card_group("fields", |ui| {
             let mut divider = false;
             for field in shown.by_ref() {
-                if field_row(ui, &field, divider, revealed)? {
-                    copied = Some(field.id);
+                if let Some(pressed) = field_row(ui, &field, divider, revealed)? {
+                    copied = Some(pressed);
                 }
                 divider = true;
             }
@@ -1882,16 +1952,17 @@ fn group<'a>(
     Ok(copied)
 }
 
-/// One row: the caption over the value, a Show button for a secret and a
-/// Copy button for a code. Gives whether Copy was clicked.
+/// One row: the caption over the value, then a Show button for a secret,
+/// and the Open and Copy buttons the field asks for. Gives the Copy or Open
+/// button that was clicked.
 fn field_row(
     ui: &mut Ui,
     field: &Field<'_>,
     divider: bool,
     revealed: &mut Vec<FieldId>,
-) -> Result<bool> {
+) -> Result<Option<Pressed>> {
     let shown = revealed.contains(&field.id);
-    let mut copied = false;
+    let mut pressed = None;
     ui.card_row(
         field.id,
         divider,
@@ -1921,8 +1992,8 @@ fn field_row(
                 }
                 Ok(())
             })?;
-            match field.kind {
-                Kind::Secret { .. } => {
+            ui.stack("buttons", Orientation::Horizontal, 4.0, |ui| {
+                if let Kind::Secret { .. } = field.kind {
                     let (glyph, label) = match shown {
                         true => ('\u{ED1A}', "Hide"),
                         false => ('\u{E890}', "Show"),
@@ -1934,15 +2005,28 @@ fn field_row(
                         }
                     }
                 }
-                Kind::Code { .. } => {
-                    copied = ui.icon_button("copy", '\u{E8C8}', "Copy code")?.clicked()?;
+                if field.open
+                    && let Value::Text(Some(uri)) = field.value
+                    && let Some(url) = web_address(uri)
+                    && ui.icon_button("open", '\u{E8A7}', "Open website")?.clicked()?
+                {
+                    pressed = Some(Pressed::Open(url));
                 }
-                Kind::Text | Kind::Monospace | Kind::Lines => {}
-            }
+                if field.copy {
+                    let label = match field.kind {
+                        Kind::Code { .. } => "Copy code",
+                        _ => "Copy",
+                    };
+                    if ui.icon_button("copy", '\u{E8C8}', label)?.clicked()? {
+                        pressed = Some(Pressed::Copy(field.value.copied()));
+                    }
+                }
+                Ok(())
+            })?;
             Ok(())
         },
     )?;
-    Ok(copied)
+    Ok(pressed)
 }
 
 fn text(secret: &Option<SecretString>) -> Option<&str> {

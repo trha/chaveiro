@@ -206,6 +206,10 @@ impl App for Chaveiro {
                         io::open_website(&url);
                         None
                     }
+                    VaultAction::Copy(text) => {
+                        self.copies.start(text);
+                        None
+                    }
                     VaultAction::ReadKey(source) => {
                         self.vault
                             .key_read(source, io::key_file::read(source, self.io.window()));

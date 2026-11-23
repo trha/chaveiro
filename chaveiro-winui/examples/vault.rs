@@ -177,6 +177,7 @@ impl App for Preview {
             Some(VaultAction::User(action)) => self.act(action),
             // The preview opens no browser, so a test can check the address.
             Some(VaultAction::OpenWebsite(url)) => eprintln!("website {url}"),
+            Some(VaultAction::Copy(text)) => self.copies.start(text),
             // The app's readers, so a test can drive the real picker and
             // clipboard.
             Some(VaultAction::ReadKey(source)) => {
