@@ -41,6 +41,18 @@ impl Delegate {
         Delegate::new(Action::Focus(target))
     }
 
+    /// A `TextChanging` handler that runs `hook` on its sender, a text box,
+    /// at once, before the box draws the new text.
+    pub(crate) fn text_changing(hook: TextHook) -> Delegate {
+        Delegate::new(Action::TextChanging(hook))
+    }
+
+    /// A `PreviewKeyDown` handler that runs `hook` at once, before the
+    /// sender acts on the key.
+    pub(crate) fn preview_key_down(hook: KeyHook) -> Delegate {
+        Delegate::new(Action::PreviewKeyDown(hook))
+    }
+
     fn new(action: Action) -> Delegate {
         let object = Box::new(Object {
             vtable: &VTABLE,
@@ -90,7 +102,17 @@ enum Action {
     Event(EventKind, Rc<Inbox>),
     SelectAll,
     Focus(Weak<TextBox>),
+    /// Runs on a text box's `TextChanging`, before the box draws the text.
+    TextChanging(TextHook),
+    /// Runs on an element's `PreviewKeyDown`, before the element acts on
+    /// the key.
+    PreviewKeyDown(KeyHook),
 }
+
+/// What a [`Delegate::text_changing`] does to its sender.
+pub(crate) type TextHook = Box<dyn Fn(&TextBox) -> Result<()>>;
+/// What a [`Delegate::preview_key_down`] does with its sender and key.
+pub(crate) type KeyHook = Box<dyn Fn(&IInspectable, &KeyRoutedEventArgs) -> Result<()>>;
 
 /// The delegate IIDs an action answers: those of the events it is
 /// registered on.
@@ -147,6 +169,10 @@ fn iids(action: &Action) -> &'static [GUID] {
             }
         },
         Action::SelectAll => const { &[RoutedEventHandler::IID] },
+        Action::TextChanging(_) => {
+            const { &[Typed::<TextBox, TextBoxTextChangingEventArgs>::IID] }
+        }
+        Action::PreviewKeyDown(_) => const { &[KeyEventHandler::IID] },
         Action::Focus(_) => {
             const { &[Typed::<KeyboardAccelerator, KeyboardAcceleratorInvokedEventArgs>::IID] }
         }
@@ -274,6 +300,21 @@ impl Object {
                         && let Ok(text_box) = sender.cast::<TextBox>()
                     {
                         let _ = text_box.SelectAll();
+                    }
+                }
+                // A hook that fails leaves the control as the event left
+                // it; the event itself goes on.
+                Action::TextChanging(hook) => {
+                    if let Some(text_box) = TextBox::from_raw_borrowed(&sender) {
+                        let _ = hook(text_box);
+                    }
+                }
+                Action::PreviewKeyDown(hook) => {
+                    if let (Some(sender), Some(arguments)) = (
+                        IInspectable::from_raw_borrowed(&sender),
+                        KeyRoutedEventArgs::from_raw_borrowed(&arguments),
+                    ) {
+                        let _ = hook(sender, arguments);
                     }
                 }
                 Action::Focus(target) => {

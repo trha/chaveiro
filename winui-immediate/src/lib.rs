@@ -31,7 +31,7 @@ pub use widget::{
     MenuResponse, NavigationEntry, NavigationSelection, NavigationViewResponse, Orientation,
     Overflow, Owned, OwnedFamily, PasswordField, PasswordHandle, PressableResponse, Response,
     RowFn, SLIDE_DURATION, SearchBoxResponse, SettingsCard, SettingsCardResponse, Severity, Slide,
-    SplitButtonResponse, StreamResponse, TaskResponse, TextBoxResponse, TitleBarResponse,
+    SplitButtonResponse, StreamResponse, TaskResponse, TextBoxResponse, Mask, TitleBarResponse,
     WindowResponse, owned,
 };
 /// The type [Ui::take_password] returns.

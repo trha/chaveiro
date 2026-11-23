@@ -51,7 +51,7 @@ mod split_button;
 mod stack;
 mod status;
 mod task;
-mod text_box;
+pub(crate) mod text_box;
 mod title_bar;
 mod window;
 
@@ -82,7 +82,7 @@ pub use split_button::SplitButtonResponse;
 pub use stack::Orientation;
 pub use status::ContentButtonResponse;
 pub use task::{StreamResponse, TaskResponse};
-pub use text_box::TextBoxResponse;
+pub use text_box::{Mask, TextBoxResponse};
 pub use title_bar::TitleBarResponse;
 pub use window::WindowResponse;
 pub(crate) use window::cloak;

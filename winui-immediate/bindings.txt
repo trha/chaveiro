@@ -270,3 +270,6 @@ Microsoft.UI.Xaml.Setter
 Microsoft.UI.Xaml.ISetterFactory::CreateInstance
 Windows.UI.Xaml.Interop.TypeName
 Windows.UI.Xaml.Interop.TypeKind
+
+Microsoft.UI.Xaml.Controls.TextBox::{add_TextChanging, remove_TextChanging}
+Microsoft.UI.Xaml.Controls.TextBoxTextChangingEventArgs

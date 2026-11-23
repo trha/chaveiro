@@ -8,6 +8,7 @@ pub(crate) use delegate::Delegate;
 use crate::{
     bindings::*,
     tree::{NodeId, Tree},
+    widget::text_box::Mask,
 };
 use ahash::AHashMap;
 use std::{cell::RefCell, rc::Rc};
@@ -238,6 +239,24 @@ impl Events {
         Ok(())
     }
 
+    /// Formats the text of `text_box` to `mask` whenever it changes; see
+    /// [`TextBoxResponse::mask`](crate::TextBoxResponse::mask). One delegate
+    /// serves every box of one mask.
+    pub(crate) fn mask(&self, text_box: &TextBox, mask: Mask) -> Result<()> {
+        let mut masks = self.delegates.masks.borrow_mut();
+        let position = match masks.iter().position(|(known, _)| *known == mask) {
+            Some(position) => position,
+            None => {
+                masks.push((mask, mask.delegates()));
+                masks.len() - 1
+            }
+        };
+        let [text, key] = &masks[position].1;
+        text.register(&text_box.cast::<ITextBox>()?, |table| table.TextChanging)?;
+        key.register(&text_box.cast::<IUIElement>()?, |table| table.PreviewKeyDown)?;
+        Ok(())
+    }
+
     /// Forgets `source`, whose node is being dropped.
     pub(crate) fn forget(&mut self, source: &impl Interface) {
         // A source whose identity cannot be read was never subscribed,
@@ -409,6 +428,9 @@ struct Delegates {
     events: [Delegate; EventKind::ALL.len()],
     /// Not an event the app sees: it selects the sender's text.
     select_all: Delegate,
+    /// One per mask in use, made on first use.
+    /// Its `TextChanging` and `PreviewKeyDown` handlers.
+    masks: RefCell<Vec<(Mask, [Delegate; 2])>>,
 }
 
 impl Delegates {
@@ -416,6 +438,7 @@ impl Delegates {
         Delegates {
             events: std::array::from_fn(|index| Delegate::event(EventKind::ALL[index], inbox)),
             select_all: Delegate::select_all(),
+            masks: RefCell::default(),
         }
     }
 
