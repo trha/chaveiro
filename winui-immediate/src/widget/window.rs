@@ -2,8 +2,8 @@ use crate::{
     bindings::{
         Color, CompositionBrush, CompositionTarget, Compositor, ElementTheme, FocusManager,
         FocusState, FrameworkElement, HorizontalAlignment, IAppWindowTitleBar3,
-        ICompositionSupportsSystemBackdrop, IWindow2, OverlappedPresenter, Size, SizeInt32,
-        TitleBarTheme, UIElement, VerticalAlignment, Window,
+        ICompositionSupportsSystemBackdrop, IWindow2, Size, SizeInt32, TitleBarTheme, UIElement,
+        VerticalAlignment, Window,
     },
     events::{EventKind, EventSet},
     pass::{ChildKind, NativeTree, Payload, Ui, WindowNode},
@@ -168,13 +168,30 @@ impl WindowResponse<'_> {
         let window = self.ui.window_mut(self.node);
         if !window.compact {
             window.window.SetExtendsContentIntoTitleBar(true)?;
-            let presenter = window
-                .app_window
-                .Presenter()?
-                .cast::<OverlappedPresenter>()?;
-            presenter.SetIsMaximizable(false)?;
-            presenter.SetIsMinimizable(false)?;
-            presenter.SetIsResizable(false)?;
+            // One style write and one frame change, because the three
+            // `OverlappedPresenter` setters (`IsMaximizable`, `IsMinimizable`,
+            // `IsResizable`) each change the frame, at about 10 ms each on
+            // startup. The presenter keeps reporting its old values.
+            let hwnd = hwnd(&window.window)?;
+            // SAFETY: `hwnd` is a live window.
+            unsafe {
+                let style = GetWindowLongPtrW(hwnd, GWL_STYLE);
+                SetWindowLongPtrW(
+                    hwnd,
+                    GWL_STYLE,
+                    style & !(WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX),
+                );
+                SetWindowPos(
+                    hwnd,
+                    core::ptr::null_mut(),
+                    0,
+                    0,
+                    0,
+                    0,
+                    SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+                )
+                .ok()?;
+            }
             window.compact = true;
         }
         Ok(self)
@@ -435,4 +452,16 @@ const DWMSBT_MAINWINDOW: u32 = 2;
 
 windows_core::link!("dwmapi.dll" "system" fn DwmSetWindowAttribute(hwnd: *mut core::ffi::c_void, attribute: u32, value: *const core::ffi::c_void, size: u32) -> HRESULT);
 windows_core::link!("dwmapi.dll" "system" fn DwmExtendFrameIntoClientArea(hwnd: *mut core::ffi::c_void, margins: *const i32) -> HRESULT);
+windows_core::link!("user32.dll" "system" fn GetWindowLongPtrW(hwnd: *mut core::ffi::c_void, index: i32) -> isize);
+windows_core::link!("user32.dll" "system" fn SetWindowLongPtrW(hwnd: *mut core::ffi::c_void, index: i32, value: isize) -> isize);
+windows_core::link!("user32.dll" "system" fn SetWindowPos(hwnd: *mut core::ffi::c_void, after: *mut core::ffi::c_void, x: i32, y: i32, width: i32, height: i32, flags: u32) -> windows_core::BOOL);
+const GWL_STYLE: i32 = -16;
+const WS_THICKFRAME: isize = 0x0004_0000;
+const WS_MINIMIZEBOX: isize = 0x0002_0000;
+const WS_MAXIMIZEBOX: isize = 0x0001_0000;
+const SWP_NOSIZE: u32 = 0x0001;
+const SWP_NOMOVE: u32 = 0x0002;
+const SWP_NOZORDER: u32 = 0x0004;
+const SWP_NOACTIVATE: u32 = 0x0010;
+const SWP_FRAMECHANGED: u32 = 0x0020;
 windows_core::link!("user32.dll" "system" fn GetDpiForWindow(hwnd: *mut core::ffi::c_void) -> u32);

@@ -18,3 +18,4 @@
 - [WinUI live theme](winui-live-theme.md) — theme brushes need theme::set_brush; never read ThemeDictionaries; caption buttons need PreferredTheme
 - [Win32 resize sync](win32-resize-sync.md) — undocumented user32 ordinals + DComp sync object behind UWP's synced resize; WinUI 3 stubs it
 - [immediate-tree](immediate-tree.md) — shared core under the *-immediate crates; NativeNode newtype; editing the mac copy via tar over ssh (scp fails, fish shell)
+- [WinUI startup cost](winui-startup-cost.md) — ~215 ms to first frame; fixed WinUI costs and failed workarounds
