@@ -2,6 +2,7 @@
 //! passwords, newest first, each hidden until the user shows it, with a
 //! Copy button.
 
+use crate::copy::copy_button;
 use chaveiro_core::{crypto::SecretString, vault::CipherView};
 use jiff::{Timestamp, tz::TimeZone};
 use uuid::Uuid;
@@ -110,7 +111,7 @@ pub fn history_dialog(
                                         false => ('\u{E890}', "Show"),
                                     };
                                     toggled = ui.icon_button("show", glyph, tip)?.clicked()?;
-                                    if ui.icon_button("copy", '\u{E8C8}', "Copy")?.clicked()? {
+                                    if copy_button(ui, "copy", "Copy")? {
                                         pass = HistoryPass::Copy(entry.password.clone());
                                     }
                                     Ok(())

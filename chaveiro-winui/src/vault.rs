@@ -9,6 +9,7 @@
 //! only when [`VaultScreen::index_revision`] or the filter changes.
 
 use crate::{
+    copy::copy_button,
     edit::{self, Draft, EditPass, KeySource, KeyTextError, SaveState},
     history::{History, HistoryPass, history_dialog},
 };
@@ -2113,7 +2114,7 @@ fn field_row(
                         Kind::Code { .. } => "Copy code",
                         _ => "Copy",
                     };
-                    if ui.icon_button("copy", '\u{E8C8}', label)?.clicked()? {
+                    if copy_button(ui, "copy", label)? {
                         pressed = Some(Pressed::Copy(field.value.copied()));
                     }
                 }

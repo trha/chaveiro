@@ -6,11 +6,71 @@
 
 use crate::io::clipboard::{self, Copied, CopyError};
 use chaveiro_core::crypto::SecretString;
-use std::time::{Duration, Instant};
+use std::{
+    hash::Hash,
+    time::{Duration, Instant},
+};
 use winui_immediate::{Align, Ui, owned};
 
 /// How long a copy stays on the clipboard.
 pub const CLEAR_CLIPBOARD_AFTER: Duration = Duration::from_secs(30);
+
+/// How long a copy button shows its check mark after a click.
+pub const CHECK_MARK_FOR: Duration = Duration::from_millis(1500);
+
+/// A subtle Copy button that morphs into a check mark when clicked, and
+/// back after [`CHECK_MARK_FOR`]. A click while it shows the check mark
+/// copies again and restarts the wait. `label` is its tooltip and the name
+/// screen readers say, and the first pass's `label` stays for the button's
+/// life. Returns whether it was clicked in this pass.
+pub fn copy_button(ui: &mut Ui, id: impl Hash, label: &str) -> windows_core::Result<bool> {
+    let mut clicked = false;
+    ui.flow(id, owned(&mut clicked), |flow| {
+        let label = label.to_owned();
+        async move {
+            loop {
+                flow.frame(|ui, clicked| {
+                    let hit = copy_glyphs(ui, &label, 0)?;
+                    *clicked.get_mut() = hit;
+                    Ok(hit.then_some(()))
+                })
+                .await;
+                let mut clicks = 0_u32;
+                flow.frame(|ui, clicked| {
+                    if copy_glyphs(ui, &label, 1)? {
+                        *clicked.get_mut() = true;
+                        clicks += 1;
+                    }
+                    // A new key per click starts a new wait.
+                    Ok(ui
+                        .task(("check mark", clicks), || {
+                            winui_executor::sleep(CHECK_MARK_FOR)
+                        })
+                        .take())
+                })
+                .await;
+            }
+        }
+    })?;
+    Ok(clicked)
+}
+
+/// The button of [`copy_button`], showing the Copy glyph for `shown` 0
+/// and the check mark for 1. Returns whether it was clicked.
+fn copy_glyphs(ui: &mut Ui, label: &str, shown: usize) -> windows_core::Result<bool> {
+    let mut button = ui.content_button("button", label, |ui| {
+        ui.morph("glyphs", shown, |ui| {
+            ui.font_icon("copy", '\u{E8C8}')?.size(16.0)?;
+            ui.font_icon("check mark", '\u{E73E}')?.size(16.0)?;
+            Ok(())
+        })?
+        // The content button pads by 6, so this matches the 32 px square
+        // of an icon button.
+        .margin([2.0; 4])?;
+        Ok(())
+    })?;
+    button.clicked()
+}
 
 /// The last copy asked for, and the clipboard it left.
 ///
