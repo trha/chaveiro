@@ -19,6 +19,8 @@ $automation = [System.Windows.Automation.AutomationElement]
 $descendants = [System.Windows.Automation.TreeScope]::Descendants
 $log = Join-Path $env:TEMP "winui-immediate-settings-card.txt"
 $process = Start-Process $Exe -PassThru -RedirectStandardError $log
+# Open the handle now, or ExitCode reads null once the process exits.
+$null = $process.Handle
 Start-Sleep 3
 $window = $automation::RootElement.FindFirst([System.Windows.Automation.TreeScope]::Children,
     (New-Object System.Windows.Automation.PropertyCondition($automation::ProcessIdProperty, $process.Id)))

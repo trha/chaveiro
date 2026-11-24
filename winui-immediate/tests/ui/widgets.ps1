@@ -11,6 +11,8 @@ function Start-Widgets([hashtable]$environment) {
     foreach ($entry in $environment.GetEnumerator()) { Set-Item "Env:$($entry.Key)" $entry.Value }
     $script:log = Join-Path $env:TEMP "winui-immediate-widgets.txt"
     $script:process = Start-Process $Exe -PassThru -RedirectStandardError $script:log
+    # Open the handle now, or ExitCode reads null once the process exits.
+    $null = $script:process.Handle
     Start-Sleep 3
     $script:window = $automation::RootElement.FindFirst([System.Windows.Automation.TreeScope]::Children,
         (New-Object System.Windows.Automation.PropertyCondition($automation::ProcessIdProperty, $script:process.Id)))

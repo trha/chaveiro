@@ -9,6 +9,9 @@ param([string]$Exe = "target\release\examples\steady_calls.exe", [int]$Rows = 30
 $log = Join-Path $env:TEMP "winui-immediate-steady-calls.txt"
 if ($Rows -gt 0) { $env:STEADY_ROWS = $Rows }
 $process = Start-Process $Exe -PassThru -RedirectStandardError $log
+# .NET reads ExitCode through the process handle, and without one it gives
+# null for a process that already exited, so open the handle now.
+$null = $process.Handle
 $exited = $process.WaitForExit(300000)
 Remove-Item Env:STEADY_ROWS -ErrorAction SilentlyContinue
 if (-not $exited) { Stop-Process $process -Confirm:$false }

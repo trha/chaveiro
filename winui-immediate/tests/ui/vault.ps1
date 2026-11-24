@@ -10,6 +10,8 @@ $descendants = [System.Windows.Automation.TreeScope]::Descendants
 $env:RUST_LOG = "winui_immediate=trace"
 $log = Join-Path $env:TEMP "winui-immediate-vault.txt"
 $process = Start-Process $Exe -PassThru -RedirectStandardError $log
+# Open the handle now, or ExitCode reads null once the process exits.
+$null = $process.Handle
 Remove-Item Env:RUST_LOG
 Start-Sleep 3
 

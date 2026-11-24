@@ -6,6 +6,8 @@ Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
 $automation = [System.Windows.Automation.AutomationElement]
 $log = Join-Path $env:TEMP "winui-immediate-smoke.txt"
 $process = Start-Process $Exe -PassThru -RedirectStandardError $log
+# Open the handle now, or ExitCode reads null once the process exits.
+$null = $process.Handle
 Start-Sleep 3
 
 function Windows {
