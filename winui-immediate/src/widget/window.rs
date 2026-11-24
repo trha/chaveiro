@@ -1,18 +1,21 @@
 use crate::{
     bindings::{
-        FrameworkElement, HorizontalAlignment, IWindow2, MicaBackdrop, OverlappedPresenter, Size,
-        SizeInt32, VerticalAlignment, Window,
+        Color, CompositionBrush, CompositionTarget, Compositor, ElementTheme, FocusManager,
+        FocusState, FrameworkElement, HorizontalAlignment, IAppWindowTitleBar3,
+        ICompositionSupportsSystemBackdrop, IWindow2, OverlappedPresenter, Size, SizeInt32,
+        TitleBarTheme, UIElement, VerticalAlignment, Window,
     },
     events::{EventKind, EventSet},
     pass::{ChildKind, NativeTree, Payload, Ui, WindowNode},
     tree::NodeId,
 };
-use std::hash::Hash;
-use windows_core::{BOOL, HRESULT, IInspectable, Interface, Result};
+use std::{cell::Cell, hash::Hash, rc::Rc};
+use windows_core::{HRESULT, IInspectable, Interface, Ref, Result};
 
 impl Ui {
-    /// Declares an open window. It is created on its first pass and activated
-    /// once; a window a pass does not declare is closed. `body` must declare
+    /// Declares an open window. It is created hidden on its first pass and
+    /// shows a few frames after that pass ends, once its content is drawn; a
+    /// window a pass does not declare is closed. `body` must declare
     /// at most one control, which becomes the window's content.
     pub fn window(
         &mut self,
@@ -28,8 +31,8 @@ impl Ui {
                 app_window,
                 content: None,
                 title: String::new(),
-                activated: false,
                 mica: false,
+                dark: None,
                 compact: false,
                 extends: false,
                 sized: false,
@@ -37,7 +40,7 @@ impl Ui {
                 fitted_content: None,
                 fit: false,
                 fitted_once: false,
-                cloaked: false,
+                revealed: false,
                 fit_tries: 0,
                 title_bar: None,
                 subscribed: EventSet::default(),
@@ -61,16 +64,52 @@ impl Ui {
         self.open(node);
         body(self)?;
         self.close()?;
-        let window = self.window_mut(node);
-        if !window.activated {
-            // Cloaked, so layout runs while nothing is drawn on screen; the
-            // end of the pass uncloaks it.
-            cloak(&window.window, true)?;
-            window.window.Activate()?;
-            window.activated = true;
-            window.cloaked = true;
-        }
+        self.follow_theme(node)?;
         Ok(WindowResponse { ui: self, node })
+    }
+
+    /// Gives the window frame the content's theme: the DWM dark mode flag,
+    /// which colors the frame and DWM's Mica, and the title bar's theme,
+    /// which colors its caption buttons. XAML sets neither, and the caption
+    /// buttons keep the theme the window started with when the system theme
+    /// changes. A theme change raises an event, whose pass lands here.
+    fn follow_theme(&mut self, node: NodeId) -> Result<()> {
+        let Some(content) = self.window_mut(node).content else {
+            return Ok(());
+        };
+        self.subscribe(content, &[EventKind::ThemeChanged], |control| {
+            &control.element
+        })?;
+        // The theme is read only on the first pass with content and after a
+        // change, so a steady pass makes no COM call here.
+        let known = self.window_mut(node).dark.is_some();
+        if known && !self.events.happened(content, EventKind::ThemeChanged) {
+            return Ok(());
+        }
+        let dark = self
+            .control_mut(content)
+            .element
+            .cast::<FrameworkElement>()?
+            .ActualTheme()?
+            == ElementTheme::Dark;
+        let window = self.window_mut(node);
+        if window.dark != Some(dark) {
+            set_dwm_attribute(
+                hwnd(&window.window)?,
+                DWMWA_USE_IMMERSIVE_DARK_MODE,
+                u32::from(dark),
+            )?;
+            window
+                .app_window
+                .TitleBar()?
+                .cast::<IAppWindowTitleBar3>()?
+                .SetPreferredTheme(match dark {
+                    true => TitleBarTheme::Dark,
+                    false => TitleBarTheme::Light,
+                })?;
+            window.dark = Some(dark);
+        }
+        Ok(())
     }
 
     fn window_mut(&mut self, node: NodeId) -> &mut WindowNode {
@@ -101,10 +140,21 @@ impl WindowResponse<'_> {
     pub fn mica(&mut self) -> Result<&mut Self> {
         let window = self.ui.window_mut(self.node);
         if !window.mica {
+            // DWM draws its own Mica in step with the frame, so a resize shows
+            // no black edges. `MicaBackdrop` draws on the XAML island, which
+            // resizes a few frames after the frame does. DWM picks light or
+            // dark Mica from the dark mode flag that `follow_theme` sets.
+            let hwnd = hwnd(&window.window)?;
+            let margins = [-1i32; 4];
+            // SAFETY: `hwnd` is a live window; `margins` outlives the call.
+            unsafe { DwmExtendFrameIntoClientArea(hwnd, margins.as_ptr()).ok()? };
+            set_dwm_attribute(hwnd, DWMWA_SYSTEMBACKDROP_TYPE, DWMSBT_MAINWINDOW)?;
+            // Any backdrop brush makes XAML stop painting its opaque
+            // background, so a clear one lets DWM's Mica show through.
             window
                 .window
-                .cast::<IWindow2>()?
-                .SetSystemBackdrop(&MicaBackdrop::new()?)?;
+                .cast::<ICompositionSupportsSystemBackdrop>()?
+                .SetSystemBackdrop(&clear_brush()?)?;
             window.mica = true;
         }
         Ok(self)
@@ -148,13 +198,9 @@ impl WindowResponse<'_> {
     pub fn initial_size(&mut self, width: f64, height: f64) -> Result<&mut Self> {
         let window = self.ui.window_mut(self.node);
         if !window.sized {
-            let native: IWindowNative = window.window.cast()?;
-            let mut hwnd = std::ptr::null_mut();
-            // SAFETY: `hwnd` is written by the call.
-            let dpi = unsafe {
-                native.window_handle(&mut hwnd).ok()?;
-                GetDpiForWindow(hwnd)
-            };
+            let hwnd = hwnd(&window.window)?;
+            // SAFETY: `hwnd` is a window handle.
+            let dpi = unsafe { GetDpiForWindow(hwnd) };
             // 0 means the handle was not a window; 96 is 100% scale.
             let scale = match dpi {
                 0 => 1.0,
@@ -255,24 +301,59 @@ impl WindowResponse<'_> {
     }
 }
 
-/// Hides `window` from the screen while it stays shown, active and laid
-/// out, or shows it again.
-pub(crate) fn cloak(window: &Window, on: bool) -> Result<()> {
-    let native: IWindowNative = window.cast()?;
-    let mut hwnd = std::ptr::null_mut();
-    let value = BOOL::from(on);
-    // SAFETY: `hwnd` is written by the call; `value` is a live BOOL of the
-    // size passed.
-    unsafe {
-        native.window_handle(&mut hwnd).ok()?;
-        DwmSetWindowAttribute(
-            hwnd,
-            DWMWA_CLOAK,
-            (&raw const value).cast(),
-            size_of::<BOOL>() as u32,
-        )
-        .ok()
+/// Activates the never-shown `window` once XAML has committed its first
+/// frame, so the DWM open animation draws the content instead of the bare
+/// window background. Returns at once; the show happens on a later render
+/// tick.
+pub(crate) fn reveal(window: &Window) -> Result<()> {
+    // XAML renders a hidden window too, and `Rendering` fires before each
+    // frame, so by the `REVEAL_TICK`th tick the first frame is committed.
+    // DWM animates the first show only, so showing earlier under a cloak and
+    // uncloaking later would lose the animation.
+    let ticks = Cell::new(0);
+    // The handler drops its own revoker on the reveal tick, which ends the
+    // subscription and frees the cycle through this cell.
+    let revoker = Rc::new(Cell::new(None));
+    let handler = {
+        let window = window.clone();
+        let revoker = Rc::clone(&revoker);
+        move |_: Ref<'_, IInspectable>, _: Ref<'_, IInspectable>| {
+            ticks.set(ticks.get() + 1);
+            if ticks.get() != REVEAL_TICK {
+                return;
+            }
+            drop(revoker.take());
+            let shown = focus_first(&window).and_then(|()| window.Activate());
+            if let Err(error) = shown {
+                // A window closed before its reveal fails here, and needs no
+                // showing.
+                tracing::debug!(%error, "a window did not show");
+            }
+        }
+    };
+    revoker.set(Some(CompositionTarget::Rendering(handler)?));
+    Ok(())
+}
+
+/// Focuses the first control in `window`'s content, unless a control there
+/// has focus already. Without it, a window activated after its content
+/// loaded shows a keyboard focus ring on that control.
+fn focus_first(window: &Window) -> Result<()> {
+    let Ok(content) = window.Content() else {
+        return Ok(());
+    };
+    // A window with no focus yet has no focused element, which WinUI returns
+    // as null, an error here.
+    if FocusManager::GetFocusedElementWithRoot(&content.XamlRoot()?).is_ok() {
+        return Ok(());
     }
+    if let Ok(first) = FocusManager::FindFirstFocusableElement(&content) {
+        // `Programmatic` draws the ring too, because WinUI then draws it
+        // when the last input came from the keyboard. `Pointer` never does,
+        // and the next Tab still moves focus with a ring.
+        first.cast::<UIElement>()?.Focus(FocusState::Pointer)?;
+    }
+    Ok(())
 }
 
 /// The interface behind `Window` that gives its `HWND`, from
@@ -282,10 +363,76 @@ unsafe trait IWindowNative: windows_core::IUnknown {
     fn window_handle(&self, hwnd: *mut *mut core::ffi::c_void) -> HRESULT;
 }
 
-const DWMWA_CLOAK: u32 = 13;
+/// The render tick on which [`reveal`] shows a window.
+const REVEAL_TICK: u32 = 2;
 
 /// How many resizes a window's first fit may take before it shows anyway.
 const FIT_TRIES: u32 = 3;
 
-windows_core::link!("user32.dll" "system" fn GetDpiForWindow(hwnd: *mut core::ffi::c_void) -> u32);
+/// A fully transparent system composition brush.
+fn clear_brush() -> Result<CompositionBrush> {
+    // A system `Compositor` needs a system dispatcher queue on this thread.
+    thread_local!(static QUEUED: Cell<bool> = const { Cell::new(false) });
+    if !QUEUED.get() {
+        let options = DispatcherQueueOptions {
+            size: size_of::<DispatcherQueueOptions>() as u32,
+            thread_type: DQTYPE_THREAD_CURRENT,
+            apartment_type: DQTAT_COM_NONE,
+        };
+        let mut controller = std::ptr::null_mut();
+        // SAFETY: `options` and `controller` outlive the call.
+        unsafe { CreateDispatcherQueueController(options, &mut controller).ok()? };
+        // The raw controller is never released, so the queue lives as long
+        // as the thread.
+        QUEUED.set(true);
+    }
+    let brush = Compositor::new()?.CreateColorBrushWithColor(Color {
+        a: 0,
+        r: 0,
+        g: 0,
+        b: 0,
+    })?;
+    brush.cast()
+}
+
+#[repr(C)]
+struct DispatcherQueueOptions {
+    size: u32,
+    thread_type: i32,
+    apartment_type: i32,
+}
+const DQTYPE_THREAD_CURRENT: i32 = 2;
+const DQTAT_COM_NONE: i32 = 0;
+
+windows_core::link!("coremessaging.dll" "system" fn CreateDispatcherQueueController(options: DispatcherQueueOptions, controller: *mut *mut core::ffi::c_void) -> HRESULT);
+
+/// The `HWND` behind `window`.
+fn hwnd(window: &Window) -> Result<*mut core::ffi::c_void> {
+    let native: IWindowNative = window.cast()?;
+    let mut hwnd = std::ptr::null_mut();
+    // SAFETY: `hwnd` is written by the call.
+    unsafe { native.window_handle(&mut hwnd).ok()? };
+    Ok(hwnd)
+}
+
+/// Sets a 32-bit DWM window attribute on `hwnd`.
+fn set_dwm_attribute(hwnd: *mut core::ffi::c_void, attribute: u32, value: u32) -> Result<()> {
+    // SAFETY: `value` outlives the call, and its size is passed.
+    unsafe {
+        DwmSetWindowAttribute(
+            hwnd,
+            attribute,
+            (&raw const value).cast(),
+            size_of::<u32>() as u32,
+        )
+        .ok()
+    }
+}
+
+const DWMWA_USE_IMMERSIVE_DARK_MODE: u32 = 20;
+const DWMWA_SYSTEMBACKDROP_TYPE: u32 = 38;
+const DWMSBT_MAINWINDOW: u32 = 2;
+
 windows_core::link!("dwmapi.dll" "system" fn DwmSetWindowAttribute(hwnd: *mut core::ffi::c_void, attribute: u32, value: *const core::ffi::c_void, size: u32) -> HRESULT);
+windows_core::link!("dwmapi.dll" "system" fn DwmExtendFrameIntoClientArea(hwnd: *mut core::ffi::c_void, margins: *const i32) -> HRESULT);
+windows_core::link!("user32.dll" "system" fn GetDpiForWindow(hwnd: *mut core::ffi::c_void) -> u32);

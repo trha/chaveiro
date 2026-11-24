@@ -1,9 +1,8 @@
-use super::{Control, Response, boxed, must_write, resource};
+use super::{Control, Response, boxed, must_write};
 use crate::{
     bindings::{
-        AutomationProperties, ContentControl, DependencyObject, FlyoutBase, FontIcon,
-        FrameworkElement, IPanel, MenuFlyout, Orientation, SplitButton, StackPanel, TextBlock,
-        ToolTipService, UIElement,
+        AutomationProperties, ContentControl, DependencyObject, FlyoutBase, FontIcon, IPanel,
+        MenuFlyout, Orientation, SplitButton, StackPanel, TextBlock, ToolTipService, UIElement,
     },
     pass::{ChildKind, ControlNode, Ui},
 };
@@ -11,8 +10,7 @@ use std::{
     hash::Hash,
     ops::{Deref, DerefMut},
 };
-use windows_collections::IMap;
-use windows_core::{IInspectable, Interface, Result};
+use windows_core::{Interface, Result};
 
 impl Ui {
     /// A split button: the main part shows `glyph`, a Segoe Fluent Icons
@@ -100,7 +98,7 @@ pub(crate) struct Parts {
 
 /// The split button template's brush keys, each with the theme brush that
 /// gives the accent look, as `AccentButtonStyle` colors a button.
-const ACCENT_BRUSHES: [(&str, &str); 14] = [
+const ACCENT_BRUSHES: &[(&str, &str)] = &[
     ("SplitButtonBackground", "AccentFillColorDefaultBrush"),
     (
         "SplitButtonBackgroundPointerOver",
@@ -176,18 +174,9 @@ impl SplitButtonResponse<'_> {
         if must_write(stale, &parts.accent, &on) {
             // The Windows App SDK has no accent split button style, so this
             // sets the button's own copies of the brushes its template uses.
-            let resources = parts
-                .button
-                .cast::<FrameworkElement>()?
-                .Resources()?
-                .cast::<IMap<IInspectable, IInspectable>>()?;
-            for (key, brush) in ACCENT_BRUSHES {
-                let key = boxed(key);
-                if on {
-                    resources.Insert(&key, &resource::<IInspectable>(brush)?)?;
-                } else if resources.HasKey(&key)? {
-                    resources.Remove(&key)?;
-                }
+            match on {
+                true => crate::theme::style_resources(&parts.button, ACCENT_BRUSHES)?,
+                false => crate::theme::clear_style_resources(&parts.button, ACCENT_BRUSHES)?,
             }
             parts.accent = on;
         }

@@ -1,10 +1,11 @@
-use super::{Control, Length, Response, must_write, resource};
+use super::{Control, Length, Response, must_write};
 use crate::{
     bindings::{
-        Brush, CornerRadius, FrameworkElement, HorizontalAlignment, IPanel, Panel, StackPanel,
-        Thickness, VerticalAlignment,
+        CornerRadius, FrameworkElement, HorizontalAlignment, Panel, StackPanel, Thickness,
+        VerticalAlignment,
     },
     pass::{ChildKind, ControlNode, Ui},
+    theme::{clear_brush, set_brush},
 };
 use std::hash::Hash;
 use windows_core::{Interface, Result};
@@ -185,11 +186,10 @@ impl Response<'_> {
                 Some(_) => corners,
                 None => [0.0; 4],
             };
+            let property = Panel::BackgroundProperty()?;
             match brush {
-                Some(brush) => panel
-                    .cast::<IPanel>()?
-                    .SetBackground(&resource::<Brush>(brush)?)?,
-                None => panel.cast::<IPanel>()?.SetBackground(None::<&Brush>)?,
+                Some(brush) => set_brush(panel, &property, brush)?,
+                None => clear_brush(panel, &property)?,
             }
             panel.SetCornerRadius(CornerRadius {
                 top_left,
@@ -205,10 +205,16 @@ impl Response<'_> {
 
 /// Gives `panel` the fill, stroke and 8px corners of a Fluent card.
 fn card_look(panel: &StackPanel) -> Result<()> {
-    panel
-        .cast::<IPanel>()?
-        .SetBackground(&resource::<Brush>("CardBackgroundFillColorDefaultBrush")?)?;
-    panel.SetBorderBrush(&resource::<Brush>("CardStrokeColorDefaultBrush")?)?;
+    set_brush(
+        panel,
+        &Panel::BackgroundProperty()?,
+        "CardBackgroundFillColorDefaultBrush",
+    )?;
+    set_brush(
+        panel,
+        &StackPanel::BorderBrushProperty()?,
+        "CardStrokeColorDefaultBrush",
+    )?;
     panel.SetBorderThickness(uniform(1.0))?;
     panel.SetCornerRadius(CornerRadius {
         top_left: 8.0,

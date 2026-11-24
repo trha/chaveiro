@@ -88,9 +88,9 @@ impl Ui {
             {
                 // A window shows after its first pass, or after its first fit
                 // when it fits its content, so no resize is seen.
-                if window.cloaked && !(window.fit && !window.fitted_once) {
-                    crate::widget::cloak(&window.window, false)?;
-                    window.cloaked = false;
+                if !window.revealed && !(window.fit && !window.fitted_once) {
+                    crate::widget::reveal(&window.window)?;
+                    window.revealed = true;
                 }
             }
         }
@@ -615,9 +615,11 @@ pub(crate) struct WindowNode {
     pub(crate) content: Option<NodeId>,
     /// The title last written.
     pub(crate) title: String,
-    pub(crate) activated: bool,
     /// The Mica backdrop is set.
     pub(crate) mica: bool,
+    /// Whether the frame was last given the dark theme; [`None`] before the
+    /// first pass with content.
+    pub(crate) dark: Option<bool>,
     /// The content draws the title bar, and only the close button is left.
     pub(crate) compact: bool,
     /// The content extends into the title bar, from `extends_into_title_bar`.
@@ -632,8 +634,9 @@ pub(crate) struct WindowNode {
     /// fit before it shows.
     pub(crate) fit: bool,
     pub(crate) fitted_once: bool,
-    /// DWM hides the window until its first pass, or first fit, is done.
-    pub(crate) cloaked: bool,
+    /// A reveal is scheduled, after the first pass or the first fit, so the
+    /// window shows or has shown.
+    pub(crate) revealed: bool,
     /// Resizes made by `fit_to_content`.
     pub(crate) fit_tries: u32,
     /// The control set with `Window.SetTitleBar`.
@@ -744,6 +747,11 @@ fn release(events: &mut Events, payload: Payload) {
         }
         Payload::Window(window) => {
             events.forget(&window.app_window);
+            // `Close` drops the XAML content before it destroys the window,
+            // so DWM would animate the bare window background. Hiding first
+            // lets DWM animate the last real frame. Hiding fails only for a
+            // window the user already closed, which `Close` handles below.
+            let _ = window.app_window.Hide();
             // Closing fails only for a window the user already closed, which
             // is the state this asks for.
             let _ = window.window.Close();

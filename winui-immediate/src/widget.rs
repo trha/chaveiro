@@ -6,15 +6,16 @@
 
 use crate::{
     bindings::{
-        AppBarButton, Application, AutomationProperties, Brush, Button, ComboBox,
-        Control as XamlControl, DependencyObject, FocusState, FontIcon, FrameworkElement, Grid,
-        HorizontalAlignment, ICommandBarElement, IPanel, IconElement, InfoBar, ItemsRepeater,
-        MenuFlyoutItem, MenuFlyoutItemBase, MenuFlyoutSubItem, PasswordBox, StackPanel, Style,
-        TextBlock, TextBox, TextWrapping, Thickness, TitleBar, ToggleMenuFlyoutItem, UIElement,
-        UIElementCollection, Visibility,
+        AppBarButton, Application, AutomationProperties, Button, ComboBox, Control as XamlControl,
+        DependencyObject, FocusState, FontIcon, FrameworkElement, Grid, HorizontalAlignment,
+        ICommandBarElement, IPanel, IconElement, InfoBar, ItemsRepeater, MenuFlyoutItem,
+        MenuFlyoutItemBase, MenuFlyoutSubItem, PasswordBox, StackPanel, Style, TextBlock, TextBox,
+        TextWrapping, Thickness, TitleBar, ToggleMenuFlyoutItem, UIElement, UIElementCollection,
+        Visibility,
     },
     events::EventKind,
     pass::Ui,
+    theme::{clear_brush, set_brush, style_resources},
     tree::NodeId,
 };
 use windows_collections::{IMap, IVector};
@@ -85,7 +86,7 @@ pub use task::{StreamResponse, TaskResponse};
 pub use text_box::{Mask, TextBoxResponse};
 pub use title_bar::TitleBarResponse;
 pub use window::WindowResponse;
-pub(crate) use window::cloak;
+pub(crate) use window::reveal;
 
 /// Access to the control a widget declared, for what the widget does not
 /// cover.
@@ -256,10 +257,7 @@ impl Response<'_> {
         }
         // Grid, StackPanel and Control each declare their own border
         // properties, with no shared interface.
-        let brush = match control.dividers {
-            None => Some(resource::<Brush>("DividerStrokeColorDefaultBrush")?),
-            Some(_) => None,
-        };
+        let first = control.dividers.is_none();
         let [left, top, right, bottom] = edges.map(|on| if on { 1.0 } else { 0.0 });
         let thickness = Thickness {
             left,
@@ -268,19 +266,20 @@ impl Response<'_> {
             bottom,
         };
         let element = &control.element;
+        const DIVIDER: &str = "DividerStrokeColorDefaultBrush";
         if let Ok(grid) = element.cast::<Grid>() {
-            if let Some(brush) = &brush {
-                grid.SetBorderBrush(brush)?;
+            if first {
+                set_brush(&grid, &Grid::BorderBrushProperty()?, DIVIDER)?;
             }
             grid.SetBorderThickness(thickness)?;
         } else if let Ok(panel) = element.cast::<StackPanel>() {
-            if let Some(brush) = &brush {
-                panel.SetBorderBrush(brush)?;
+            if first {
+                set_brush(&panel, &StackPanel::BorderBrushProperty()?, DIVIDER)?;
             }
             panel.SetBorderThickness(thickness)?;
         } else if let Ok(xaml) = element.cast::<XamlControl>() {
-            if let Some(brush) = &brush {
-                xaml.SetBorderBrush(brush)?;
+            if first {
+                set_brush(&xaml, &XamlControl::BorderBrushProperty()?, DIVIDER)?;
             }
             xaml.SetBorderThickness(thickness)?;
         } else {
@@ -412,13 +411,10 @@ impl Response<'_> {
 
 /// Gives a field the critical border, or its theme border back.
 fn mark_critical(element: &UIElement, on: bool) -> Result<()> {
+    let property = XamlControl::BorderBrushProperty()?;
     match on {
-        true => element
-            .cast::<XamlControl>()?
-            .SetBorderBrush(&resource::<Brush>("SystemFillColorCriticalBrush")?),
-        false => element
-            .cast::<DependencyObject>()?
-            .ClearValue(&XamlControl::BorderBrushProperty()?),
+        true => set_brush(element, &property, "SystemFillColorCriticalBrush"),
+        false => clear_brush(element, &property),
     }
 }
 
@@ -489,7 +485,7 @@ pub(crate) struct ErrorLine {
 
 impl ErrorLine {
     fn new() -> Result<Self> {
-        let critical = resource::<Brush>("SystemFillColorCriticalBrush")?;
+        const CRITICAL: &str = "SystemFillColorCriticalBrush";
         let row = StackPanel::new()?;
         row.SetOrientation(crate::bindings::Orientation::Horizontal)?;
         row.SetSpacing(4.0)?;
@@ -504,12 +500,12 @@ impl ErrorLine {
         let glyph = FontIcon::new()?;
         glyph.SetGlyph("\u{EA39}")?;
         glyph.SetFontSize(12.0)?;
-        glyph.cast::<IconElement>()?.SetForeground(&critical)?;
+        set_brush(&glyph, &IconElement::ForegroundProperty()?, CRITICAL)?;
         let icon: UIElement = glyph.cast()?;
         icon.SetVisibility(Visibility::Collapsed)?;
         let text = TextBlock::new()?;
         text.SetFontSize(12.0)?;
-        text.SetForeground(&critical)?;
+        set_brush(&text, &TextBlock::ForegroundProperty()?, CRITICAL)?;
         text.SetTextWrapping(TextWrapping::Wrap)?;
         let children = row.cast::<IPanel>()?.Children()?;
         children.Append(&icon)?;
@@ -540,7 +536,7 @@ impl ErrorLine {
         };
         self.icon.SetVisibility(visibility)?;
         self.text.SetText(text)?;
-        self.text.SetForeground(&resource::<Brush>(brush)?)
+        set_brush(&self.text, &TextBlock::ForegroundProperty()?, brush)
     }
 }
 
@@ -559,7 +555,8 @@ pub(crate) fn boxed(text: &str) -> IInspectable {
 }
 
 /// A resource of the app's merged dictionaries, such as a brush or a style,
-/// by its XAML key. A theme brush is the one for the theme at lookup time.
+/// by its XAML key. A theme brush is the one for the theme at lookup time,
+/// so set a theme brush with [`set_brush`], which follows the theme.
 pub(crate) fn resource<T: Interface>(key: &str) -> Result<T> {
     Application::Current()?
         .Resources()?
@@ -838,43 +835,39 @@ impl Response<'_> {
 /// no fill or border until the pointer is over it, as for a toolbar button
 /// or a list row.
 pub(crate) fn make_subtle(button: &Button) -> Result<()> {
-    let resources = button
-        .cast::<FrameworkElement>()?
-        .Resources()?
-        .cast::<IMap<IInspectable, IInspectable>>()?;
-    for (key, brush) in [
-        ("ButtonBackground", "SubtleFillColorTransparentBrush"),
-        (
-            "ButtonBackgroundPointerOver",
-            "SubtleFillColorSecondaryBrush",
-        ),
-        ("ButtonBackgroundPressed", "SubtleFillColorTertiaryBrush"),
-        (
-            "ButtonBackgroundDisabled",
-            "SubtleFillColorTransparentBrush",
-        ),
-        ("ButtonForeground", "TextFillColorPrimaryBrush"),
-        ("ButtonForegroundPointerOver", "TextFillColorPrimaryBrush"),
-        ("ButtonForegroundPressed", "TextFillColorSecondaryBrush"),
-        ("ButtonForegroundDisabled", "TextFillColorDisabledBrush"),
-        ("ButtonBorderBrush", "SubtleFillColorTransparentBrush"),
-        (
-            "ButtonBorderBrushPointerOver",
-            "SubtleFillColorTransparentBrush",
-        ),
-        (
-            "ButtonBorderBrushPressed",
-            "SubtleFillColorTransparentBrush",
-        ),
-        (
-            "ButtonBorderBrushDisabled",
-            "SubtleFillColorTransparentBrush",
-        ),
-    ] {
-        resources.Insert(&boxed(key), &resource::<IInspectable>(brush)?)?;
-    }
-    Ok(())
+    style_resources(button, SUBTLE_BUTTON)
 }
+
+/// The subtle button's brushes for each state.
+const SUBTLE_BUTTON: &[(&str, &str)] = &[
+    ("ButtonBackground", "SubtleFillColorTransparentBrush"),
+    (
+        "ButtonBackgroundPointerOver",
+        "SubtleFillColorSecondaryBrush",
+    ),
+    ("ButtonBackgroundPressed", "SubtleFillColorTertiaryBrush"),
+    (
+        "ButtonBackgroundDisabled",
+        "SubtleFillColorTransparentBrush",
+    ),
+    ("ButtonForeground", "TextFillColorPrimaryBrush"),
+    ("ButtonForegroundPointerOver", "TextFillColorPrimaryBrush"),
+    ("ButtonForegroundPressed", "TextFillColorSecondaryBrush"),
+    ("ButtonForegroundDisabled", "TextFillColorDisabledBrush"),
+    ("ButtonBorderBrush", "SubtleFillColorTransparentBrush"),
+    (
+        "ButtonBorderBrushPointerOver",
+        "SubtleFillColorTransparentBrush",
+    ),
+    (
+        "ButtonBorderBrushPressed",
+        "SubtleFillColorTransparentBrush",
+    ),
+    (
+        "ButtonBorderBrushDisabled",
+        "SubtleFillColorTransparentBrush",
+    ),
+];
 
 /// Whether a managed value must be written: the control is stale, or the
 /// declared value differs from the last one written.

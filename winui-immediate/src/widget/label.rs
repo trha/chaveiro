@@ -1,8 +1,6 @@
-use super::{Control, Response, must_write, resource};
+use super::{Control, Response, must_write};
 use crate::{
-    bindings::{
-        Brush, DependencyObject, FontFamily, FontStyle, TextBlock, TextTrimming, TextWrapping,
-    },
+    bindings::{DependencyObject, FontFamily, FontStyle, TextBlock, TextTrimming, TextWrapping},
     pass::{ChildKind, ControlNode, NativeTree, Payload, Ui},
 };
 use std::{
@@ -94,11 +92,10 @@ impl LabelResponse<'_> {
     pub fn secondary(&mut self, on: bool) -> Result<&mut Self> {
         let (block, look) = self.parts();
         if look.secondary != on {
+            let property = TextBlock::ForegroundProperty()?;
             match on {
-                true => block.SetForeground(&resource::<Brush>("TextFillColorSecondaryBrush")?)?,
-                false => block
-                    .cast::<DependencyObject>()?
-                    .ClearValue(&TextBlock::ForegroundProperty()?)?,
+                true => crate::theme::set_brush(block, &property, "TextFillColorSecondaryBrush")?,
+                false => crate::theme::clear_brush(block, &property)?,
             }
             look.secondary = on;
         }

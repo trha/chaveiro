@@ -53,6 +53,12 @@ impl Delegate {
         Delegate::new(Action::PreviewKeyDown(hook))
     }
 
+    /// An `ActualThemeChanged` handler that sets its sender's theme brushes
+    /// again; see [`crate::theme`].
+    pub(crate) fn theme_changed() -> Delegate {
+        Delegate::new(Action::ThemeChanged)
+    }
+
     fn new(action: Action) -> Delegate {
         let object = Box::new(Object {
             vtable: &VTABLE,
@@ -107,6 +113,8 @@ enum Action {
     /// Runs on an element's `PreviewKeyDown`, before the element acts on
     /// the key.
     PreviewKeyDown(KeyHook),
+    /// Runs on an element's `ActualThemeChanged`.
+    ThemeChanged,
 }
 
 /// What a [`Delegate::text_changing`] does to its sender.
@@ -145,6 +153,7 @@ fn iids(action: &Action) -> &'static [GUID] {
             EventKind::Enter | EventKind::Key => const { &[KeyEventHandler::IID] },
             EventKind::SelectionChanged => const { &[SelectionChangedEventHandler::IID] },
             EventKind::SizeChanged => const { &[SizeChangedEventHandler::IID] },
+            EventKind::ThemeChanged => const { &[Typed::<FrameworkElement, IInspectable>::IID] },
             EventKind::TextSubmitted => {
                 const { &[Typed::<ComboBox, ComboBoxTextSubmittedEventArgs>::IID] }
             }
@@ -173,6 +182,7 @@ fn iids(action: &Action) -> &'static [GUID] {
             const { &[Typed::<TextBox, TextBoxTextChangingEventArgs>::IID] }
         }
         Action::PreviewKeyDown(_) => const { &[KeyEventHandler::IID] },
+        Action::ThemeChanged => const { &[Typed::<FrameworkElement, IInspectable>::IID] },
         Action::Focus(_) => {
             const { &[Typed::<KeyboardAccelerator, KeyboardAcceleratorInvokedEventArgs>::IID] }
         }
@@ -315,6 +325,15 @@ impl Object {
                         KeyRoutedEventArgs::from_raw_borrowed(&arguments),
                     ) {
                         let _ = hook(sender, arguments);
+                    }
+                }
+                Action::ThemeChanged => {
+                    // A brush that fails to update keeps the old theme's
+                    // color, which is still drawn.
+                    if let Some(element) = FrameworkElement::from_raw_borrowed(&sender) {
+                        if let Err(error) = crate::theme::refresh(element) {
+                            tracing::debug!(%error, "theme brushes not refreshed");
+                        }
                     }
                 }
                 Action::Focus(target) => {

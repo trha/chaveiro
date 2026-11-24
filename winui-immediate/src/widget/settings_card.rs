@@ -10,25 +10,24 @@
 //! and automation behavior. A card that is not clickable is a plain grid,
 //! which screen readers do not announce as a button.
 
-use super::{Control, Response, resource};
+use super::{Control, Response};
 use crate::{
     bindings::{
-        AutomationProperties, Brush, Button, ColumnDefinition, ContentControl,
-        Control as XamlControl, CornerRadius, DependencyObject, FontIcon, FrameworkElement, Grid,
-        GridLength, GridUnitType, HorizontalAlignment, IPanel, Orientation as XamlOrientation,
-        RowDefinition, StackPanel, TextBlock, TextWrapping, Thickness, UIElement,
-        UIElementCollection, VerticalAlignment, Visibility,
+        AutomationProperties, Button, ColumnDefinition, ContentControl, Control as XamlControl,
+        CornerRadius, DependencyObject, FontIcon, FrameworkElement, Grid, GridLength, GridUnitType,
+        HorizontalAlignment, IPanel, Orientation as XamlOrientation, Panel, RowDefinition,
+        StackPanel, TextBlock, TextWrapping, Thickness, UIElement, UIElementCollection,
+        VerticalAlignment, Visibility,
     },
     events::EventKind,
     pass::{ChildKind, ControlNode, Ui},
-    widget::boxed,
+    theme::set_brush,
 };
 use std::{
     hash::Hash,
     ops::{Deref, DerefMut},
 };
-use windows_collections::IMap;
-use windows_core::{IInspectable, Interface, Result};
+use windows_core::{Interface, Result};
 
 /// What a [`Ui::settings_card`] shows.
 #[derive(Clone, Copy, Debug, Default)]
@@ -268,7 +267,11 @@ impl Parts {
         let description = TextBlock::new()?;
         description.SetTextWrapping(TextWrapping::Wrap)?;
         description.SetFontSize(12.0)?;
-        description.SetForeground(&resource::<Brush>("TextFillColorSecondaryBrush")?)?;
+        set_brush(
+            &description,
+            &TextBlock::ForegroundProperty()?,
+            "TextFillColorSecondaryBrush",
+        )?;
         let lines = header_panel.cast::<IPanel>()?.Children()?;
         lines.Append(&header.cast::<UIElement>()?)?;
         lines.Append(&description.cast::<UIElement>()?)?;
@@ -298,9 +301,16 @@ impl Parts {
                 Some(clickable_shell(&root)?)
             }
             false => {
-                root.cast::<IPanel>()?
-                    .SetBackground(&resource::<Brush>("CardBackgroundFillColorDefaultBrush")?)?;
-                root.SetBorderBrush(&resource::<Brush>("CardStrokeColorDefaultBrush")?)?;
+                set_brush(
+                    &root,
+                    &Panel::BackgroundProperty()?,
+                    "CardBackgroundFillColorDefaultBrush",
+                )?;
+                set_brush(
+                    &root,
+                    &Grid::BorderBrushProperty()?,
+                    "CardStrokeColorDefaultBrush",
+                )?;
                 root.SetBorderThickness(thickness(1.0, 1.0, 1.0, 1.0))?;
                 root.SetCornerRadius(CornerRadius {
                     top_left: CORNER,
@@ -403,38 +413,35 @@ fn clickable_shell(root: &Grid) -> Result<Button> {
     let frame = button.cast::<FrameworkElement>()?;
     frame.SetHorizontalAlignment(HorizontalAlignment::Stretch)?;
     size_like_a_card(&frame)?;
-    let resources = frame
-        .Resources()?
-        .cast::<IMap<IInspectable, IInspectable>>()?;
-    // The toolkit's SettingsCard brushes for each state. It leaves the
-    // background and border alone when disabled.
-    for (key, brush) in [
-        ("ButtonBackground", "CardBackgroundFillColorDefaultBrush"),
-        (
-            "ButtonBackgroundPointerOver",
-            "ControlFillColorSecondaryBrush",
-        ),
-        ("ButtonBackgroundPressed", "ControlFillColorTertiaryBrush"),
-        (
-            "ButtonBackgroundDisabled",
-            "CardBackgroundFillColorDefaultBrush",
-        ),
-        ("ButtonForeground", "TextFillColorPrimaryBrush"),
-        ("ButtonForegroundPointerOver", "TextFillColorPrimaryBrush"),
-        ("ButtonForegroundPressed", "TextFillColorSecondaryBrush"),
-        ("ButtonForegroundDisabled", "TextFillColorDisabledBrush"),
-        ("ButtonBorderBrush", "CardStrokeColorDefaultBrush"),
-        (
-            "ButtonBorderBrushPointerOver",
-            "ControlElevationBorderBrush",
-        ),
-        ("ButtonBorderBrushPressed", "ControlStrokeColorDefaultBrush"),
-        ("ButtonBorderBrushDisabled", "CardStrokeColorDefaultBrush"),
-    ] {
-        resources.Insert(&boxed(key), &resource::<IInspectable>(brush)?)?;
-    }
+    crate::theme::style_resources(&frame, CARD_BUTTON)?;
     Ok(button)
 }
+
+/// The toolkit's SettingsCard brushes for each state. It leaves the
+/// background and border alone when disabled.
+const CARD_BUTTON: &[(&str, &str)] = &[
+    ("ButtonBackground", "CardBackgroundFillColorDefaultBrush"),
+    (
+        "ButtonBackgroundPointerOver",
+        "ControlFillColorSecondaryBrush",
+    ),
+    ("ButtonBackgroundPressed", "ControlFillColorTertiaryBrush"),
+    (
+        "ButtonBackgroundDisabled",
+        "CardBackgroundFillColorDefaultBrush",
+    ),
+    ("ButtonForeground", "TextFillColorPrimaryBrush"),
+    ("ButtonForegroundPointerOver", "TextFillColorPrimaryBrush"),
+    ("ButtonForegroundPressed", "TextFillColorSecondaryBrush"),
+    ("ButtonForegroundDisabled", "TextFillColorDisabledBrush"),
+    ("ButtonBorderBrush", "CardStrokeColorDefaultBrush"),
+    (
+        "ButtonBorderBrushPointerOver",
+        "ControlElevationBorderBrush",
+    ),
+    ("ButtonBorderBrushPressed", "ControlStrokeColorDefaultBrush"),
+    ("ButtonBorderBrushDisabled", "CardStrokeColorDefaultBrush"),
+];
 
 /// The toolkit's `SettingsCardMinHeight` and `SettingsCardMinWidth`.
 fn size_like_a_card(frame: &FrameworkElement) -> Result<()> {

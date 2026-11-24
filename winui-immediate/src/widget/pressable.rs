@@ -1,12 +1,13 @@
-use super::{Control, Response, make_subtle, resource};
+use super::{Control, Response, make_subtle};
 use crate::{
     bindings::{
-        AutomationProperties, Brush, Button, ColumnDefinition, ContentControl,
-        Control as XamlControl, CornerRadius, DependencyObject, FrameworkElement, Grid, GridLength,
-        GridUnitType, HorizontalAlignment, IPanel, Thickness, UIElement, UIElementCollection,
-        VerticalAlignment, Visibility,
+        AutomationProperties, Button, ColumnDefinition, ContentControl, Control as XamlControl,
+        CornerRadius, DependencyObject, FrameworkElement, Grid, GridLength, GridUnitType,
+        HorizontalAlignment, IPanel, Thickness, UIElement, UIElementCollection, VerticalAlignment,
+        Visibility,
     },
     pass::{ChildKind, ControlNode, Ui},
+    theme::{clear_brush, set_brush},
     tree::NodeId,
 };
 use std::{
@@ -62,14 +63,10 @@ impl PressableResponse<'_> {
                 true => Visibility::Visible,
                 false => Visibility::Collapsed,
             })?;
-            let control = parts.button.cast::<XamlControl>()?;
+            let property = XamlControl::BackgroundProperty()?;
             match on {
-                true => {
-                    control.SetBackground(&resource::<Brush>("SubtleFillColorSecondaryBrush")?)?
-                }
-                false => control
-                    .cast::<DependencyObject>()?
-                    .ClearValue(&XamlControl::BackgroundProperty()?)?,
+                true => set_brush(&parts.button, &property, "SubtleFillColorSecondaryBrush")?,
+                false => clear_brush(&parts.button, &property)?,
             }
             parts.selected = on;
         }
@@ -157,8 +154,11 @@ impl Parts {
             columns.Append(&column)?;
         }
         let pill = Grid::new()?;
-        pill.cast::<IPanel>()?
-            .SetBackground(&resource::<Brush>("AccentFillColorDefaultBrush")?)?;
+        set_brush(
+            &pill,
+            &crate::bindings::Panel::BackgroundProperty()?,
+            "AccentFillColorDefaultBrush",
+        )?;
         pill.SetCornerRadius(CornerRadius {
             top_left: 1.5,
             top_right: 1.5,

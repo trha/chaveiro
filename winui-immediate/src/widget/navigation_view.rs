@@ -1,7 +1,7 @@
-use super::{Control, Response, boxed, resource};
+use super::{Control, Response, boxed};
 use crate::{
     bindings::{
-        AutomationProperties, Brush, ColumnDefinition, ContentControl, DependencyObject, FontIcon,
+        AutomationProperties, ColumnDefinition, ContentControl, DependencyObject, FontIcon,
         FrameworkElement, Grid, GridLength, GridUnitType, INavigationView2, IconElement,
         NavigationView, NavigationViewBackButtonVisible, NavigationViewItem,
         NavigationViewItemHeader, NavigationViewItemSeparator, NavigationViewPaneDisplayMode,
@@ -341,7 +341,11 @@ impl Written {
                 label_block.SetTextTrimming(TextTrimming::CharacterEllipsis)?;
                 let count_block = TextBlock::new()?;
                 count_block.SetFontSize(12.0)?;
-                count_block.SetForeground(&resource::<Brush>("TextFillColorSecondaryBrush")?)?;
+                crate::theme::set_brush(
+                    &count_block,
+                    &TextBlock::ForegroundProperty()?,
+                    "TextFillColorSecondaryBrush",
+                )?;
                 let count_frame = count_block.cast::<FrameworkElement>()?;
                 count_frame.SetVerticalAlignment(VerticalAlignment::Center)?;
                 count_frame.SetMargin(crate::bindings::Thickness {

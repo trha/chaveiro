@@ -1,12 +1,12 @@
 //! Small controls for status and identity: a button around any content,
 //! a person's initials, progress, and a tag.
 
-use super::{Control, Response, boxed, make_subtle, must_write, resource};
+use super::{Control, Response, boxed, make_subtle, must_write};
 use crate::{
     bindings::{
-        AutomationProperties, Brush, Button, Control as XamlControl, CornerRadius,
-        DependencyObject, FontIcon, FrameworkElement, Orientation as XamlOrientation, Panel,
-        PersonPicture, ProgressBar, ProgressRing, StackPanel, TextBlock, Thickness, ToolTipService,
+        AutomationProperties, Button, Control as XamlControl, CornerRadius, DependencyObject,
+        FontIcon, FrameworkElement, Orientation as XamlOrientation, Panel, PersonPicture,
+        ProgressBar, ProgressRing, StackPanel, TextBlock, Thickness, ToolTipService,
         VerticalAlignment,
     },
     pass::{ChildKind, ControlNode, Ui},
@@ -167,16 +167,21 @@ impl Ui {
                 bottom_right: 12.0,
                 bottom_left: 12.0,
             })?;
-            panel.cast::<Panel>()?.SetBackground(&resource::<Brush>(
+            crate::theme::set_brush(
+                &panel,
+                &Panel::BackgroundProperty()?,
                 "SystemFillColorCriticalBackgroundBrush",
-            )?)?;
+            )?;
             panel
                 .cast::<FrameworkElement>()?
                 .SetVerticalAlignment(VerticalAlignment::Center)?;
             let icon = FontIcon::new()?;
             icon.SetFontSize(12.0)?;
-            icon.cast::<crate::bindings::IconElement>()?
-                .SetForeground(&resource::<Brush>("SystemFillColorCriticalBrush")?)?;
+            crate::theme::set_brush(
+                &icon,
+                &crate::bindings::IconElement::ForegroundProperty()?,
+                "SystemFillColorCriticalBrush",
+            )?;
             let text = TextBlock::new()?;
             text.SetFontSize(12.0)?;
             text.cast::<FrameworkElement>()?

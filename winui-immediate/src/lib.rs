@@ -12,6 +12,7 @@ mod events;
 mod pass;
 mod runner;
 mod startup;
+mod theme;
 mod widget;
 
 /// The shared tree, under the paths the widgets used before it moved.

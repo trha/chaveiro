@@ -212,6 +212,10 @@ impl Events {
                 .register(&source.cast::<IFrameworkElement>()?, |table| {
                     table.SizeChanged
                 })?,
+            EventKind::ThemeChanged => delegate
+                .register(&source.cast::<IFrameworkElement>()?, |table| {
+                    table.ActualThemeChanged
+                })?,
             EventKind::SelectionChanged => {
                 delegate.register(&source.cast::<ISelector>()?, |table| table.SelectionChanged)?
             }
@@ -310,11 +314,13 @@ pub(crate) enum EventKind {
     DialogClosed,
     /// A dialog's secondary button was clicked; the dialog then closes.
     DialogSecondary,
+    /// An element's actual theme changed, by its own setting or the system's.
+    ThemeChanged,
 }
 
 impl EventKind {
     /// Every kind, in discriminant order, so `ALL[kind as usize] == kind`.
-    pub(crate) const ALL: [EventKind; 21] = {
+    pub(crate) const ALL: [EventKind; 22] = {
         use EventKind::*;
         let all = [
             Click,
@@ -338,6 +344,7 @@ impl EventKind {
             DialogPrimary,
             DialogClosed,
             DialogSecondary,
+            ThemeChanged,
         ];
         let mut index = 0;
         while index < all.len() {

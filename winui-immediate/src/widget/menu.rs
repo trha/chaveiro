@@ -8,9 +8,9 @@
 use super::{Control, Response, must_write, resource};
 use crate::{
     bindings::{
-        Brush, Control as XamlControl, DependencyObject, DesktopAcrylicBackdrop, Flyout,
-        FlyoutBase, FlyoutPlacementMode, FlyoutShowOptions, FontIcon, IconElement, MenuFlyout,
-        MenuFlyoutItem, MenuFlyoutSeparator, MenuFlyoutSubItem, Point, Setter, SetterBase, Style,
+        Control as XamlControl, DependencyObject, DesktopAcrylicBackdrop, Flyout, FlyoutBase,
+        FlyoutPlacementMode, FlyoutShowOptions, FontIcon, IconElement, MenuFlyout, MenuFlyoutItem,
+        MenuFlyoutSeparator, MenuFlyoutSubItem, Point, Setter, SetterBase, Style,
         ToggleMenuFlyoutItem, TypeKind, TypeName,
     },
     events::EventKind,
@@ -391,14 +391,12 @@ impl MenuItemResponse<'_> {
         if let Control::MenuItem { critical, .. } = control
             && *critical != on
         {
-            let control = element.cast::<XamlControl>()?;
+            let property = XamlControl::ForegroundProperty()?;
             match on {
                 true => {
-                    control.SetForeground(&resource::<Brush>("SystemFillColorCriticalBrush")?)?
+                    crate::theme::set_brush(element, &property, "SystemFillColorCriticalBrush")?
                 }
-                false => control
-                    .cast::<DependencyObject>()?
-                    .ClearValue(&crate::bindings::Control::ForegroundProperty()?)?,
+                false => crate::theme::clear_brush(element, &property)?,
             }
             *critical = on;
         }

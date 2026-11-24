@@ -1,6 +1,6 @@
-use super::{Control, Response, must_write, resource};
+use super::{Control, Response, must_write};
 use crate::{
-    bindings::{Brush, FontIcon, IconElement},
+    bindings::{FontIcon, IconElement},
     pass::{ChildKind, ControlNode, Ui},
 };
 use std::{
@@ -80,14 +80,10 @@ impl FontIconResponse<'_> {
             unreachable!("font icon keys hold font icons")
         };
         if *written != on {
-            let element = icon.cast::<IconElement>()?;
+            let property = IconElement::ForegroundProperty()?;
             match on {
-                true => {
-                    element.SetForeground(&resource::<Brush>("TextFillColorSecondaryBrush")?)?
-                }
-                false => element
-                    .cast::<crate::bindings::DependencyObject>()?
-                    .ClearValue(&IconElement::ForegroundProperty()?)?,
+                true => crate::theme::set_brush(icon, &property, "TextFillColorSecondaryBrush")?,
+                false => crate::theme::clear_brush(icon, &property)?,
             }
             *written = on;
         }

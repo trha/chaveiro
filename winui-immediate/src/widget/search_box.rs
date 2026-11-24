@@ -1,4 +1,4 @@
-use super::{Control, Response, boxed, resource};
+use super::{Control, Response};
 use crate::{
     bindings::{
         Control as XamlControl, FontIcon, FrameworkElement, Grid, HorizontalAlignment,
@@ -12,8 +12,7 @@ use std::{
     hash::Hash,
     ops::{Deref, DerefMut},
 };
-use windows_collections::IMap;
-use windows_core::{IInspectable, Interface, Result};
+use windows_core::{Interface, Result};
 
 impl Ui {
     /// A search box bound to `value`, in the look of the Microsoft Store's
@@ -99,34 +98,30 @@ fn set_shortcut(element: &UIElement, text_box: &TextBox, letter: char) -> Result
 /// Gives `text_box` a button's border and fills while it is not focused.
 /// The focused state keeps the text box's own look.
 fn button_look(text_box: &TextBox) -> Result<()> {
-    let resources = text_box
-        .cast::<FrameworkElement>()?
-        .Resources()?
-        .cast::<IMap<IInspectable, IInspectable>>()?;
-    for (key, brush) in [
-        ("TextControlBackground", "ControlFillColorDefaultBrush"),
-        (
-            "TextControlBackgroundPointerOver",
-            "ControlFillColorSecondaryBrush",
-        ),
-        ("TextControlBorderBrush", "ControlElevationBorderBrush"),
-        (
-            "TextControlBorderBrushPointerOver",
-            "ControlElevationBorderBrush",
-        ),
-        (
-            "TextControlPlaceholderForeground",
-            "TextFillColorPrimaryBrush",
-        ),
-        (
-            "TextControlPlaceholderForegroundPointerOver",
-            "TextFillColorPrimaryBrush",
-        ),
-    ] {
-        resources.Insert(&boxed(key), &resource::<IInspectable>(brush)?)?;
-    }
-    Ok(())
+    crate::theme::style_resources(text_box, BUTTON_LOOK)
 }
+
+/// The text box's resources and the button brushes they take.
+const BUTTON_LOOK: &[(&str, &str)] = &[
+    ("TextControlBackground", "ControlFillColorDefaultBrush"),
+    (
+        "TextControlBackgroundPointerOver",
+        "ControlFillColorSecondaryBrush",
+    ),
+    ("TextControlBorderBrush", "ControlElevationBorderBrush"),
+    (
+        "TextControlBorderBrushPointerOver",
+        "ControlElevationBorderBrush",
+    ),
+    (
+        "TextControlPlaceholderForeground",
+        "TextFillColorPrimaryBrush",
+    ),
+    (
+        "TextControlPlaceholderForegroundPointerOver",
+        "TextFillColorPrimaryBrush",
+    ),
+];
 
 /// What [`Ui::search_box`] returns.
 pub struct SearchBoxResponse<'u> {

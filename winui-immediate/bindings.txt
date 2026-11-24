@@ -76,6 +76,13 @@ Microsoft.UI.Xaml.Window::{put_SystemBackdrop}
 Microsoft.UI.Xaml.Media.SystemBackdrop
 Microsoft.UI.Xaml.Media.MicaBackdrop::{}
 Microsoft.UI.Xaml.Media.IMicaBackdropFactory::CreateInstance
+Microsoft.UI.Composition.ICompositionSupportsSystemBackdrop::{put_SystemBackdrop}
+Microsoft.UI.Xaml.FrameworkElement::{get_ActualTheme, add_ActualThemeChanged, remove_ActualThemeChanged}
+Microsoft.UI.Xaml.ElementTheme
+Windows.UI.Composition.Compositor::{CreateInstance, CreateColorBrushWithColor}
+Windows.UI.Composition.CompositionBrush
+Windows.UI.Composition.CompositionColorBrush
+Windows.UI.Color
 Microsoft.UI.Xaml.FrameworkElement::{put_Style, put_HorizontalAlignment, put_VerticalAlignment}
 Microsoft.UI.Xaml.HorizontalAlignment
 Microsoft.UI.Xaml.VerticalAlignment
@@ -253,7 +260,7 @@ Microsoft.UI.Input.IInputNonClientPointerSourceStatics::GetForWindowId
 Microsoft.UI.Input.NonClientRegionKind
 Windows.Graphics.RectInt32
 Microsoft.UI.Windowing.AppWindow::{get_TitleBar}
-Microsoft.UI.Windowing.AppWindowTitleBar::{get_RightInset, get_LeftInset, put_PreferredHeightOption}
+Microsoft.UI.Windowing.AppWindowTitleBar::{get_RightInset, get_LeftInset, put_PreferredHeightOption, put_PreferredTheme}
 Microsoft.UI.Windowing.TitleBarHeightOption
 Microsoft.UI.Xaml.UIElement::{TransformToVisual}
 Microsoft.UI.Xaml.Media.GeneralTransform::{TransformBounds}
@@ -273,3 +280,22 @@ Windows.UI.Xaml.Interop.TypeKind
 
 Microsoft.UI.Xaml.Controls.TextBox::{add_TextChanging, remove_TextChanging}
 Microsoft.UI.Xaml.Controls.TextBoxTextChangingEventArgs
+Microsoft.UI.Xaml.Media.CompositionTarget::{add_Rendering, remove_Rendering}
+Microsoft.UI.Xaml.Media.ICompositionTargetStatics::{add_Rendering, remove_Rendering}
+Microsoft.UI.Windowing.AppWindow::{Hide}
+Microsoft.UI.Xaml.Input.FocusManager::{GetFocusedElementWithRoot}
+Microsoft.UI.Xaml.Input.IFocusManagerStatics::GetFocusedElementWithRoot
+Microsoft.UI.Xaml.DependencyObject::{SetValue}
+Microsoft.UI.Xaml.Controls.TextBlock::{get_ForegroundProperty}
+Microsoft.UI.Xaml.Controls.ITextBlockStatics::get_ForegroundProperty
+Microsoft.UI.Xaml.Controls.Panel::{get_BackgroundProperty}
+Microsoft.UI.Xaml.Controls.IPanelStatics::get_BackgroundProperty
+Microsoft.UI.Xaml.Controls.Grid::{get_BorderBrushProperty}
+Microsoft.UI.Xaml.Controls.IGridStatics::get_BorderBrushProperty
+Microsoft.UI.Windowing.TitleBarTheme
+Microsoft.UI.Xaml.Controls.StackPanel::{get_BorderBrushProperty}
+Microsoft.UI.Xaml.Controls.IStackPanelStatics::get_BorderBrushProperty
+Microsoft.UI.Xaml.Controls.Control::{get_BorderBrushProperty, get_ForegroundProperty, get_BackgroundProperty}
+Microsoft.UI.Xaml.Controls.IControlStatics::{get_BorderBrushProperty, get_ForegroundProperty, get_BackgroundProperty}
+Microsoft.UI.Xaml.Controls.IconElement::{get_ForegroundProperty}
+Microsoft.UI.Xaml.Controls.IIconElementStatics::get_ForegroundProperty
