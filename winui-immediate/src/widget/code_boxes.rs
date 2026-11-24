@@ -1,4 +1,4 @@
-use super::{ErrorLine, FieldHandle, mark_critical};
+use super::{ErrorLine, FieldHandle, NativeSender, mark_critical};
 use crate::{
     bindings::{
         AutomationProperties, Control as XamlControl, DependencyObject, FrameworkElement,
@@ -86,7 +86,9 @@ impl Ui {
             // An `Rc` clone is a count, so it is cheap; the row is cast only
             // on the pass that makes its node.
             let line = slot.clone().expect("made above");
-            ui.native("error", || line.borrow().row.cast(), |_| Ok(()))?;
+            ui.native("error", |_: &NativeSender<()>| {
+                Ok((line.borrow().row.clone(), ()))
+            })?;
             let mut line = line.borrow_mut();
             if line.message.as_deref() != error {
                 line.message = error.map(str::to_owned);

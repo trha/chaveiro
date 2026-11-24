@@ -29,7 +29,7 @@ mod bindings;
 use bindings::*;
 use std::time::{Duration, Instant};
 use windows_core::{IInspectable, Interface, Result};
-use winui_immediate::{App, Orientation, Ui, run};
+use winui_immediate::{App, NativeSender, Orientation, Ui, run};
 
 const TICK: Duration = Duration::from_millis(50);
 const TICKS_PER_SWITCH: u32 = 40;
@@ -186,26 +186,20 @@ impl App for Spike {
                     )?)?;
                 }
 
-                ui.native(
-                    "presenter",
-                    || {
-                        let presenter = ContentPresenter::new()?;
-                        let transition = ContentThemeTransition::new()?;
-                        transition.SetHorizontalOffset(120.0)?;
-                        presenter.SetContentTransitions(&collection(transition.cast()?)?)?;
-                        presenter.cast()
-                    },
-                    |element| {
-                        if presented != Some(screen) {
-                            let block = TextBlock::new()?;
-                            block.SetText(name)?;
-                            big(block.clone())?;
-                            element.cast::<ContentPresenter>()?.SetContent(&block)?;
-                            presented = Some(screen);
-                        }
-                        Ok(())
-                    },
-                )?;
+                let mut native = ui.native("presenter", |_: &NativeSender<()>| {
+                    let presenter = ContentPresenter::new()?;
+                    let transition = ContentThemeTransition::new()?;
+                    transition.SetHorizontalOffset(120.0)?;
+                    presenter.SetContentTransitions(&collection(transition.cast()?)?)?;
+                    Ok((presenter, ()))
+                })?;
+                if presented != Some(screen) {
+                    let block = TextBlock::new()?;
+                    block.SetText(name)?;
+                    big(block.clone())?;
+                    native.element().SetContent(&block)?;
+                    presented = Some(screen);
+                }
 
                 let entrance = ui.stack("entrance", Orientation::Vertical, 0.0, |ui| {
                     let label = ui.label(("screen", screen), format_args!("{name}"))?;
@@ -220,31 +214,26 @@ impl App for Spike {
                 })?;
                 entrance_panel = Some(entrance.element());
 
-                ui.native(
-                    "push",
-                    || {
-                        let grid = Grid::new()?;
-                        let frame = grid.cast::<FrameworkElement>()?;
-                        frame.SetWidth(PUSH_WIDTH as f64)?;
-                        frame.SetHeight(60.0)?;
-                        let clip = RectangleGeometry::new()?;
-                        clip.SetRect(Rect {
-                            x: 0.0,
-                            y: 0.0,
-                            width: PUSH_WIDTH,
-                            height: 60.0,
-                        })?;
-                        grid.cast::<UIElement>()?.SetClip(&clip)?;
-                        grid.cast()
-                    },
-                    |element| {
-                        push(
-                            element,
-                            slide.as_mut().expect("set before the pass"),
-                            screen,
-                            name,
-                        )
-                    },
+                let mut native = ui.native("push", |_: &NativeSender<()>| {
+                    let grid = Grid::new()?;
+                    let frame = grid.cast::<FrameworkElement>()?;
+                    frame.SetWidth(PUSH_WIDTH as f64)?;
+                    frame.SetHeight(60.0)?;
+                    let clip = RectangleGeometry::new()?;
+                    clip.SetRect(Rect {
+                        x: 0.0,
+                        y: 0.0,
+                        width: PUSH_WIDTH,
+                        height: 60.0,
+                    })?;
+                    grid.cast::<UIElement>()?.SetClip(&clip)?;
+                    Ok((grid.cast::<IInspectable>()?, ()))
+                })?;
+                push(
+                    native.element(),
+                    slide.as_mut().expect("set before the pass"),
+                    screen,
+                    name,
                 )?;
                 Ok(())
             })?;

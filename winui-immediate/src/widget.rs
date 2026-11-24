@@ -74,6 +74,7 @@ pub(crate) use list::index_source;
 pub use list::{ListId, RowFn};
 pub use menu::{MenuAnchor, MenuItemResponse, MenuResponse};
 pub use morph::MORPH_DURATION;
+pub use native::{NativeResponse, NativeSender};
 pub use navigation_view::{NavigationEntry, NavigationSelection, NavigationViewResponse};
 pub(crate) use navigator::Navigator;
 pub use navigator::{SLIDE_DURATION, Slide};
@@ -682,8 +683,9 @@ pub(crate) enum Control {
         password_box: PasswordBox,
         placeholder: String,
     },
-    /// From [`Ui::native`]: only the element is known.
-    Native,
+    /// From [`Ui::native`]: the element and the app's state, as a
+    /// `native::Parts` of the types the app declared.
+    Native(Box<dyn std::any::Any>),
     List {
         repeater: ItemsRepeater,
         data: Box<list::ListData>,

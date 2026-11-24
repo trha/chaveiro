@@ -59,6 +59,13 @@ impl Delegate {
         Delegate::new(Action::ThemeChanged)
     }
 
+    /// A `RoutedEventHandler` that runs `run`, as an app with full
+    /// bindings makes one from a closure.
+    #[cfg(test)]
+    pub(crate) fn routed(run: Box<dyn Fn()>) -> Delegate {
+        Delegate::new(Action::Routed(run))
+    }
+
     fn new(action: Action) -> Delegate {
         let object = Box::new(Object {
             vtable: &VTABLE,
@@ -115,6 +122,8 @@ enum Action {
     PreviewKeyDown(KeyHook),
     /// Runs on an element's `ActualThemeChanged`.
     ThemeChanged,
+    #[cfg(test)]
+    Routed(Box<dyn Fn()>),
 }
 
 /// What a [`Delegate::text_changing`] does to its sender.
@@ -178,6 +187,8 @@ fn iids(action: &Action) -> &'static [GUID] {
             }
         },
         Action::SelectAll => const { &[RoutedEventHandler::IID] },
+        #[cfg(test)]
+        Action::Routed(_) => const { &[RoutedEventHandler::IID] },
         Action::TextChanging(_) => const { &[Typed::<TextBox, TextBoxTextChangingEventArgs>::IID] },
         Action::PreviewKeyDown(_) => const { &[KeyEventHandler::IID] },
         Action::ThemeChanged => const { &[Typed::<FrameworkElement, IInspectable>::IID] },
@@ -325,6 +336,8 @@ impl Object {
                         let _ = hook(sender, arguments);
                     }
                 }
+                #[cfg(test)]
+                Action::Routed(run) => run(),
                 Action::ThemeChanged => {
                     // A brush that fails to update keeps the old theme's
                     // color, which is still drawn.

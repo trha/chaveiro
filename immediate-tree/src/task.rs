@@ -30,6 +30,35 @@ use std::sync::{
 };
 
 impl<N> Core<N> {
+    /// [`try_visit`](Self::try_visit) for a native node that wakes the UI
+    /// itself, such as from an event handler the app registered. `create`
+    /// gets the node's waker. Waking it, from any thread, asks for a turn
+    /// and marks the node [woken](crate::Tree::is_woken) until the next
+    /// pass that declares it, so caches around it run their bodies. A wake
+    /// before `create` returns, or after the node drops, does nothing.
+    pub fn try_visit_waking<E>(
+        &mut self,
+        id: impl Hash,
+        kind: ChildKind,
+        create: impl FnOnce(&Waker) -> Result<Node<N>, E>,
+    ) -> Result<(NodeId, Visit), E> {
+        let mut made = None;
+        let (node, visit) = self.try_visit(id, kind, || {
+            let wake = Arc::new(NodeWake {
+                target: std::sync::OnceLock::new(),
+            });
+            let payload = create(&Waker::from(Arc::clone(&wake)))?;
+            made = Some(wake);
+            Ok(payload)
+        })?;
+        if let Some(wake) = made {
+            // Set only now, because the id is known only now.
+            let unset = wake.target.set((node, Arc::clone(&self.tasks))).is_ok();
+            assert!(unset, "a new waker's target is set once, here");
+        }
+        Ok((node, visit))
+    }
+
     /// Declares the task `id`. The first pass that declares it calls `start`
     /// and polls the future once, so a future that is ready at once has its
     /// output in that pass. Later passes do not call `start`, so it may move
@@ -131,11 +160,12 @@ impl<N> Core<N> {
                 Some(Node::Task(_)) => self.poll_task(node),
                 Some(Node::Stream(_)) => self.poll_stream(node),
                 // A flow draws, so it runs only where the view declares it;
-                // its wake only asked for this turn.
-                Some(Node::Flow(_)) => {}
+                // its wake only asked for this turn. A native node woke from
+                // [`Core::try_visit_waking`], and the mark is all it needs.
+                Some(Node::Flow(_) | Node::Native(_)) => {}
                 // The node dropped after its wake.
                 None => {}
-                Some(Node::Root | Node::Cache(_) | Node::State(_) | Node::Native(_)) => {
+                Some(Node::Root | Node::Cache(_) | Node::State(_)) => {
                     unreachable!("only task, stream and flow nodes have wakers")
                 }
             }
@@ -416,6 +446,37 @@ impl TaskWake {
     /// the swap reads the last one and acquires the writes before it.
     pub(crate) fn begin_poll(&self) {
         self.queued.swap(false, Ordering::Acquire);
+    }
+}
+
+/// The waker of one native node, from [`Core::try_visit_waking`].
+struct NodeWake {
+    /// The node and the wakes it lists itself in; set once the node exists.
+    target: std::sync::OnceLock<(NodeId, Arc<TaskWakes>)>,
+}
+
+impl Wake for NodeWake {
+    fn wake(self: Arc<Self>) {
+        self.wake_by_ref();
+    }
+
+    fn wake_by_ref(self: &Arc<Self>) {
+        let Some((node, shared)) = self.target.get() else {
+            return;
+        };
+        // Unlike a task, the node may be listed twice in one turn, because
+        // marking it woken twice is the same as once, and no flag must be
+        // reset by a poll.
+        shared
+            .woken
+            .lock()
+            .expect("no code panics while holding the woken lock")
+            .push(*node);
+        if !shared.posted.swap(true, Ordering::Relaxed) {
+            // A refused post means the UI thread is shutting down, so no
+            // pass would read the mark.
+            let _ = (shared.post)();
+        }
     }
 }
 

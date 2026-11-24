@@ -177,15 +177,11 @@ impl App for Spike {
                             .SetWidth(160.0)?;
                         for (column, cell) in chunk.iter_mut().enumerate() {
                             let mut created = None;
-                            ui.native(
-                                column,
-                                || {
-                                    let (element, parts) = create(cell.kind, cell.method)?;
-                                    created = Some(parts);
-                                    Ok(element)
-                                },
-                                |_| Ok(()),
-                            )?;
+                            ui.native(column, |_: &winui_immediate::NativeSender<()>| {
+                                let (element, parts) = create(cell.kind, cell.method)?;
+                                created = Some(parts);
+                                Ok((element, ()))
+                            })?;
                             if created.is_some() {
                                 cell.parts = created;
                             }

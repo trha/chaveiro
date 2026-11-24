@@ -12,7 +12,7 @@ mod ime;
 
 use std::time::Duration;
 use windows_core::{HSTRING, IInspectable, Interface, Result};
-use winui_immediate::{App, Length, Orientation, Severity, Ui, run};
+use winui_immediate::{App, Length, NativeSender, Orientation, Severity, Ui, run};
 
 fn main() -> Result<()> {
     let tick = std::env::var("WIDGETS_TICK")
@@ -125,7 +125,7 @@ impl App for Widgets {
                 if toggled {
                     self.revealed = !self.revealed;
                 }
-                ui.native("switch", toggle_switch, |_| Ok(()))?;
+                ui.native("switch", |_: &NativeSender<()>| Ok((toggle_switch()?, ())))?;
                 ui.stack("picker", Orientation::Vertical, 8.0, |ui| {
                     ui.combo_box("color", COLORS, &mut self.color)?
                         .header("Color")?
