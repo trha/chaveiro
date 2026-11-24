@@ -15,4 +15,6 @@
 - [appkit-immediate](appkit-immediate.md) — measured AppKit facts behind the crate: pools, caret, stack alignment, table reuse, hugging, row selection colors, details flicker; smoke script notes
 - [Platform target](platform-target.md) — on Windows: chaveiro-winui and the "Chaveiro" design system artifact, never the macOS canvas
 - [Core errors are enums](core-errors-are-enums.md) — chaveiro-core returns enums; UI crates own the text
+- [WinUI live theme](winui-live-theme.md) — theme brushes need theme::set_brush; never read ThemeDictionaries; caption buttons need PreferredTheme
+- [Win32 resize sync](win32-resize-sync.md) — undocumented user32 ordinals + DComp sync object behind UWP's synced resize; WinUI 3 stubs it
 - [immediate-tree](immediate-tree.md) — shared core under the *-immediate crates; NativeNode newtype; editing the mac copy via tar over ssh (scp fails, fish shell)
