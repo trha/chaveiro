@@ -55,7 +55,16 @@ function Type-Keys([string]$keys, [int]$delay = 60) {
         Start-Sleep -Milliseconds $delay
     }
 }
-function Form-Shown { [bool](Texts | Where-Object { $_ -match '^New (login|note)$' }) }
+# The form has no title, so its Save button tells it is open.
+function Form-Shown { [bool](Named "Save") }
+# The first website box, which has no header: the box after the
+# Authenticator key's.
+function Website-Box {
+    $edits = Find-All $type::Edit
+    for ($i = 0; $i -lt $edits.Count - 1; $i++) {
+        if ($edits[$i].Current.Name -like "Authenticator key*") { return $edits[$i + 1] }
+    }
+}
 
 "== New button and menu"
 Start-Vault @{}
@@ -76,7 +85,7 @@ foreach ($try in 1..10) {
 
 "== empty name, then a saved login"
 Invoke-Named "New login (Ctrl+N)"
-"  form: $((Texts | Where-Object { $_ -match '^New (login|note)$' }) -join ' | ') (expect New login)"
+"  form: $(if (Form-Shown) { 'open' } else { 'closed' }), login group $([bool](Texts | Where-Object { $_ -eq 'Login' })), website box $([bool](Website-Box)) (expect open, True, True)"
 Invoke-Named "Save"
 "  error: $((Texts | Where-Object { $_ -eq 'Enter a name' }) -join ' | ') (expect Enter a name)"
 Set-Text "Name" "Forum"
@@ -84,7 +93,7 @@ Set-Text "Username" "alex"
 Invoke-Named "Save"
 Start-Sleep -Milliseconds 500
 "  stderr: $((Get-Content $script:log | Where-Object { $_ -match '^create' }) -join ' | ') (expect create 10xx name=Forum kind=Login)"
-"  details: $((Texts | Where-Object { $_ -match '^(Forum|alex|New login)$' }) -join ' | ') (expect Forum and alex, no New login)"
+"  details: $((Texts | Where-Object { $_ -match '^(Forum|alex)$' }) -join ' | '), form $(if (Form-Shown) { 'open' } else { 'closed' }) (expect Forum and alex, closed)"
 
 "== Ctrl+N from Notes makes a note; Cancel leaves"
 $notes = @(Find-All $type::ListItem) | Where-Object { $_.Current.Name -eq "Notes" } | Select-Object -First 1
@@ -92,7 +101,7 @@ $notes.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Patte
 "  tooltip name: $(if (Named 'New note (Ctrl+N)') { 'New note (Ctrl+N)' } else { 'MISSING' })"
 (Edit-Box "Search").SetFocus(); Start-Sleep -Milliseconds 200
 [System.Windows.Forms.SendKeys]::SendWait("^n"); Start-Sleep -Milliseconds 500
-"  form: $((Texts | Where-Object { $_ -match '^New (login|note)$' }) -join ' | ') (expect New note)"
+"  form: $(if (Form-Shown) { 'open' } else { 'closed' }) (expect open)"
 "  username box: $(if (Edit-Box 'Username') { 'present' } else { 'absent' }) (expect absent)"
 Invoke-Named "Cancel"
 "  after Cancel: form $(if (Form-Shown) { 'still open' } else { 'closed' }) (expect closed)"
@@ -133,11 +142,12 @@ Start-Vault @{ VAULT_BENCH = "400,2500" }
 Invoke-Named "New login (Ctrl+N)"
 while (-not (Get-Content $script:log | Where-Object { $_ -eq "bench: measuring" })) { Start-Sleep -Milliseconds 100 }
 $typed = "abcdefghijklmnopqrstuvwxyz0123456789{BS}{BS}{BS}{BS}{BS}"
-foreach ($header in "Name", "Username", "Website", "Notes") {
-    (Edit-Box $header).SetFocus(); Start-Sleep -Milliseconds 200
+$boxes = { (Edit-Box "Name"), (Edit-Box "Username"), (Website-Box), (Edit-Box "Notes") }
+foreach ($box in & $boxes) {
+    $box.SetFocus(); Start-Sleep -Milliseconds 200
     Type-Keys $typed 20
 }
-"  values: $(("Name", "Username", "Website", "Notes" | ForEach-Object { (Edit-Box $_).GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value }) -join ' | ') (expect abcdefghijklmnopqrstuvwxyz01234 in each)"
+"  values: $((& $boxes | ForEach-Object { $_.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value }) -join ' | ') (expect abcdefghijklmnopqrstuvwxyz01234 in each)"
 "  measuring still: $(-not (Get-Content $script:log | Where-Object { $_ -match '^bench: \d' })) (expect True: every key landed in the measured passes)"
 $exited = $script:process.WaitForExit(60000)
 "  $((Get-Content $script:log | Where-Object { $_ -match '^bench: \d' }) -join ' | ') (exited=$exited)"

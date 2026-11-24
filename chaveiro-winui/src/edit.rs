@@ -76,7 +76,7 @@ enum Fields {
     Login {
         username: SecretString,
         totp: SecretString,
-        website: SecretString,
+        websites: Vec<Website>,
     },
     Note,
     Card {
@@ -90,6 +90,24 @@ enum Fields {
     },
     Identity(Box<IdentityDraft>),
     SshKey(Box<SshDraft>),
+}
+
+/// One website row of a login form.
+#[derive(Clone, PartialEq)]
+struct Website {
+    uri: SecretString,
+    /// As Bitwarden stores it; [`None`] is the account default. A rule
+    /// [`MATCH_RULES`] lacks shows no pick and saves unchanged.
+    rule: Option<u8>,
+}
+
+impl Website {
+    fn empty() -> Self {
+        Website {
+            uri: field(),
+            rule: None,
+        }
+    }
 }
 
 /// The SSH key of the item: the stored one, one generated here, or one the
@@ -200,6 +218,17 @@ const BRANDS: [(&str, &str); 11] = [
     ("RuPay", "RuPay"),
     ("Other", "Other"),
 ];
+/// Website match rules as the ComboBox shows them. The first is the account
+/// default, stored as no rule; the one at position `n + 1` is stored as `n`.
+const MATCH_RULES: [&str; 7] = [
+    "Default match",
+    "Base domain",
+    "Host",
+    "Starts with",
+    "Exact",
+    "Regular expression",
+    "Never",
+];
 /// Identity titles; the first is none.
 const TITLES: [&str; 6] = ["No title", "Mr", "Mrs", "Ms", "Mx", "Dr"];
 
@@ -241,7 +270,7 @@ impl Draft {
                 Fields::Login {
                     username: field(),
                     totp: field(),
-                    website: field(),
+                    websites: vec![Website::empty()],
                 },
                 CipherContent::Login(LoginView::default()),
             ),
@@ -316,7 +345,18 @@ impl Draft {
             CipherContent::Login(login) => Fields::Login {
                 username: text(&login.username),
                 totp: text(&login.totp),
-                website: field_of(login.uris.first().and_then(|uri| uri.uri.as_ref())),
+                // One empty row when it has none, as a new login starts.
+                websites: match login.uris.is_empty() {
+                    true => vec![Website::empty()],
+                    false => login
+                        .uris
+                        .iter()
+                        .map(|uri| Website {
+                            uri: field_of(uri.uri.as_ref()),
+                            rule: uri.match_rule,
+                        })
+                        .collect(),
+                },
             },
             CipherContent::Card(card) => Fields::Card {
                 cardholder: text(&card.cardholder_name),
@@ -451,31 +491,30 @@ impl Draft {
                 Fields::Login {
                     username,
                     totp,
-                    website,
+                    websites,
                 },
                 Fields::Login {
                     username: start_username,
                     totp: start_totp,
-                    website: start_website,
+                    websites: start_websites,
                 },
                 CipherContent::Login(login),
             ) => {
                 pick(&mut login.username, username, start_username);
                 pick_secret(&mut login.password, &secret);
                 pick(&mut login.totp, totp, start_totp);
-                // The box shows the first website; the others stay.
-                if website != start_website {
-                    match (some(website), login.uris.is_empty()) {
-                        (Some(uri), true) => login.uris.push(UriView {
-                            uri: Some(uri),
-                            match_rule: None,
-                        }),
-                        (Some(uri), false) => login.uris[0].uri = Some(uri),
-                        (None, true) => {}
-                        (None, false) => {
-                            login.uris.remove(0);
-                        }
-                    }
+                // The rows are the whole list, so a changed list replaces it,
+                // without the rows left empty.
+                if websites != start_websites {
+                    login.uris = websites
+                        .iter()
+                        .filter_map(|website| {
+                            Some(UriView {
+                                uri: Some(some(&website.uri)?),
+                                match_rule: website.rule,
+                            })
+                        })
+                        .collect();
                 }
             }
             (
@@ -869,7 +908,7 @@ pub fn edit_pane(
 
         save |= ui.shortcut("save shortcut", false, 'S')? && !saving;
         ui.scroll("fields", |ui| {
-            ui.stack("fields", Orientation::Vertical, 12.0, |ui| {
+            ui.stack("fields", Orientation::Vertical, 16.0, |ui| {
                 if let Some(error) = state.error.filter(|_| !saving) {
                     let message = match error {
                         ItemError::Rejected(message) => message.as_str(),
@@ -904,39 +943,58 @@ pub fn edit_pane(
                     }
                 }
 
-                let verb = match draft.base.id {
-                    Some(_) => "Edit",
-                    None => "New",
-                };
-                ui.label(
-                    "form title",
-                    format_args!("{verb} {}", noun(draft.base.kind)),
-                )?
-                .style("SubtitleTextBlockStyle")?;
+                group(ui, "top", None, |ui| {
+                    let mut name = ui.text_box("name", "", &mut draft.now.name)?;
+                    name_field = Some(name.field());
+                    if name.changed() {
+                        draft.name_missing = false;
+                    }
+                    name.header("Name")?
+                        .required(true)?
+                        .error(draft.name_missing.then_some("Enter a name"))?
+                        .enabled(!saving)?;
 
-                let mut name = ui.text_box("name", "", &mut draft.now.name)?;
-                name_field = Some(name.field());
-                if name.changed() {
-                    draft.name_missing = false;
-                }
-                name.header("Name")?
-                    .required(true)?
-                    .error(draft.name_missing.then_some("Enter a name"))?
-                    .enabled(!saving)?;
+                    let favorite = &mut draft.now.favorite;
+                    let folder = &mut draft.now.folder;
+                    ui.columns(
+                        "folder and favorite",
+                        &[Length::Star(1.0), Length::Auto],
+                        12.0,
+                        |ui| {
+                            // Named, not collected, so a pass allocates nothing
+                            // for them.
+                            let folders = std::iter::once("No folder").chain(
+                                index.folders.iter().map(|folder| match folder.readable {
+                                    true => folder.name.as_str(),
+                                    false => "Unreadable folder",
+                                }),
+                            );
+                            ui.combo_box("folder", folders, folder)?
+                                .header("Folder")?
+                                .enabled(!saving)?;
 
-                // Named, not collected, so a pass allocates nothing for them.
-                let folders =
-                    std::iter::once("No folder").chain(index.folders.iter().map(|folder| {
-                        match folder.readable {
-                            true => folder.name.as_str(),
-                            false => "Unreadable folder",
-                        }
-                    }));
-                ui.combo_box("folder", folders, &mut draft.now.folder)?
-                    .header("Folder")?
-                    .enabled(!saving)?;
-                ui.check_box("favorite", "Favorite", &mut draft.now.favorite)?
-                    .enabled(!saving)?;
+                            // A filled star while on. It saves with the form,
+                            // as every choice here does.
+                            let (glyph, tip) = match *favorite {
+                                true => ('\u{E735}', "Remove from favorites"),
+                                false => ('\u{E734}', "Add to favorites"),
+                            };
+                            let mut button = ui.button("favorite", "Favorite")?;
+                            button
+                                .subtle()?
+                                .icon(glyph)?
+                                .icon_accent(true)?
+                                .tooltip(tip)?;
+                            button.valign(Align::End)?.enabled(!saving)?;
+                            if button.clicked()? {
+                                *favorite = !*favorite;
+                                ui.request_pass();
+                            }
+                            Ok(())
+                        },
+                    )?;
+                    Ok(())
+                })?;
 
                 let mut form = Form {
                     saving,
@@ -947,9 +1005,8 @@ pub fn edit_pane(
                     Fields::Login {
                         username,
                         totp,
-                        website,
-                    } => {
-                        heading(ui, "login", "Login")?;
+                        websites,
+                    } => group(ui, "login", Some("Login"), |ui| {
                         form.text(ui, "username", "Username", "", username)?;
                         secret = Some(form.secret(ui, "password", "Password")?);
                         form.text(
@@ -959,16 +1016,15 @@ pub fn edit_pane(
                             "Setup key or otpauth:// link",
                             totp,
                         )?;
-                        form.text(ui, "website", "Website", "https://", website)?;
-                    }
+                        form.websites(ui, websites)
+                    })?,
                     Fields::Note => {}
                     Fields::Card {
                         cardholder,
                         brand,
                         number,
                         expiration,
-                    } => {
-                        heading(ui, "card", "Card")?;
+                    } => group(ui, "card", Some("Card"), |ui| {
                         form.text(ui, "cardholder", "Cardholder name", "", cardholder)?;
                         let brands = BRANDS.iter().map(|(label, _)| *label);
                         ui.combo_box("brand", brands, brand)?
@@ -1001,48 +1057,54 @@ pub fn edit_pane(
                                 Ok(())
                             },
                         )?;
-                    }
+                        Ok(())
+                    })?,
                     Fields::Identity(identity) => {
-                        heading(ui, "personal", "Personal")?;
-                        ui.combo_box("title", TITLES, &mut identity.title)?
-                            .header("Title")?
-                            .enabled(!saving)?;
-                        form.text(ui, "first", "First name", "", &mut identity.first_name)?;
-                        form.text(ui, "middle", "Middle name", "", &mut identity.middle_name)?;
-                        form.text(ui, "last", "Last name", "", &mut identity.last_name)?;
-                        form.text(ui, "username", "Username", "", &mut identity.username)?;
-                        form.text(ui, "company", "Company", "", &mut identity.company)?;
+                        group(ui, "personal", Some("Personal"), |ui| {
+                            ui.combo_box("title", TITLES, &mut identity.title)?
+                                .header("Title")?
+                                .enabled(!saving)?;
+                            form.text(ui, "first", "First name", "", &mut identity.first_name)?;
+                            form.text(ui, "middle", "Middle name", "", &mut identity.middle_name)?;
+                            form.text(ui, "last", "Last name", "", &mut identity.last_name)?;
+                            form.text(ui, "username", "Username", "", &mut identity.username)?;
+                            form.text(ui, "company", "Company", "", &mut identity.company)?;
+                            Ok(())
+                        })?;
 
-                        heading(ui, "identification", "Identification")?;
-                        form.text(
-                            ui,
-                            "passport",
-                            "Passport number",
-                            "",
-                            &mut identity.passport_number,
-                        )?;
-                        form.text(ui, "ssn", "Tax number", "", &mut identity.ssn)?;
-                        form.text(
-                            ui,
-                            "license",
-                            "Driver's license",
-                            "",
-                            &mut identity.license_number,
-                        )?;
+                        group(ui, "identification", Some("Identification"), |ui| {
+                            form.text(
+                                ui,
+                                "passport",
+                                "Passport number",
+                                "",
+                                &mut identity.passport_number,
+                            )?;
+                            form.text(ui, "ssn", "Tax number", "", &mut identity.ssn)?;
+                            form.text(
+                                ui,
+                                "license",
+                                "Driver's license",
+                                "",
+                                &mut identity.license_number,
+                            )?;
+                            Ok(())
+                        })?;
 
-                        heading(ui, "contact", "Contact")?;
-                        form.text(ui, "email", "Email", "", &mut identity.email)?;
-                        form.text(ui, "phone", "Phone", "", &mut identity.phone)?;
-                        form.text(ui, "address1", "Address", "", &mut identity.address1)?;
-                        form.text(ui, "address2", "", "", &mut identity.address2)?;
-                        form.text(ui, "address3", "", "", &mut identity.address3)?;
-                        form.text(ui, "city", "City", "", &mut identity.city)?;
-                        form.text(ui, "state", "State or region", "", &mut identity.state)?;
-                        form.text(ui, "postal", "Postal code", "", &mut identity.postal_code)?;
-                        form.text(ui, "country", "Country", "", &mut identity.country)?;
+                        group(ui, "contact", Some("Contact"), |ui| {
+                            form.text(ui, "email", "Email", "", &mut identity.email)?;
+                            form.text(ui, "phone", "Phone", "", &mut identity.phone)?;
+                            form.text(ui, "address1", "Address", "", &mut identity.address1)?;
+                            form.text(ui, "address2", "", "", &mut identity.address2)?;
+                            form.text(ui, "address3", "", "", &mut identity.address3)?;
+                            form.text(ui, "city", "City", "", &mut identity.city)?;
+                            form.text(ui, "state", "State or region", "", &mut identity.state)?;
+                            form.text(ui, "postal", "Postal code", "", &mut identity.postal_code)?;
+                            form.text(ui, "country", "Country", "", &mut identity.country)?;
+                            Ok(())
+                        })?;
                     }
-                    Fields::SshKey(ssh) => {
-                        heading(ui, "ssh key", "SSH key")?;
+                    Fields::SshKey(ssh) => group(ui, "ssh key", Some("SSH key"), |ui| {
                         ui.stack("sources", Orientation::Horizontal, 8.0, |ui| {
                             let mut generate = ui.button("generate", "Generate new")?;
                             generate.icon('\u{E72C}')?.enabled(!saving)?;
@@ -1188,19 +1250,22 @@ pub fn edit_pane(
                         if let Some(source) = ssh.asked.take() {
                             pass = EditPass::ReadKey(source);
                         }
-                    }
+                        Ok(())
+                    })?,
                 }
 
-                heading(ui, "more", "More")?;
-                ui.text_area("notes", "", &mut draft.now.notes)?
-                    .header("Notes")?
+                group(ui, "more", Some("More"), |ui| {
+                    ui.text_area("notes", "", &mut draft.now.notes)?
+                        .header("Notes")?
+                        .enabled(!saving)?;
+                    ui.check_box(
+                        "reprompt",
+                        "Ask for master password before this item opens",
+                        &mut draft.now.reprompt,
+                    )?
                     .enabled(!saving)?;
-                ui.check_box(
-                    "reprompt",
-                    "Ask for master password before this item opens",
-                    &mut draft.now.reprompt,
-                )?
-                .enabled(!saving)?;
+                    Ok(())
+                })?;
                 Ok(())
             })?
             .padding([24.0, 16.0, 24.0, 24.0])?;
@@ -1287,6 +1352,53 @@ impl Form<'_> {
         Ok(())
     }
 
+    /// The login's websites: a row per website with its match rule and
+    /// Remove, then Add website. Removing the last row leaves none.
+    fn websites(&mut self, ui: &mut Ui, websites: &mut Vec<Website>) -> Result<()> {
+        let saving = self.saving;
+        ui.stack("websites", Orientation::Vertical, 8.0, |ui| {
+            ui.label("header", format_args!("Websites"))?;
+            let mut removed = None;
+            let columns = [Length::Star(1.0), Length::Pixels(160.0), Length::Auto];
+            for (position, website) in websites.iter_mut().enumerate() {
+                ui.columns(("website", position), &columns, 8.0, |ui| {
+                    self.text(ui, "address", "", "https://", &mut website.uri)?;
+
+                    let mut rule = website.rule.map_or(0, |rule| usize::from(rule) + 1);
+                    let mut combo = ui.combo_box("rule", MATCH_RULES, &mut rule)?;
+                    combo.enabled(!saving)?;
+                    // Written only on a pick, so a rule the list lacks stays.
+                    if combo.changed() {
+                        website.rule = rule.checked_sub(1).map(|rule| {
+                            u8::try_from(rule).expect("MATCH_RULES has fewer than 256 rules")
+                        });
+                    }
+
+                    let mut remove = ui.icon_button("remove", '\u{E711}', "Remove website")?;
+                    remove.enabled(!saving)?;
+                    if remove.clicked()? {
+                        removed = Some(position);
+                    }
+                    Ok(())
+                })?;
+            }
+            if let Some(position) = removed {
+                websites.remove(position);
+                ui.request_pass();
+            }
+
+            let mut add = ui.link("add", "Add website")?;
+            // Its text lines up with the boxes, past the link's padding.
+            add.margin([-12.0, 0.0, 0.0, 0.0])?.enabled(!saving)?;
+            if add.clicked() {
+                websites.push(Website::empty());
+                ui.request_pass();
+            }
+            Ok(())
+        })?;
+        Ok(())
+    }
+
     /// A hidden box, whose text only Save reads.
     fn secret(&mut self, ui: &mut Ui, id: &str, header: &str) -> Result<PasswordHandle> {
         let mut field = ui.password_box(id, "")?;
@@ -1306,11 +1418,26 @@ impl Form<'_> {
     }
 }
 
-/// A caption over a group of fields, as the design's form groups have.
-fn heading(ui: &mut Ui, id: &str, text: &str) -> Result<()> {
-    ui.label(("heading", id), format_args!("{text}"))?
-        .style("BodyStrongTextBlockStyle")?
-        .margin([0.0, 8.0, 0.0, 0.0])?;
+/// A card of the fields `body` declares, 12px apart, under `caption` when
+/// given, as the details pane groups the same fields.
+fn group(
+    ui: &mut Ui,
+    id: &str,
+    caption: Option<&str>,
+    body: impl FnOnce(&mut Ui) -> Result<()>,
+) -> Result<()> {
+    ui.stack(("group", id), Orientation::Vertical, 8.0, |ui| {
+        if let Some(caption) = caption {
+            ui.label("caption", format_args!("{caption}"))?
+                .style("CaptionTextBlockStyle")?;
+        }
+        ui.card_group("card", |ui| {
+            ui.stack("fields", Orientation::Vertical, 12.0, body)?
+                .padding([16.0; 4])?;
+            Ok(())
+        })?;
+        Ok(())
+    })?;
     Ok(())
 }
 

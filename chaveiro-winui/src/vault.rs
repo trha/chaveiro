@@ -2029,7 +2029,7 @@ fn group<'a>(
     ui.stack(id, Orientation::Vertical, 8.0, |ui| {
         if let Some(header) = header {
             ui.label("header", format_args!("{header}"))?
-                .style("BodyStrongTextBlockStyle")?;
+                .style("CaptionTextBlockStyle")?;
         }
         ui.card_group("fields", |ui| {
             let mut divider = false;

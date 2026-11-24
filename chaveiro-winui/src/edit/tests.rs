@@ -1,4 +1,4 @@
-use super::{Draft, Fields, expiration, expiration_text};
+use super::{Draft, Fields, Website, expiration, expiration_text};
 use chaveiro_core::{
     crypto::SecretString,
     filter::Filter,
@@ -202,31 +202,58 @@ fn an_untouched_edit_saves_the_item_as_stored() {
     assert_eq!(uris, stored_uris);
 }
 
+fn websites(draft: &mut Draft) -> &mut Vec<Website> {
+    match &mut draft.now.fields {
+        Fields::Login { websites, .. } => websites,
+        _ => panic!("a login form"),
+    }
+}
+
+/// The saved websites as (address, rule) pairs.
+fn saved_uris(view: &CipherView) -> Vec<(Option<&str>, Option<u8>)> {
+    login(view)
+        .uris
+        .iter()
+        .map(|uri| (uri.uri.as_deref().map(String::as_str), uri.match_rule))
+        .collect()
+}
+
 #[test]
-fn a_new_website_replaces_only_the_first() {
+fn an_edited_website_keeps_its_rule_and_the_others() {
     let index = index();
     let mut draft = Draft::edit(&stored_login(), &index);
-    let Fields::Login { website, .. } = &mut draft.now.fields else {
-        panic!("a login form");
-    };
-    website.clear();
-    website.push_str(" https://new.test ");
+    let first = &mut websites(&mut draft)[0].uri;
+    first.clear();
+    first.push_str(" https://new.test ");
     let saved = draft.view(&index, as_filled(&draft));
-    let uris = &login(&saved).uris;
-    assert_eq!(uris.len(), 2);
     assert_eq!(
-        uris[0].uri.as_deref().map(String::as_str),
-        Some("https://new.test")
+        saved_uris(&saved),
+        [
+            (Some("https://new.test"), Some(3)),
+            (Some("https://other.test"), None),
+        ]
     );
-    assert_eq!(
-        uris[0].match_rule,
-        Some(3),
-        "the website keeps its match rule"
-    );
-    assert_eq!(
-        uris[1].uri.as_deref().map(String::as_str),
-        Some("https://other.test")
-    );
+}
+
+#[test]
+fn a_removed_website_is_gone() {
+    let index = index();
+    let mut draft = Draft::edit(&stored_login(), &index);
+    websites(&mut draft).remove(0);
+    let saved = draft.view(&index, as_filled(&draft));
+    assert_eq!(saved_uris(&saved), [(Some("https://other.test"), None)]);
+}
+
+#[test]
+fn an_added_website_saves_with_its_rule_and_empty_rows_drop() {
+    let index = index();
+    let mut draft = Draft::new(CipherKind::Login, Filter::All, &index);
+    let rows = websites(&mut draft);
+    rows.push(Website::empty());
+    rows[1].uri.push_str("https://added.test");
+    rows[1].rule = Some(5);
+    let saved = draft.view(&index, as_filled(&draft));
+    assert_eq!(saved_uris(&saved), [(Some("https://added.test"), Some(5))]);
 }
 
 #[test]
