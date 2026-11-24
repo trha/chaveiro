@@ -21,7 +21,7 @@
 
 use std::time::Duration;
 use windows_core::Result;
-use winui_immediate::{App, Length, Orientation, Severity, Ui, calls, run};
+use winui_immediate::{App, Length, Orientation, Severity, Ui, calls, owned, run};
 
 fn main() -> Result<()> {
     // `RUST_LOG=winui_immediate=debug` prints each turn's time as its span
@@ -189,6 +189,29 @@ impl Steady {
                         ui.link("link", "A link")?;
                         ui.font_icon("icon", '\u{E713}')?;
                         ui.icon_button("settings", '\u{E713}', "Settings")?;
+                        // A copy button as chaveiro-winui draws it: a flow
+                        // around a button whose glyphs morph.
+                        let mut clicked = false;
+                        ui.flow("copy", owned(&mut clicked), |flow| async move {
+                            loop {
+                                flow.frame(|ui, clicked| {
+                                    let hit = ui
+                                        .content_button("button", "Copy", |ui| {
+                                            ui.morph("glyphs", 0, |ui| {
+                                                ui.font_icon("copy", '\u{E8C8}')?;
+                                                ui.font_icon("check mark", '\u{E73E}')?;
+                                                Ok(())
+                                            })?
+                                            .margin([2.0; 4])?;
+                                            Ok(())
+                                        })?
+                                        .clicked()?;
+                                    *clicked.get_mut() = hit;
+                                    Ok(hit.then_some(()))
+                                })
+                                .await;
+                            }
+                        })?;
                         Ok(())
                     })?;
                     ui.info_bar(

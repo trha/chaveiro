@@ -11,6 +11,8 @@
 
 include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
 
+pub(crate) mod composition;
+
 use windows_core::Interface;
 impl ITextBox {
     /// The text as the `HSTRING` WinUI returns, which the Windows string

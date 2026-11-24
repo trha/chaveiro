@@ -1,5 +1,9 @@
 //! Generates the WinUI bindings into `OUT_DIR/bindings.rs` from the Windows
-//! App Runtime metadata, with the members `bindings.txt` names.
+//! App Runtime metadata, with the members `bindings.txt` names, and the
+//! Microsoft.UI.Composition bindings into `OUT_DIR/composition.rs`, with the
+//! members `composition.txt` names. The second set is its own module
+//! because flat bindings name `Windows.UI.Composition.Compositor`, which the
+//! first set holds, and `Microsoft.UI.Composition.Compositor` alike.
 //!
 //! The metadata comes from the installed runtime package, or from the folder
 //! in `WINUI_IMMEDIATE_WINMD`.
@@ -12,6 +16,7 @@ fn main() {
         return;
     }
     println!("cargo:rerun-if-changed=bindings.txt");
+    println!("cargo:rerun-if-changed=composition.txt");
     println!("cargo:rerun-if-env-changed=WINUI_IMMEDIATE_WINMD");
 
     let winmd = std::env::var_os("WINUI_IMMEDIATE_WINMD")
@@ -40,40 +45,60 @@ fn main() {
         }
     }
 
-    let out =
-        PathBuf::from(std::env::var_os("OUT_DIR").expect("cargo sets OUT_DIR")).join("bindings.rs");
-    let filter = PathBuf::from(
+    let out_directory = PathBuf::from(std::env::var_os("OUT_DIR").expect("cargo sets OUT_DIR"));
+    let manifest_directory = PathBuf::from(
         std::env::var_os("CARGO_MANIFEST_DIR").expect("cargo sets CARGO_MANIFEST_DIR"),
-    )
-    .join("bindings.txt");
+    );
     // windows-bindgen takes `&str` arguments.
     let text = |path: &PathBuf| {
         path.to_str()
             .unwrap_or_else(|| panic!("windows-bindgen needs UTF-8 paths: {}", path.display()))
             .to_owned()
     };
-    windows_bindgen::bindgen([
-        "--in",
-        "default",
-        &text(&winmd),
-        "--out",
-        &text(&out),
-        "--flat",
-        "--dead-code",
-        "--minimal",
-        "--filter-file",
-        &text(&filter),
-        "--implement",
-        "Microsoft.UI.Xaml.IApplicationOverrides",
-        "Microsoft.UI.Xaml.Markup.IXamlMetadataProvider",
-        "Microsoft.UI.Xaml.IElementFactory",
-        "--compose",
-        "Microsoft.UI.Xaml.Application",
-    ]);
-    if std::env::var_os("CARGO_FEATURE_COUNT_CALLS").is_some() {
-        let generated = std::fs::read_to_string(&out).expect("windows-bindgen wrote the bindings");
-        std::fs::write(&out, count_clones(&count_calls(&generated))).expect("OUT_DIR is writable");
-    }
+    let generate = |name: &str, extra: &[&str]| {
+        let out = out_directory.join(format!("{name}.rs"));
+        let filter = manifest_directory.join(format!("{name}.txt"));
+        let (winmd, out_text, filter) = (text(&winmd), text(&out), text(&filter));
+        let mut arguments = vec![
+            "--in",
+            "default",
+            &winmd,
+            "--out",
+            &out_text,
+            "--flat",
+            "--dead-code",
+            "--minimal",
+            "--filter-file",
+            &filter,
+        ];
+        arguments.extend_from_slice(extra);
+        windows_bindgen::bindgen(arguments);
+        if std::env::var_os("CARGO_FEATURE_COUNT_CALLS").is_some() {
+            let generated =
+                std::fs::read_to_string(&out).expect("windows-bindgen wrote the bindings");
+            std::fs::write(&out, count_clones(&count_calls(&generated)))
+                .expect("OUT_DIR is writable");
+        }
+    };
+    generate(
+        "bindings",
+        &[
+            "--implement",
+            "Microsoft.UI.Xaml.IApplicationOverrides",
+            "Microsoft.UI.Xaml.Markup.IXamlMetadataProvider",
+            "Microsoft.UI.Xaml.IElementFactory",
+            "--compose",
+            "Microsoft.UI.Xaml.Application",
+        ],
+    );
+    generate(
+        "composition",
+        &[
+            "--implement",
+            "Windows.Graphics.Effects.IGraphicsEffect",
+            "Windows.Graphics.Effects.IGraphicsEffectSource",
+        ],
+    );
 }
 
 /// `bindings` with a call to `crate::calls::count("Type::Method")` at the

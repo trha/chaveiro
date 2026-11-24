@@ -19,3 +19,4 @@
 - [Win32 resize sync](win32-resize-sync.md) — undocumented user32 ordinals + DComp sync object behind UWP's synced resize; WinUI 3 stubs it
 - [immediate-tree](immediate-tree.md) — shared core under the *-immediate crates; NativeNode newtype; editing the mac copy via tar over ssh (scp fails, fish shell)
 - [WinUI startup cost](winui-startup-cost.md) — ~215 ms to first frame; fixed WinUI costs and failed workarounds
+- [Morph and blur](morph-blur.md) — real D2D blur without Win2D; surface draws opacity-0 sources, not hidden wrappers; composition bindings are a separate filter

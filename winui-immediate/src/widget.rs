@@ -39,6 +39,7 @@ mod label;
 mod link;
 mod list;
 mod menu;
+mod morph;
 mod native;
 mod navigation_view;
 mod navigator;
@@ -72,6 +73,7 @@ pub use link::LinkResponse;
 pub(crate) use list::index_source;
 pub use list::{ListId, RowFn};
 pub use menu::{MenuAnchor, MenuItemResponse, MenuResponse};
+pub use morph::MORPH_DURATION;
 pub use navigation_view::{NavigationEntry, NavigationSelection, NavigationViewResponse};
 pub(crate) use navigator::Navigator;
 pub use navigator::{SLIDE_DURATION, Slide};
@@ -597,6 +599,8 @@ pub(crate) enum Control {
     },
     /// From [`Ui::pressable`].
     Pressable(Box<pressable::Parts>),
+    /// From [`Ui::morph`].
+    Morph(Box<morph::Parts>),
     /// From [`Ui::scroll`].
     Scroll {
         content: Option<NodeId>,
@@ -787,6 +791,7 @@ impl Control {
             | Control::Grid { children, .. }
             | Control::DragBar { children, .. } => Some(children),
             Control::SettingsCard(parts) => Some(&parts.children),
+            Control::Morph(parts) => Some(&parts.children),
             _ => None,
         }
     }

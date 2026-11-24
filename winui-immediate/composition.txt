@@ -1,0 +1,32 @@
+Microsoft.UI.Xaml.UIElement::{put_Opacity, get_ActualSize, get_ActualOffset}
+Microsoft.UI.Xaml.Hosting.ElementCompositionPreview::{GetElementVisual, SetElementChildVisual}
+Microsoft.UI.Xaml.Hosting.IElementCompositionPreviewStatics::{GetElementVisual, SetElementChildVisual}
+Microsoft.UI.Composition.CompositionObject::{get_Compositor, get_Properties, StartAnimation}
+Microsoft.UI.Composition.CompositionPropertySet::{InsertScalar}
+Microsoft.UI.Composition.Visual::{put_Size, put_Offset, put_Opacity}
+Microsoft.UI.Composition.ContainerVisual::{get_Children}
+Microsoft.UI.Composition.VisualCollection::{InsertAtTop, Remove}
+Microsoft.UI.Composition.SpriteVisual::{put_Brush}
+Microsoft.UI.Composition.CompositionBrush::{}
+Microsoft.UI.Composition.CompositionSurfaceBrush::{}
+Microsoft.UI.Composition.ICompositionSurface
+Microsoft.UI.Composition.CompositionVisualSurface::{put_SourceVisual, put_SourceSize, put_SourceOffset}
+Microsoft.UI.Composition.CompositionEffectFactory::{CreateBrush}
+Microsoft.UI.Composition.CompositionEffectBrush::{SetSourceParameter}
+Microsoft.UI.Composition.CompositionEffectSourceParameter::{}
+Microsoft.UI.Composition.ICompositionEffectSourceParameterFactory::Create
+Microsoft.UI.Composition.CompositionAnimation::{}
+Microsoft.UI.Composition.KeyFrameAnimation::{put_Duration}
+Microsoft.UI.Composition.ScalarKeyFrameAnimation::{InsertKeyFrame, InsertKeyFrameWithEasingFunction}
+Microsoft.UI.Composition.Compositor::{CreateSpriteVisual, CreateContainerVisual, CreateSurfaceBrushWithSurface, CreateEffectFactoryWithProperties, CreateScalarKeyFrameAnimation, CreateCubicBezierEasingFunction, CreateScopedBatch}
+Microsoft.UI.Composition.ICompositorWithVisualSurface::CreateVisualSurface
+Microsoft.UI.Composition.CompositionBatchTypes
+Microsoft.UI.Composition.CompositionScopedBatch::{End, add_Completed, remove_Completed}
+Microsoft.UI.Composition.CompositionBatchCompletedEventArgs::{}
+Windows.Foundation.TypedEventHandler
+Windows.Graphics.Effects.IGraphicsEffect
+Windows.Graphics.Effects.IGraphicsEffectSource
+Windows.Foundation.IPropertyValue::{}
+Microsoft.UI.Xaml.UIElement::{}
+Microsoft.UI.Composition.CompositionEasingFunction::{}
+Microsoft.UI.Composition.CubicBezierEasingFunction::{}
