@@ -144,8 +144,8 @@ windows_core::link!("user32.dll" "system" fn SetProcessDpiAwarenessContext(value
 windows_core::link!("kernel32.dll" "system" fn GetProcessHeap() -> *mut core::ffi::c_void);
 windows_core::link!("kernel32.dll" "system" fn HeapFree(heap: *mut core::ffi::c_void, flags: u32, memory: *mut core::ffi::c_void) -> BOOL);
 
-/// Version 2.4.0.0 of the Windows App Runtime, as packed by `PACKAGE_VERSION`.
-const RUNTIME_MINIMUM_VERSION: u64 = 562967133290496;
+/// Version 2.7.0.0 of the Windows App Runtime, as packed by `PACKAGE_VERSION`.
+const RUNTIME_MINIMUM_VERSION: u64 = 0x0002_0007_0000_0000;
 const RUNTIME_FAMILY: PCWSTR = w!("Microsoft.WindowsAppRuntime.2_8wekyb3d8bbwe");
 const ARCHITECTURE_NEUTRAL: u32 = 1;
 const ARCHITECTURE_X64: u32 = 4;

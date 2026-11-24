@@ -68,4 +68,4 @@ fn main() {
 
 /// The runtime whose metadata the bindings target. It matches the one
 /// winui-immediate's `build.rs` names.
-const RUNTIME_PACKAGE: &str = "Microsoft.WindowsAppRuntime.2_2.4.0.0_x64__8wekyb3d8bbwe";
+const RUNTIME_PACKAGE: &str = "Microsoft.WindowsAppRuntime.2_2.7.0.0_x64__8wekyb3d8bbwe";

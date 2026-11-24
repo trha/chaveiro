@@ -154,4 +154,4 @@ fn count_clones(bindings: &str) -> String {
 
 /// The runtime whose metadata the bindings target. `startup.rs` asks for this
 /// version or newer at run time.
-const RUNTIME_PACKAGE: &str = "Microsoft.WindowsAppRuntime.2_2.4.0.0_x64__8wekyb3d8bbwe";
+const RUNTIME_PACKAGE: &str = "Microsoft.WindowsAppRuntime.2_2.7.0.0_x64__8wekyb3d8bbwe";
