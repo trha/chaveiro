@@ -607,9 +607,10 @@ pub fn view<A: VaultApp>(
                                 )? {
                                     EditPass::Stay => {}
                                     EditPass::Resolve { keep_mine } => {
-                                        action = Some(VaultAction::User(
-                                            UserAction::ResolveConflict { keep_mine },
-                                        ));
+                                        action =
+                                            Some(VaultAction::User(UserAction::ResolveConflict {
+                                                keep_mine,
+                                            }));
                                         // Theirs is what the details pane
                                         // shows, so the form goes.
                                         if !keep_mine {
@@ -1532,11 +1533,7 @@ fn heading(ui: &mut Ui, kind: CipherKind, name: &str) -> Result<()> {
 /// The field groups of `view`'s type, from the design's "Details per item
 /// type", then its custom fields and notes. Gives the Copy or Open button
 /// that was clicked.
-fn fields(
-    ui: &mut Ui,
-    view: &CipherView,
-    revealed: &mut Vec<FieldId>,
-) -> Result<Option<Pressed>> {
+fn fields(ui: &mut Ui, view: &CipherView, revealed: &mut Vec<FieldId>) -> Result<Option<Pressed>> {
     let mut pressed = match &view.content {
         CipherContent::Login(login) => login_fields(ui, login, revealed)?,
         CipherContent::Card(card) => card_fields(ui, card, revealed)?,
@@ -1751,7 +1748,10 @@ fn identity_fields(
             text(&identity.license_number),
         ),
     ]
-    .map(|field| Field { copy: true, ..field });
+    .map(|field| Field {
+        copy: true,
+        ..field
+    });
     let copied = group(
         ui,
         "identification",
@@ -2102,7 +2102,9 @@ fn field_row(
                 if field.open
                     && let Value::Text(Some(uri)) = field.value
                     && let Some(url) = web_address(uri)
-                    && ui.icon_button("open", '\u{E8A7}', "Open website")?.clicked()?
+                    && ui
+                        .icon_button("open", '\u{E8A7}', "Open website")?
+                        .clicked()?
                 {
                     pressed = Some(Pressed::Open(url));
                 }

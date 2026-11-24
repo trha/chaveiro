@@ -9,15 +9,8 @@
 // but does not link.
 #![cfg_attr(not(windows), no_main)]
 #![cfg(windows)]
-#![allow(dead_code, reason = "shares modules with the app")]
-
-#[path = "../src/screen.rs"]
-mod screen;
-#[path = "../src/second_factor.rs"]
-mod second_factor;
-
 use chaveiro_core::core::{Challenge, LoginError, UserAction};
-use second_factor::{SecondFactorForm, SecondFactorState};
+use chaveiro_winui::second_factor::{self, SecondFactorForm, SecondFactorState};
 use std::time::{Duration, Instant};
 use windows_core::Result;
 use winui_immediate::{App, Orientation, Ui, run};
@@ -78,7 +71,11 @@ impl App for Preview {
             return Ok(());
         }
         // Applied before the screen reads the state, so this pass shows it.
-        if self.answer.as_ref().is_some_and(|(due, _)| Instant::now() >= *due) {
+        if self
+            .answer
+            .as_ref()
+            .is_some_and(|(due, _)| Instant::now() >= *due)
+        {
             match self.answer.take().expect("checked above").1 {
                 Answer::Code { accepted } => {
                     self.busy = false;
@@ -153,8 +150,4 @@ impl Preview {
     fn answer_later(&mut self, answer: Answer) {
         self.answer = Some((Instant::now() + Duration::from_secs(1), answer));
     }
-}
-
-fn login_error(error: &LoginError) -> String {
-    format!("{error:?}")
 }

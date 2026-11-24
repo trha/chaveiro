@@ -9,6 +9,8 @@
 #![cfg_attr(not(windows), no_main)]
 #![cfg(windows)]
 
+// windows-bindgen makes the bindings `pub(crate)`, so the example compiles
+// its own copy.
 #[path = "../src/bindings.rs"]
 mod bindings;
 
@@ -50,7 +52,6 @@ struct Probe {
     /// Set by the watcher when the prompt's task should be dropped.
     cancel: Option<Rc<RefCell<bool>>>,
     done: Rc<RefCell<bool>>,
-
 }
 
 impl App for Probe {
@@ -61,7 +62,10 @@ impl App for Probe {
             return Ok(());
         }
         let window = ui.window("probe", "Hello cancel probe", |ui| {
-            ui.label("text", format_args!("A Hello prompt opens, then is cancelled. Do not touch it."))?;
+            ui.label(
+                "text",
+                format_args!("A Hello prompt opens, then is cancelled. Do not touch it."),
+            )?;
             Ok(())
         })?;
         let window = window.id()?;
@@ -74,7 +78,9 @@ impl App for Probe {
             self.prompt = None;
         }
         // Looks at the watcher's flags every 200 ms.
-        let mut looks = ui.stream("look", || winui_executor::interval(Duration::from_millis(200)));
+        let mut looks = ui.stream("look", || {
+            winui_executor::interval(Duration::from_millis(200))
+        });
         while looks.next().is_some() {}
         Ok(())
     }

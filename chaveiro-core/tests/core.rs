@@ -1494,7 +1494,10 @@ fn an_out_of_date_save_stays_saving_until_the_conflict_is_ready() {
     let effects = harness.user(UserAction::Save(Box::new(edited("Edited login"))));
     let (put, _) = one_http(&effects);
     let effects = harness.answer_fixture(put, "cipher_put_out_of_date.json");
-    assert!(vault(&harness.core).saving, "the sync for the conflict runs");
+    assert!(
+        vault(&harness.core).saving,
+        "the sync for the conflict runs"
+    );
     let mut sync = fixture("sync.json").1;
     for cipher in sync["ciphers"].as_array_mut().unwrap() {
         if cipher["id"] == EXAMPLE_ID.to_string() {

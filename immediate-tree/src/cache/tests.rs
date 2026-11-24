@@ -198,7 +198,11 @@ fn a_task_that_finishes_under_an_unchanged_cache_reaches_its_body() {
     waker.wake();
     ui.poll_woken_tasks();
     assert_eq!(pass(&mut ui), Some(7), "the woken task reruns its cache");
-    assert_eq!(pass(&mut ui), None, "with no new wake the cache skips again");
+    assert_eq!(
+        pass(&mut ui),
+        None,
+        "with no new wake the cache skips again"
+    );
 }
 
 #[test]

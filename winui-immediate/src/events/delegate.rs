@@ -178,9 +178,7 @@ fn iids(action: &Action) -> &'static [GUID] {
             }
         },
         Action::SelectAll => const { &[RoutedEventHandler::IID] },
-        Action::TextChanging(_) => {
-            const { &[Typed::<TextBox, TextBoxTextChangingEventArgs>::IID] }
-        }
+        Action::TextChanging(_) => const { &[Typed::<TextBox, TextBoxTextChangingEventArgs>::IID] },
         Action::PreviewKeyDown(_) => const { &[KeyEventHandler::IID] },
         Action::ThemeChanged => const { &[Typed::<FrameworkElement, IInspectable>::IID] },
         Action::Focus(_) => {

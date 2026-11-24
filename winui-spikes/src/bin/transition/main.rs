@@ -38,7 +38,6 @@ const SWITCHES: u32 = 6;
 fn main() -> Result<()> {
     run(|| {
         Ok(Spike {
-
             screen: 0,
             ticks: 0,
             configured: false,
@@ -51,7 +50,6 @@ fn main() -> Result<()> {
 }
 
 struct Spike {
-
     screen: u32,
     ticks: u32,
     /// Whether the transitions on the long-lived columns are set.

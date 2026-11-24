@@ -23,7 +23,10 @@ fn waits_until_the_operation_ends_and_wakes_on_its_end() {
     let left = winui_executor::shutdown(Duration::from_secs(5));
     let took = started.elapsed();
     assert_eq!(left, 0);
-    assert!(took >= Duration::from_millis(300), "returned before the end: {took:?}");
+    assert!(
+        took >= Duration::from_millis(300),
+        "returned before the end: {took:?}"
+    );
     // A wake on the completion, not on the limit.
     assert!(took < Duration::from_secs(2), "woke late: {took:?}");
 }
@@ -36,7 +39,10 @@ fn stops_at_the_limit_and_counts_what_still_runs() {
     let left = winui_executor::shutdown(Duration::from_millis(300));
     let took = started.elapsed();
     assert_eq!(left, 2);
-    assert!(took >= Duration::from_millis(250), "returned before the limit: {took:?}");
+    assert!(
+        took >= Duration::from_millis(250),
+        "returned before the limit: {took:?}"
+    );
     assert!(took < Duration::from_secs(2), "missed the limit: {took:?}");
 }
 

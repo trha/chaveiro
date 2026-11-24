@@ -11,32 +11,31 @@
 #![cfg(windows)]
 #![windows_subsystem = "windows"]
 
-mod bindings;
-mod conflict;
-mod copy;
-mod edit;
-mod history;
-mod io;
-mod login;
-mod route;
-mod screen;
-mod second_factor;
-mod vault;
-mod wipe;
-
 use chaveiro_core::{
-    core::{Config, Core, Effect, Input, LoginError, OpenItem, Screen, UserAction},
+    core::{Config, Core, Effect, Input, OpenItem, Screen, UserAction},
     vault::VaultIndex,
 };
-use copy::Copies;
-use io::{Answer, Io, Settings, SettingsError, clipboard};
-use login::{LoginForm, LoginState, Submit};
+use chaveiro_winui::{
+    copy::Copies,
+    io::{self, Answer, Io, Settings, SettingsError},
+    login::{self, LoginForm, LoginState, Submit, login_error},
+    route::Route,
+    screen::{form, title},
+    second_factor::{self, SecondFactorForm, SecondFactorState},
+    vault::{self, VaultAction, VaultApp, VaultForm},
+    wipe,
+};
 use rand_core::OsRng;
-use route::Route;
-use screen::{form, title};
-use second_factor::{SecondFactorForm, SecondFactorState};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use vault::{VaultAction, VaultApp, VaultForm};
+
+/// Zeroes every block before it returns to the system allocator, so freed
+/// secrets do not linger in the heap after lock (threat model option C).
+/// `realloc` moves to a new block and frees the old one, so the old block is
+/// wiped too. It lives in the binary, so the examples can count allocations
+/// with their own allocator.
+#[global_allocator]
+static GLOBAL: zeroizing_alloc::ZeroAlloc<std::alloc::System> =
+    zeroizing_alloc::ZeroAlloc(std::alloc::System);
 use windows_core::Result;
 use winui_immediate::{App, Orientation, Slide, Ui, run};
 
@@ -65,7 +64,6 @@ fn main() -> Result<()> {
     result
 }
 
-
 /// The app.
 ///
 /// Contract: `pending` is [`Some`] only while the login screen is shown, and
@@ -93,7 +91,6 @@ struct Chaveiro {
     /// How the last change of `route` moved.
     slide: Slide,
     vault: VaultForm,
-
 }
 
 /// What the user asked for in a pass, applied after the screen's borrow
@@ -146,7 +143,8 @@ impl App for Chaveiro {
         for (task, work) in self.io.pending() {
             let answer = ui
                 .task(("io", *task), || {
-                    work.take().expect("a pending effect starts on its first pass")
+                    work.take()
+                        .expect("a pending effect starts on its first pass")
                 })
                 .take();
             if let Some(answer) = answer {
@@ -198,9 +196,10 @@ impl App for Chaveiro {
                 let open = screen.open.map(|item| &item.view);
                 let conflict = screen.open.and_then(OpenItem::conflict);
                 let (copies, window) = (&mut self.copies, self.io.window());
-                let pass = vault::view::<Self>(ui, &mut self.vault, &screen, open, conflict, |ui| {
-                    copies.status(ui, window)
-                })?;
+                let pass =
+                    vault::view::<Self>(ui, &mut self.vault, &screen, open, conflict, |ui| {
+                        copies.status(ui, window)
+                    })?;
                 self.io.set_window(pass.window);
                 pass.action.and_then(|action| match action {
                     VaultAction::Close => Some(Next::Close),
@@ -310,7 +309,6 @@ impl Chaveiro {
             route: Route::Login,
             slide: Slide::Instant,
             vault: VaultForm::default(),
-
         })
     }
 
@@ -351,7 +349,6 @@ impl Chaveiro {
             lock_after: LOCK_AFTER.as_millis() as u64,
         }));
         self.io.boot();
-
     }
 
     /// Sends `pending` once the core has booted. A stored account that
@@ -474,23 +471,3 @@ fn placeholder(ui: &mut Ui, screen: &Screen<'_>) -> Result<Option<Next>> {
 /// The window's width, from the LoginScreen design. The window fits itself
 /// to its content, so this sets its width.
 const FORM_WIDTH: f64 = 360.0;
-
-/// The InfoBar sentence for a failed login.
-fn login_error(error: &LoginError) -> String {
-    match error {
-        LoginError::Rejected(message) if message.is_empty() => {
-            "Wrong email or master password. Try again.".to_owned()
-        }
-        LoginError::Rejected(message) => message.clone(),
-        LoginError::InvalidCode => "That code is not valid.".to_owned(),
-        LoginError::Server { status } => {
-            format!("The server answered with error {status}. Try again later.")
-        }
-        LoginError::Network(message) => format!("Chaveiro could not reach the server: {message}"),
-        LoginError::BadResponse => "The server sent an answer Chaveiro does not read.".to_owned(),
-        LoginError::Kdf(error) => format!("Key derivation failed: {error:?}"),
-        LoginError::Key(error) => format!("The account key did not open: {error}"),
-        LoginError::SessionExpired => "The session ended. Log in again.".to_owned(),
-        LoginError::ServerUrl => "The server URL must start with http:// or https://.".to_owned(),
-    }
-}

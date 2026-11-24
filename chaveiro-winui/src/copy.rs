@@ -4,7 +4,7 @@
 //! includes this file too, so its UI script drives the same code the app
 //! runs.
 
-use crate::clipboard::{self, Copied, CopyError};
+use crate::io::clipboard::{self, Copied, CopyError};
 use chaveiro_core::crypto::SecretString;
 use std::time::{Duration, Instant};
 use winui_immediate::{Align, Ui, owned};

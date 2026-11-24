@@ -261,7 +261,9 @@ impl Events {
         };
         let [text, key] = &masks[position].1;
         text.register(&text_box.cast::<ITextBox>()?, |table| table.TextChanging)?;
-        key.register(&text_box.cast::<IUIElement>()?, |table| table.PreviewKeyDown)?;
+        key.register(&text_box.cast::<IUIElement>()?, |table| {
+            table.PreviewKeyDown
+        })?;
         Ok(())
     }
 

@@ -6,8 +6,11 @@
 //! the error clears as soon as the value is valid. Only errors that name no
 //! field, such as a refusal from the server, go in the InfoBar.
 
-use chaveiro_core::login_form::{
-    CLOUDS, EmailError, ServerError, email_error, server_text, server_url, with_scheme,
+use chaveiro_core::{
+    core::LoginError,
+    login_form::{
+        CLOUDS, EmailError, ServerError, email_error, server_text, server_url, with_scheme,
+    },
 };
 use url::Url;
 use windows_core::Result;
@@ -250,4 +253,24 @@ pub fn view(ui: &mut Ui, form: &mut LoginForm, state: LoginState<'_>) -> Result<
         Ok(())
     })?;
     Ok(submitted)
+}
+
+/// The InfoBar sentence for a failed login.
+pub fn login_error(error: &LoginError) -> String {
+    match error {
+        LoginError::Rejected(message) if message.is_empty() => {
+            "Wrong email or master password. Try again.".to_owned()
+        }
+        LoginError::Rejected(message) => message.clone(),
+        LoginError::InvalidCode => "That code is not valid.".to_owned(),
+        LoginError::Server { status } => {
+            format!("The server answered with error {status}. Try again later.")
+        }
+        LoginError::Network(message) => format!("Chaveiro could not reach the server: {message}"),
+        LoginError::BadResponse => "The server sent an answer Chaveiro does not read.".to_owned(),
+        LoginError::Kdf(error) => format!("Key derivation failed: {error:?}"),
+        LoginError::Key(error) => format!("The account key did not open: {error}"),
+        LoginError::SessionExpired => "The session ended. Log in again.".to_owned(),
+        LoginError::ServerUrl => "The server URL must start with http:// or https://.".to_owned(),
+    }
 }

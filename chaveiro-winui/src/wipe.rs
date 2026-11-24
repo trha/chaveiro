@@ -16,11 +16,3 @@ pub fn wipe_stack() {
 /// Deeper than the core's unlock path goes below the UI thread's message
 /// loop, and well inside the 1 MiB main-thread stack.
 const STACK_WIPE: usize = 192 * 1024;
-
-/// Zeroes every block before it returns to the system allocator, so freed
-/// secrets do not linger in the heap after lock (threat model option C).
-/// `realloc` moves to a new block and frees the old one, so the old block is
-/// wiped too.
-#[global_allocator]
-static GLOBAL: zeroizing_alloc::ZeroAlloc<std::alloc::System> =
-    zeroizing_alloc::ZeroAlloc(std::alloc::System);

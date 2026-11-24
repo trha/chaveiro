@@ -251,7 +251,7 @@ pub fn view(
                 "error",
                 Severity::Error,
                 "Two-step login failed",
-                &crate::login_error(error),
+                &crate::login::login_error(error),
             )?;
         }
         Ok(())

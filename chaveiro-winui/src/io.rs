@@ -2,10 +2,10 @@
 //! task node, and CPU-bound or blocking work inside it runs on the process
 //! thread pool through [`off_thread`].
 
-pub(crate) mod clipboard;
+pub mod clipboard;
 mod device_key;
 mod http;
-pub(crate) mod key_file;
+pub mod key_file;
 mod storage;
 
 use crate::bindings::HttpClient;
@@ -56,12 +56,9 @@ pub struct Io {
     stored: Option<StoredAnswers>,
 }
 
-
 /// Names one task of [`Io`], so its answer can end it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct TaskId(u64);
-
-
 
 /// The future of one effect that runs as a task node.
 pub type Work = std::pin::Pin<Box<dyn Future<Output = Answer>>>;
@@ -250,7 +247,9 @@ impl Io {
     /// The stream of file work answers, for the view to run as a stream
     /// node from its first pass. Panics when called twice.
     pub fn stored_answers(&mut self) -> StoredAnswers {
-        self.stored.take().expect("the view starts the storage stream once")
+        self.stored
+            .take()
+            .expect("the view starts the storage stream once")
     }
 
     /// Forgets every pending effect and runs the queued file work on this

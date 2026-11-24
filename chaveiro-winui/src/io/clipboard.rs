@@ -111,11 +111,15 @@ pub fn read() -> Option<Zeroizing<String>> {
                 // SAFETY: the block is `size` bytes and locked; the text
                 // ends at its first NUL, or at the end of the block.
                 let units = unsafe { std::slice::from_raw_parts(pointer.cast::<u16>(), size / 2) };
-                let end = units.iter().position(|&unit| unit == 0).unwrap_or(units.len());
+                let end = units
+                    .iter()
+                    .position(|&unit| unit == 0)
+                    .unwrap_or(units.len());
                 let mut text = Zeroizing::new(String::with_capacity(end * 3));
-                text.extend(char::decode_utf16(units[..end].iter().copied()).map(|unit| {
-                    unit.unwrap_or(char::REPLACEMENT_CHARACTER)
-                }));
+                text.extend(
+                    char::decode_utf16(units[..end].iter().copied())
+                        .map(|unit| unit.unwrap_or(char::REPLACEMENT_CHARACTER)),
+                );
                 // SAFETY: locked once above.
                 unsafe { GlobalUnlock(memory) };
                 text

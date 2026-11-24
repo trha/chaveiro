@@ -913,9 +913,7 @@ pub fn edit_pane(
                     let message = match error {
                         ItemError::Rejected(message) => message.as_str(),
                         ItemError::Busy => "The last save is still going. Try again in a moment.",
-                        ItemError::NotFound | ItemError::Unreadable(_) => {
-                            "Couldn't save the item."
-                        }
+                        ItemError::NotFound | ItemError::Unreadable(_) => "Couldn't save the item.",
                     };
                     ui.info_bar("error", Severity::Error, "The item was not saved.", message)?;
                 }

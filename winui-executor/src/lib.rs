@@ -459,7 +459,8 @@ impl<A: WinRtOperation> Future for WinRt<A> {
                 .shared
                 .waker
                 .lock()
-                .expect("no code panics while holding the waker lock") = Some(context.waker().clone());
+                .expect("no code panics while holding the waker lock") =
+                Some(context.waker().clone());
             // The handler may have run before the waker was stored.
             if !self.shared.done.load(Ordering::Acquire) {
                 return Poll::Pending;

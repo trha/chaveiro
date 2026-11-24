@@ -16,25 +16,6 @@
 // but does not link.
 #![cfg_attr(not(windows), no_main)]
 #![cfg(windows)]
-#![allow(dead_code, reason = "shares modules with the app")]
-
-#[path = "../src/conflict.rs"]
-mod conflict;
-#[path = "../src/edit.rs"]
-mod edit;
-#[path = "../src/history.rs"]
-mod history;
-#[path = "../src/vault.rs"]
-mod vault;
-
-// The app's copy flow, so the UI script drives the code the app runs.
-#[path = "../src/io/clipboard.rs"]
-mod clipboard;
-#[path = "../src/copy.rs"]
-mod copy;
-#[path = "../src/io/key_file.rs"]
-mod key_file;
-
 use chaveiro_core::{
     core::{Conflict, UserAction, VaultScreen},
     crypto::SecretString,
@@ -44,12 +25,17 @@ use chaveiro_core::{
         UriView, VaultIndex,
     },
 };
+// The app's copy flow, so the UI script drives the code the app runs.
+use chaveiro_winui::{
+    copy,
+    io::key_file,
+    vault::{self, VaultAction, VaultApp, VaultForm},
+};
 use std::{
     alloc::{GlobalAlloc, Layout, System},
     cell::Cell,
 };
 use uuid::Uuid;
-use vault::{VaultAction, VaultApp, VaultForm};
 use windows_core::Result;
 use winui_immediate::{App, Ui, run};
 

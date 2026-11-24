@@ -1,11 +1,9 @@
 use super::{Control, Response, must_write};
 use crate::{
     bindings::{FrameworkElement, ITextBox, KeyRoutedEventArgs, TextBox, TextWrapping, VirtualKey},
-    events::Delegate,
-    events::{EventKind, Key},
+    events::{Delegate, EventKind, Key},
     pass::{ChildKind, ControlNode, Ui},
-    tree::NodeId,
-    tree::Visit,
+    tree::{NodeId, Visit},
 };
 use std::{
     hash::Hash,
@@ -295,7 +293,12 @@ impl Mask {
             Some(*end)
         });
         let mut boundary = boundaries.next();
-        for (written, &unit) in text.iter().filter(|unit| is_digit(unit)).take(total).enumerate() {
+        for (written, &unit) in text
+            .iter()
+            .filter(|unit| is_digit(unit))
+            .take(total)
+            .enumerate()
+        {
             if Some(written) == boundary && written > 0 {
                 buffer[length] = self.separator;
                 length += 1;
@@ -308,7 +311,8 @@ impl Mask {
                 new_caret = length;
             }
         }
-        let formatted = std::str::from_utf8(&buffer[..length]).expect("digits and an ASCII separator");
+        let formatted =
+            std::str::from_utf8(&buffer[..length]).expect("digits and an ASCII separator");
         (formatted, new_caret)
     }
 }

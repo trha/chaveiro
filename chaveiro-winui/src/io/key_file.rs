@@ -6,8 +6,7 @@ use windows_sys::Win32::{
     Foundation::HWND,
     UI::{
         Controls::Dialogs::{
-            GetOpenFileNameW, OFN_FILEMUSTEXIST, OFN_HIDEREADONLY, OFN_NOCHANGEDIR,
-            OPENFILENAMEW,
+            GetOpenFileNameW, OFN_FILEMUSTEXIST, OFN_HIDEREADONLY, OFN_NOCHANGEDIR, OPENFILENAMEW,
         },
         WindowsAndMessaging::IsWindow,
     },
@@ -50,9 +49,7 @@ fn picked(window: Option<u64>) -> Option<PathBuf> {
         .unwrap_or(std::ptr::null_mut());
     let wide = |text: &str| text.encode_utf16().chain([0]).collect::<Vec<u16>>();
     // Pairs of a label and a pattern, ended by an empty pair.
-    let filter: Vec<u16> = "All files\0*\0\0"
-        .encode_utf16()
-        .collect();
+    let filter: Vec<u16> = "All files\0*\0\0".encode_utf16().collect();
     let title = wide("Import an SSH private key");
     let start = std::env::var_os("USERPROFILE")
         .map(|home| wide(&PathBuf::from(home).join(".ssh").to_string_lossy()));
@@ -64,7 +61,9 @@ fn picked(window: Option<u64>) -> Option<PathBuf> {
         nFilterIndex: 1,
         lpstrFile: file.as_mut_ptr(),
         nMaxFile: file.len() as u32,
-        lpstrInitialDir: start.as_ref().map_or(std::ptr::null(), |start| start.as_ptr()),
+        lpstrInitialDir: start
+            .as_ref()
+            .map_or(std::ptr::null(), |start| start.as_ptr()),
         lpstrTitle: title.as_ptr(),
         Flags: OFN_FILEMUSTEXIST | OFN_HIDEREADONLY | OFN_NOCHANGEDIR,
         // SAFETY: the rest of the struct is plain data, for which zero is
@@ -76,6 +75,9 @@ fn picked(window: Option<u64>) -> Option<PathBuf> {
     if unsafe { GetOpenFileNameW(&mut dialog) } == 0 {
         return None;
     }
-    let end = file.iter().position(|&unit| unit == 0).unwrap_or(file.len());
+    let end = file
+        .iter()
+        .position(|&unit| unit == 0)
+        .unwrap_or(file.len());
     Some(PathBuf::from(String::from_utf16_lossy(&file[..end])))
 }
