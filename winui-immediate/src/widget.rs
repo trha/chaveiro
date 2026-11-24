@@ -626,6 +626,9 @@ pub(crate) enum Control {
         content: TextBlock,
         label: String,
         accent: bool,
+        /// Set by [ButtonResponse::subtle]; never turns off.
+        subtle: bool,
+        icon_accent: bool,
         /// Made on the first busy or icon pass; then the content is a row
         /// of the icon, the ring and `content`.
         row: Option<button::ButtonRow>,

@@ -1,12 +1,13 @@
-use super::{Control, Response, boxed, must_write, resource};
+use super::{Control, Response, boxed, make_subtle, must_write, resource};
 use crate::{
     bindings::{
         AutomationProperties, Button, ContentControl, DependencyObject, FontIcon, FrameworkElement,
-        IPanel, Orientation, ProgressRing, StackPanel, Style, TextBlock, ToolTipService, UIElement,
-        Visibility,
+        IPanel, IconElement, Orientation, ProgressRing, StackPanel, Style, TextBlock,
+        ToolTipService, UIElement, Visibility,
     },
     events::EventKind,
     pass::{ChildKind, ControlNode, Ui},
+    theme::{clear_brush, set_brush},
 };
 use std::{
     hash::Hash,
@@ -28,6 +29,8 @@ impl Ui {
                     content,
                     label: String::new(),
                     accent: false,
+                    subtle: false,
+                    icon_accent: false,
                     row: None,
                     glyph: None,
                     tooltip: String::new(),
@@ -91,6 +94,48 @@ impl ButtonResponse<'_> {
                 false => frame.SetStyle(None::<&Style>)?,
             }
             *accent = on;
+        }
+        Ok(self)
+    }
+
+    /// Gives the button the subtle look: no fill or border until the
+    /// pointer is over it, as for a toolbar button. It keeps that look for
+    /// its life, and does not mix with [`ButtonResponse::accent`].
+    pub fn subtle(&mut self) -> Result<&mut Self> {
+        let control = self.0.ui.control_mut(self.0.node);
+        let Control::Button { button, subtle, .. } = &mut control.control else {
+            unreachable!("button keys hold buttons")
+        };
+        if !*subtle {
+            make_subtle(button)?;
+            *subtle = true;
+        }
+        Ok(self)
+    }
+
+    /// Draws the icon in the theme's accent text color while `on`, or in
+    /// the label's color.
+    pub fn icon_accent(&mut self, on: bool) -> Result<&mut Self> {
+        let control = self.0.ui.control_mut(self.0.node);
+        let stale = control.stale;
+        let Control::Button {
+            button,
+            content,
+            row,
+            icon_accent,
+            ..
+        } = &mut control.control
+        else {
+            unreachable!("button keys hold buttons")
+        };
+        if must_write(stale, icon_accent, &on) {
+            let row = row_of(button, content, row)?;
+            let property = IconElement::ForegroundProperty()?;
+            match on {
+                true => set_brush(&row.icon, &property, "AccentTextFillColorPrimaryBrush")?,
+                false => clear_brush(&row.icon, &property)?,
+            }
+            *icon_accent = on;
         }
         Ok(self)
     }
