@@ -25,6 +25,8 @@ fn main() {
         "Microsoft.UI.Xaml.IApplicationOverrides",
         "Microsoft.UI.Xaml.Markup.IXamlMetadataProvider",
         "Microsoft.UI.Xaml.IElementFactory",
+        "Windows.Graphics.Effects.IGraphicsEffect",
+        "Windows.Graphics.Effects.IGraphicsEffectSource",
         "--compose",
         "Microsoft.UI.Xaml.Application",
     ]);

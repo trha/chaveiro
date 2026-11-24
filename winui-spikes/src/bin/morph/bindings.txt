@@ -1,0 +1,40 @@
+Microsoft.UI.Xaml.UIElement::{put_Opacity, put_OpacityTransition, put_Scale, put_ScaleTransition, put_CenterPoint, get_ActualSize, get_ActualOffset}
+Microsoft.UI.Xaml.ScalarTransition::{CreateInstance, put_Duration}
+Microsoft.UI.Xaml.Vector3Transition::{CreateInstance, put_Duration}
+Microsoft.UI.Xaml.FrameworkElement::{put_Width, put_Height, put_HorizontalAlignment, put_VerticalAlignment}
+Microsoft.UI.Xaml.HorizontalAlignment
+Microsoft.UI.Xaml.VerticalAlignment
+Microsoft.UI.Xaml.Controls.Grid::{CreateInstance}
+Microsoft.UI.Xaml.Controls.Border::{CreateInstance, put_Child}
+Microsoft.UI.Xaml.Controls.StackPanel::{CreateInstance, put_Orientation, put_Spacing}
+Microsoft.UI.Xaml.Controls.Orientation
+Microsoft.UI.Xaml.Controls.Panel::{get_Children}
+Microsoft.UI.Xaml.Controls.UIElementCollection::{}
+Microsoft.UI.Xaml.Controls.TextBlock::{CreateInstance, put_Text, put_FontSize}
+Microsoft.UI.Xaml.Controls.FontIcon::{put_Glyph, put_FontSize}
+Microsoft.UI.Xaml.Controls.IFontIconFactory::CreateInstance
+Microsoft.UI.Xaml.Hosting.ElementCompositionPreview::{GetElementVisual, SetElementChildVisual}
+Microsoft.UI.Xaml.Hosting.IElementCompositionPreviewStatics::{GetElementVisual, SetElementChildVisual}
+Microsoft.UI.Composition.CompositionObject::{get_Compositor, get_Properties, StartAnimation}
+Microsoft.UI.Composition.CompositionPropertySet::{InsertScalar}
+Microsoft.UI.Composition.Visual::{put_Size, put_Offset, put_Opacity}
+Microsoft.UI.Composition.ContainerVisual::{get_Children}
+Microsoft.UI.Composition.VisualCollection::{InsertAtTop}
+Microsoft.UI.Composition.SpriteVisual::{put_Brush}
+Microsoft.UI.Composition.CompositionBrush::{}
+Microsoft.UI.Composition.CompositionSurfaceBrush::{}
+Microsoft.UI.Composition.ICompositionSurface
+Microsoft.UI.Composition.CompositionVisualSurface::{put_SourceVisual, put_SourceSize, put_SourceOffset}
+Microsoft.UI.Composition.CompositionEffectFactory::{CreateBrush}
+Microsoft.UI.Composition.CompositionEffectBrush::{SetSourceParameter}
+Microsoft.UI.Composition.CompositionEffectSourceParameter::{}
+Microsoft.UI.Composition.ICompositionEffectSourceParameterFactory::Create
+Microsoft.UI.Composition.CompositionAnimation::{}
+Microsoft.UI.Composition.KeyFrameAnimation::{put_Duration}
+Microsoft.UI.Composition.ScalarKeyFrameAnimation::{InsertKeyFrame}
+Microsoft.UI.Composition.Compositor::{CreateVisualSurface, CreateSpriteVisual, CreateContainerVisual, CreateSurfaceBrushWithSurface, CreateEffectFactoryWithProperties, CreateScalarKeyFrameAnimation}
+Windows.Graphics.Effects.IGraphicsEffect
+Windows.Graphics.Effects.IGraphicsEffectSource
+Windows.Foundation.IPropertyValue::{}
+Microsoft.UI.Xaml.IApplicationFactory::CreateInstance
+Microsoft.UI.Composition.ICompositorWithVisualSurface::CreateVisualSurface
