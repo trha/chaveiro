@@ -59,7 +59,7 @@ impl Ui {
             ))
         })?;
         let control = self.control_mut(node);
-        let stale = std::mem::take(&mut control.stale);
+        let stale = control.stale;
         let Control::SplitButton(parts) = &mut control.control else {
             unreachable!("split button keys hold split buttons")
         };

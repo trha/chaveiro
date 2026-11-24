@@ -78,7 +78,7 @@ impl Ui {
             ))
         })?;
         let control = self.control_mut(node);
-        let stale = std::mem::take(&mut control.stale);
+        let stale = control.stale;
         let Control::Grid {
             grid,
             across: written_across,

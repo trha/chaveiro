@@ -163,7 +163,7 @@ impl Ui {
             ))
         })?;
         let control = self.control_mut(node);
-        let stale = std::mem::take(&mut control.stale);
+        let stale = control.stale;
         let Control::MenuItem { item, look, .. } = &mut control.control else {
             unreachable!("menu item keys hold menu items")
         };
@@ -192,7 +192,7 @@ impl Ui {
             ))
         })?;
         let control = self.control_mut(node);
-        let stale = std::mem::take(&mut control.stale);
+        let stale = control.stale;
         let Control::MenuToggle {
             item,
             look,
@@ -231,7 +231,7 @@ impl Ui {
             ))
         })?;
         let control = self.control_mut(node);
-        let stale = std::mem::take(&mut control.stale);
+        let stale = control.stale;
         let Control::SubMenu { item, look, .. } = &mut control.control else {
             unreachable!("submenu keys hold submenus")
         };

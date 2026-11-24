@@ -57,10 +57,11 @@ impl Ui {
                 })),
             ))))
         })?;
+        self.begin_control(node);
         let Payload::Control(control) = self.core.tree.native_mut(node) else {
             unreachable!("widget keys hold controls")
         };
-        let stale = std::mem::take(&mut control.stale);
+        let stale = control.stale;
         // The events of this pass replace those of the last, as for the
         // crate's own widgets. The swap keeps both buffers' capacity.
         let parts = parts_mut::<E, S, M>(&mut control.control);

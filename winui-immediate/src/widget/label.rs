@@ -36,7 +36,7 @@ impl Ui {
         let Payload::Control(control) = self.core.tree.native_mut(node) else {
             unreachable!("label keys hold labels")
         };
-        let stale = std::mem::take(&mut control.stale);
+        let stale = control.stale;
         let Control::Label { block, text, .. } = &mut control.control else {
             unreachable!("label keys hold labels")
         };

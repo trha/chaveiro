@@ -143,9 +143,19 @@ impl Ui {
         kind: ChildKind,
         create: impl FnOnce() -> Result<Payload>,
     ) -> Result<(NodeId, Visit)> {
-        self.core.try_visit(id, kind, || {
+        let visited = self.core.try_visit(id, kind, || {
             create().map(|payload| Node::Native(NativeNode(payload)))
-        })
+        })?;
+        self.begin_control(visited.0);
+        Ok(visited)
+    }
+
+    /// Starts the pass of `node`'s control, if it is one: it is stale for
+    /// this pass when the app invalidated it since the last.
+    pub(crate) fn begin_control(&mut self, node: NodeId) {
+        if let Payload::Control(control) = self.core.tree.native_mut(node) {
+            control.stale = std::mem::take(&mut control.invalidated);
+        }
     }
 
     /// The window the open containers are inside.
@@ -652,8 +662,12 @@ pub(crate) struct ControlNode {
     /// WinUI children as last applied (panels only).
     pub(crate) visual: Vec<NodeId>,
     pub(crate) subscribed: EventSet,
-    /// Set by [`Response::invalidate`](crate::Response::invalidate): the next
-    /// pass writes every managed property, then clears it.
+    /// Set by [`Response::invalidate`](crate::Response::invalidate), for the
+    /// next pass that declares the control.
+    pub(crate) invalidated: bool,
+    /// Whether this pass writes every managed property: `invalidated`, moved
+    /// here when the pass declares the control, so the widget and each of
+    /// its response's methods all read it.
     pub(crate) stale: bool,
     /// The `Grid.Row` last written; -1 until the control is placed in a grid.
     pub(crate) grid_row: i32,
@@ -696,6 +710,7 @@ impl ControlNode {
             control,
             visual: Vec::new(),
             subscribed: EventSet::default(),
+            invalidated: false,
             stale: false,
             grid_row: -1,
             grid_column: -1,

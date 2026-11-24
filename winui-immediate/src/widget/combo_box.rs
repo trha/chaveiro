@@ -47,7 +47,7 @@ impl Ui {
         self.subscribe(node, &[EventKind::SelectionChanged], combo_box_of)?;
         let picked = self.events.happened(node, EventKind::SelectionChanged);
         let control = self.control_mut(node);
-        let stale = std::mem::take(&mut control.stale);
+        let stale = control.stale;
         let Control::ComboBox {
             combo_box,
             items: written_items,
@@ -133,7 +133,7 @@ impl Ui {
         let submitted = self.events.happened(node, EventKind::TextSubmitted);
         let closed = self.events.happened(node, EventKind::DropDownClosed);
         let control = self.control_mut(node);
-        let stale = std::mem::take(&mut control.stale);
+        let stale = control.stale;
         let Control::ComboBox {
             combo_box,
             items: written_items,

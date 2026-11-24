@@ -29,7 +29,7 @@ impl Ui {
         self.subscribe(node, &[EventKind::Click], |control| &control.element)?;
         let clicked = self.events.happened(node, EventKind::Click);
         let control = self.control_mut(node);
-        let stale = std::mem::take(&mut control.stale);
+        let stale = control.stale;
         let Control::Link {
             content,
             label: written,

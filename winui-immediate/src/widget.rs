@@ -119,7 +119,7 @@ impl Response<'_> {
     /// Makes the next pass write every managed property of this control.
     pub fn invalidate(&mut self) {
         let control = self.ui.control_mut(self.node);
-        control.stale = true;
+        control.invalidated = true;
         control.enabled = None;
         control.header.clear();
         control.style.clear();

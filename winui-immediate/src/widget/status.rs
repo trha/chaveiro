@@ -50,7 +50,7 @@ impl Ui {
             stale,
             ..
         } = self.control_mut(node);
-        let stale = std::mem::take(stale);
+        let stale = *stale;
         let Control::ContentButton { label: written, .. } = control else {
             unreachable!("content button keys hold content buttons")
         };
@@ -87,7 +87,7 @@ impl Ui {
             ))
         })?;
         let control = self.control_mut(node);
-        let stale = std::mem::take(&mut control.stale);
+        let stale = control.stale;
         let Control::PersonPicture {
             picture,
             initials: written_initials,
@@ -206,7 +206,7 @@ impl Ui {
             stale,
             ..
         } = self.control_mut(node);
-        let stale = std::mem::take(stale);
+        let stale = *stale;
         let Control::Tag {
             text,
             icon,
